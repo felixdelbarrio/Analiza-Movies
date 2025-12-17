@@ -15,8 +15,9 @@ from backend import logger as _logger
 from backend.reporting import write_all_csv, write_filtered_csv, write_suggestions_csv
 from backend.decision_logic import sort_filtered_rows
 from backend.config import (
-    OUTPUT_PREFIX,
-    METADATA_OUTPUT_PREFIX,
+    REPORT_ALL_PATH,
+    REPORT_FILTERED_PATH,
+    METADATA_FIX_PATH,
     EXCLUDE_PLEX_LIBRARIES,
 )
 
@@ -66,8 +67,8 @@ def analyze_all_libraries() -> None:
     # ---------------------------------------------------
     # Salida CSV
     # ---------------------------------------------------
-    write_all_csv(f"{OUTPUT_PREFIX}_plex_all.csv", all_rows)
-    write_filtered_csv(f"{OUTPUT_PREFIX}_plex_filtered.csv", filtered)
-    write_suggestions_csv(f"{METADATA_OUTPUT_PREFIX}_plex.csv", suggestion_rows)
+    write_all_csv(REPORT_ALL_PATH, all_rows)
+    write_filtered_csv(REPORT_FILTERED_PATH, filtered)
+    write_suggestions_csv(METADATA_FIX_PATH, suggestion_rows)
 
     _logger.info("[PLEX] Análisis completado.")

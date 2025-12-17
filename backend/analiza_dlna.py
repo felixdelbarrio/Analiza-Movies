@@ -23,8 +23,9 @@ from pathlib import Path
 
 from backend import logger as _logger
 from backend.config import (
-    OUTPUT_PREFIX,
-    METADATA_OUTPUT_PREFIX,
+    REPORT_ALL_PATH,
+    REPORT_FILTERED_PATH,
+    METADATA_FIX_PATH,
     EXCLUDE_DLNA_LIBRARIES,
 )
 from backend.decision_logic import sort_filtered_rows
@@ -276,19 +277,15 @@ def analyze_dlna_server() -> None:
     filtered_rows = [r for r in all_rows if r.get("decision") in {"DELETE", "MAYBE"}]
     filtered_rows = sort_filtered_rows(filtered_rows) if filtered_rows else []
 
-    # Salidas
-    all_path = f"{OUTPUT_PREFIX}_dlna_all.csv"
-    filtered_path = f"{OUTPUT_PREFIX}_dlna_filtered.csv"
-    suggestions_path = f"{METADATA_OUTPUT_PREFIX}_dlna.csv"
-
-    write_all_csv(all_path, all_rows)
-    write_filtered_csv(filtered_path, filtered_rows)
+    # Salidas (estándar): misma nomenclatura que Plex, en REPORTS_DIR
+    write_all_csv(REPORT_ALL_PATH, all_rows)
+    write_filtered_csv(REPORT_FILTERED_PATH, filtered_rows)
     # Por ahora no generamos sugerencias para DLNA, pero escribimos CSV vacío compatible
-    write_suggestions_csv(suggestions_path, suggestions_rows)
+    write_suggestions_csv(METADATA_FIX_PATH, suggestions_rows)
 
     _logger.info(
-        f"[DLNA] Análisis completado. CSV completo: {all_path} | "
-        f"CSV filtrado: {filtered_path}",
+        f"[DLNA] Análisis completado. CSV completo: {REPORT_ALL_PATH} | "
+        f"CSV filtrado: {REPORT_FILTERED_PATH}",
         always=True,
     )
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from pathlib import Path
+from typing import Any, Final
 
 from dotenv import load_dotenv
 
@@ -41,6 +42,18 @@ def _get_env_bool(name: str, default: bool) -> bool:
 
 
 # ----------------------------------------------------
+# Rutas base del backend (para cachés / datos internos)
+# ----------------------------------------------------
+# Nota: Algunas partes del proyecto (p.ej. omdb_client) importan DATA_DIR.
+# Debe existir para mantener compatibilidad.
+BASE_DIR: Final[Path] = Path(__file__).resolve().parent
+DATA_DIR: Final[Path] = BASE_DIR / "data"
+
+# Cachés (si se usan en módulos concretos)
+OMDB_CACHE_PATH: Final[Path] = DATA_DIR / "omdb_cache.json"
+WIKI_CACHE_PATH: Final[Path] = DATA_DIR / "wiki_cache.json"
+
+# ----------------------------------------------------
 # Conexión a servidor multimedia / Plex / OMDb
 # ----------------------------------------------------
 # BASEURL debe contener SOLO el esquema + host (sin puerto), ej:
@@ -57,6 +70,19 @@ OMDB_API_KEY: str | None = os.getenv("OMDB_API_KEY")
 # Prefijo de ficheros de salida (report_all, report_filtered, etc.)
 OUTPUT_PREFIX: str = os.getenv("OUTPUT_PREFIX", "report")
 
+# ----------------------------------------------------
+# Rutas de salida estándar (CSV)
+# ----------------------------------------------------
+REPORTS_DIR: Final[str] = os.getenv("REPORTS_DIR", "Reports")
+
+REPORT_ALL_FILENAME: Final[str] = "report_all.csv"
+REPORT_FILTERED_FILENAME: Final[str] = "report_filtered.csv"
+METADATA_FIX_FILENAME: Final[str] = "metadata_fix.csv"
+
+REPORT_ALL_PATH: Final[str] = os.path.join(REPORTS_DIR, REPORT_ALL_FILENAME)
+REPORT_FILTERED_PATH: Final[str] = os.path.join(REPORTS_DIR, REPORT_FILTERED_FILENAME)
+METADATA_FIX_PATH: Final[str] = os.path.join(REPORTS_DIR, METADATA_FIX_FILENAME)
+
 # Bibliotecas a excluir (Plex y dlna) — separadas
 _raw_exclude_plex: str = os.getenv("EXCLUDE_PLEX_LIBRARIES", "")
 EXCLUDE_PLEX_LIBRARIES: list[str] = [
@@ -71,81 +97,40 @@ EXCLUDE_DLNA_LIBRARIES: list[str] = [
 # ----------------------------------------------------
 # Umbrales de decisión para KEEP/DELETE
 # ----------------------------------------------------
-#
-# IMPORTANTE:
-# - El scoring principal es bayesiano (BAYES_*).
-# - Estos valores actúan como refuerzo adicional y/o fallback
-#   cuando no hay datos suficientes en omdb_cache.
-# ----------------------------------------------------
-
-# ---- Rotten Tomatoes (positivo / negativo) ----
 RT_KEEP_MIN_SCORE: int = _get_env_int("RT_KEEP_MIN_SCORE", 55)
 RT_DELETE_MAX_SCORE: int = _get_env_int("RT_DELETE_MAX_SCORE", 50)
 
-# ---- IMDb con RT (refuerzo positivo) ----
 IMDB_KEEP_MIN_RATING_WITH_RT: float = _get_env_float(
     "IMDB_KEEP_MIN_RATING_WITH_RT",
     6.0,
 )
 
-# ---- Fallbacks de rating (cuando no hay suficientes datos para auto-umbrales) ----
-IMDB_KEEP_MIN_RATING: float = _get_env_float(
-    "IMDB_KEEP_MIN_RATING",
-    5.7,
-)
-IMDB_DELETE_MAX_RATING: float = _get_env_float(
-    "IMDB_DELETE_MAX_RATING",
-    5.5,
-)
+IMDB_KEEP_MIN_RATING: float = _get_env_float("IMDB_KEEP_MIN_RATING", 5.7)
+IMDB_DELETE_MAX_RATING: float = _get_env_float("IMDB_DELETE_MAX_RATING", 5.5)
 
-# ---- Votos mínimos globales (fallback) ----
 IMDB_KEEP_MIN_VOTES: int = _get_env_int("IMDB_KEEP_MIN_VOTES", 30_000)
-
-# ---- UNKNOWN por falta de información ----
 IMDB_MIN_VOTES_FOR_KNOWN: int = _get_env_int("IMDB_MIN_VOTES_FOR_KNOWN", 100)
 
-# ---- LOW thresholds (para misidentificación / sospechosos) ----
 IMDB_RATING_LOW_THRESHOLD: float = _get_env_float("IMDB_RATING_LOW_THRESHOLD", 3.0)
 RT_RATING_LOW_THRESHOLD: int = _get_env_int("RT_RATING_LOW_THRESHOLD", 20)
 
-# ----------------------------------------------------
-# Auto-umbrales de rating desde omdb_cache
-# ----------------------------------------------------
-AUTO_KEEP_RATING_PERCENTILE: float = _get_env_float(
-    "AUTO_KEEP_RATING_PERCENTILE",
-    0.70,
-)
+AUTO_KEEP_RATING_PERCENTILE: float = _get_env_float("AUTO_KEEP_RATING_PERCENTILE", 0.70)
 AUTO_DELETE_RATING_PERCENTILE: float = _get_env_float(
     "AUTO_DELETE_RATING_PERCENTILE",
     0.01,
 )
-RATING_MIN_TITLES_FOR_AUTO: int = _get_env_int(
-    "RATING_MIN_TITLES_FOR_AUTO",
-    300,
-)
+RATING_MIN_TITLES_FOR_AUTO: int = _get_env_int("RATING_MIN_TITLES_FOR_AUTO", 300)
 
-# ----------------------------------------------------
-# Votos mínimos según antigüedad (para m en Bayes)
-# ----------------------------------------------------
 _IMDB_VOTES_BY_YEAR_RAW: str = os.getenv(
     "IMDB_VOTES_BY_YEAR",
     "1980:500,2000:2000,2010:5000,9999:10000",
 )
 
-# ---- Metacritic (crítica especializada, 0-100) ----
 METACRITIC_KEEP_MIN_SCORE: int = _get_env_int("METACRITIC_KEEP_MIN_SCORE", 70)
 METACRITIC_DELETE_MAX_SCORE: int = _get_env_int("METACRITIC_DELETE_MAX_SCORE", 40)
 
 
 def _parse_votes_by_year(raw: str) -> list[tuple[int, int]]:
-    """
-    Parsea cadenas tipo:
-      1980:500,2000:2000,2010:5000,9999:10000
-
-    Admitiendo también comillas alrededor:
-      "1980:500,2000:2000,2010:5000,9999:10000"
-      '1980:500,2000:2000,2010:5000,9999:10000'
-    """
     if not raw:
         return []
 
@@ -162,29 +147,15 @@ def _parse_votes_by_year(raw: str) -> list[tuple[int, int]]:
             votes_min = int(votes_min_str.strip())
             table.append((year_limit, votes_min))
         except Exception:
-            # Silenciosamente ignoramos trozos mal formados
             continue
 
     return sorted(table, key=lambda x: x[0])
 
 
-IMDB_VOTES_BY_YEAR: list[tuple[int, int]] = _parse_votes_by_year(
-    _IMDB_VOTES_BY_YEAR_RAW,
-)
+IMDB_VOTES_BY_YEAR: list[tuple[int, int]] = _parse_votes_by_year(_IMDB_VOTES_BY_YEAR_RAW)
 
 
 def get_votes_threshold_for_year(year: int | None) -> int:
-    """
-    Devuelve el número mínimo de votos exigidos para una película
-    según su año, usando la tabla IMDB_VOTES_BY_YEAR.
-
-    Reglas:
-      - Si la tabla está vacía: devolvemos IMDB_KEEP_MIN_VOTES (fallback).
-      - Si year es None o no es convertible a int: usamos el tramo más exigente
-        (último de IMDB_VOTES_BY_YEAR).
-      - Recorre IMDB_VOTES_BY_YEAR y devuelve el primer votes_min
-        cuyo year_limit sea >= year.
-    """
     if not IMDB_VOTES_BY_YEAR:
         return IMDB_KEEP_MIN_VOTES
 
@@ -203,9 +174,6 @@ def get_votes_threshold_for_year(year: int | None) -> int:
     return IMDB_VOTES_BY_YEAR[-1][1]
 
 
-# ----------------------------------------------------
-# Parámetros para el scoring bayesiano global
-# ----------------------------------------------------
 BAYES_GLOBAL_MEAN_DEFAULT: float = _get_env_float("BAYES_GLOBAL_MEAN_DEFAULT", 6.0)
 BAYES_DELETE_MAX_SCORE: float = _get_env_float("BAYES_DELETE_MAX_SCORE", 4.9)
 BAYES_MIN_TITLES_FOR_GLOBAL_MEAN: int = _get_env_int(
@@ -213,42 +181,20 @@ BAYES_MIN_TITLES_FOR_GLOBAL_MEAN: int = _get_env_int(
     200,
 )
 
-# ----------------------------------------------------
-# Rate limit OMDb
-# ----------------------------------------------------
-OMDB_RATE_LIMIT_WAIT_SECONDS: int = _get_env_int(
-    "OMDB_RATE_LIMIT_WAIT_SECONDS",
-    60,
-)
-OMDB_RATE_LIMIT_MAX_RETRIES: int = _get_env_int(
-    "OMDB_RATE_LIMIT_MAX_RETRIES",
-    1,
-)
+OMDB_RATE_LIMIT_WAIT_SECONDS: int = _get_env_int("OMDB_RATE_LIMIT_WAIT_SECONDS", 60)
+OMDB_RATE_LIMIT_MAX_RETRIES: int = _get_env_int("OMDB_RATE_LIMIT_MAX_RETRIES", 1)
 
-# ----------------------------------------------------
-# Parámetros extra para corrección de metadata
-# ----------------------------------------------------
 METADATA_OUTPUT_PREFIX: str = os.getenv("METADATA_OUTPUT_PREFIX", "metadata_fix")
-METADATA_MIN_RATING_FOR_OK: float = _get_env_float(
-    "METADATA_MIN_RATING_FOR_OK",
-    6.0,
-)
-METADATA_MIN_VOTES_FOR_OK: int = _get_env_int(
-    "METADATA_MIN_VOTES_FOR_OK",
-    2000,
-)
+METADATA_MIN_RATING_FOR_OK: float = _get_env_float("METADATA_MIN_RATING_FOR_OK", 6.0)
+METADATA_MIN_VOTES_FOR_OK: int = _get_env_int("METADATA_MIN_VOTES_FOR_OK", 2000)
 
 METADATA_DRY_RUN: bool = _get_env_bool("METADATA_DRY_RUN", True)
 METADATA_APPLY_CHANGES: bool = _get_env_bool("METADATA_APPLY_CHANGES", False)
 
 OMDB_RETRY_EMPTY_CACHE: bool = _get_env_bool("OMDB_RETRY_EMPTY_CACHE", False)
-
 SILENT_MODE: bool = _get_env_bool("SILENT_MODE", False)
 
 
-# ----------------------------------------------------
-# Logs de depuración de configuración
-# ----------------------------------------------------
 def _log_config_debug(label: str, value: object) -> None:
     """Registra configuración en el logger central respetando `SILENT_MODE`."""
     try:
@@ -264,6 +210,13 @@ _log_config_debug("DEBUG dlna_PORT", dlna_PORT)
 _log_config_debug("DEBUG TOKEN", "****" if PLEX_TOKEN else None)
 _log_config_debug("DEBUG EXCLUDE_PLEX_LIBRARIES", EXCLUDE_PLEX_LIBRARIES)
 _log_config_debug("DEBUG EXCLUDE_DLNA_LIBRARIES", EXCLUDE_DLNA_LIBRARIES)
+_log_config_debug("DEBUG REPORTS_DIR", REPORTS_DIR)
+_log_config_debug("DEBUG REPORT_ALL_PATH", REPORT_ALL_PATH)
+_log_config_debug("DEBUG REPORT_FILTERED_PATH", REPORT_FILTERED_PATH)
+_log_config_debug("DEBUG METADATA_FIX_PATH", METADATA_FIX_PATH)
+_log_config_debug("DEBUG DATA_DIR", str(DATA_DIR))
+_log_config_debug("DEBUG OMDB_CACHE_PATH", str(OMDB_CACHE_PATH))
+_log_config_debug("DEBUG WIKI_CACHE_PATH", str(WIKI_CACHE_PATH))
 _log_config_debug("DEBUG METADATA_DRY_RUN", METADATA_DRY_RUN)
 _log_config_debug("DEBUG METADATA_APPLY_CHANGES", METADATA_APPLY_CHANGES)
 _log_config_debug("DEBUG OMDB_RETRY_EMPTY_CACHE", OMDB_RETRY_EMPTY_CACHE)

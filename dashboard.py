@@ -8,28 +8,31 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from backend import logger as _logger
-from backend.report_loader import load_reports
-from backend.summary import compute_summary
-from backend.stats import (
-    get_auto_keep_rating_threshold,
-    get_auto_delete_rating_threshold,
-    get_global_imdb_mean_info,
-)
 from backend.config import (
-    IMDB_KEEP_MIN_VOTES,
-    IMDB_KEEP_MIN_RATING,
-    IMDB_DELETE_MAX_RATING,
-    IMDB_KEEP_MIN_RATING_WITH_RT,
-    BAYES_GLOBAL_MEAN_DEFAULT,
-    BAYES_DELETE_MAX_SCORE,
-    BAYES_MIN_TITLES_FOR_GLOBAL_MEAN,
-    AUTO_KEEP_RATING_PERCENTILE,
     AUTO_DELETE_RATING_PERCENTILE,
-    RATING_MIN_TITLES_FOR_AUTO,
+    AUTO_KEEP_RATING_PERCENTILE,
+    BAYES_DELETE_MAX_SCORE,
+    BAYES_GLOBAL_MEAN_DEFAULT,
+    BAYES_MIN_TITLES_FOR_GLOBAL_MEAN,
+    IMDB_DELETE_MAX_RATING,
+    IMDB_KEEP_MIN_RATING,
+    IMDB_KEEP_MIN_RATING_WITH_RT,
+    IMDB_KEEP_MIN_VOTES,
     IMDB_RATING_LOW_THRESHOLD,
+    METADATA_FIX_PATH,
+    RATING_MIN_TITLES_FOR_AUTO,
+    REPORT_ALL_PATH,
+    REPORT_FILTERED_PATH,
     RT_RATING_LOW_THRESHOLD,
     SILENT_MODE,
 )
+from backend.report_loader import load_reports
+from backend.stats import (
+    get_auto_delete_rating_threshold,
+    get_auto_keep_rating_threshold,
+    get_global_imdb_mean_info,
+)
+from backend.summary import compute_summary
 from frontend.components import render_modal
 from frontend.data_utils import format_count_size
 from frontend.tabs import advanced, all_movies, candidates, charts, delete, metadata
@@ -152,15 +155,8 @@ warnings.simplefilter("ignore", pd.errors.SettingWithCopyWarning)
 load_dotenv()
 
 # Parámetros de entorno
-OUTPUT_PREFIX = os.getenv("OUTPUT_PREFIX", "report")
 DELETE_DRY_RUN = _env_bool("DELETE_DRY_RUN", True)
 DELETE_REQUIRE_CONFIRM = _env_bool("DELETE_REQUIRE_CONFIRM", True)
-
-ALL_CSV = f"{OUTPUT_PREFIX}_all.csv"
-FILTERED_CSV = f"{OUTPUT_PREFIX}_filtered.csv"
-
-METADATA_OUTPUT_PREFIX = os.getenv("METADATA_OUTPUT_PREFIX", "metadata_fix")
-METADATA_SUGG_CSV = f"{METADATA_OUTPUT_PREFIX}_suggestions.csv"
 
 # Página principal
 st.set_page_config(page_title="Plex Movies Cleaner", layout="wide")
@@ -180,11 +176,14 @@ if st.session_state.get("modal_open"):
 # Carga de datos
 # ============================================================
 
-if not os.path.exists(ALL_CSV):
-    st.error("No se encuentra report_all.csv. Ejecuta analiza_plex.py primero.")
+if not os.path.exists(REPORT_ALL_PATH):
+    st.error(
+        "No se encuentra el CSV completo. "
+        f"Ejecuta analiza-plex o analiza-dlna primero. (Ruta esperada: {REPORT_ALL_PATH})"
+    )
     st.stop()
 
-df_all, df_filtered = load_reports(ALL_CSV, FILTERED_CSV)
+df_all, df_filtered = load_reports(REPORT_ALL_PATH, REPORT_FILTERED_PATH)
 
 # ============================================================
 # Log de umbrales efectivos (solo una vez, respetando SILENT_MODE)
@@ -271,4 +270,4 @@ with tab5:
     charts.render(df_all)
 
 with tab6:
-    metadata.render(METADATA_SUGG_CSV)
+    metadata.render(METADATA_FIX_PATH)

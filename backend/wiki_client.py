@@ -10,7 +10,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from backend.config import OMDB_RETRY_EMPTY_CACHE, SILENT_MODE
+from backend.config import DATA_DIR, OMDB_RETRY_EMPTY_CACHE, SILENT_MODE
 from backend.omdb_client import (
     search_omdb_by_imdb_id,
     search_omdb_with_candidates,
@@ -39,7 +39,7 @@ WikiCache = dict[str, WikiRecord]
 # Fichero de caché maestro (wiki + omdb fusionado)
 # --------------------------------------------------------------------
 BASE_DIR: Path = Path(__file__).resolve().parent
-WIKI_CACHE_PATH: Path = BASE_DIR / "wiki_cache.json"
+WIKI_CACHE_PATH: Path = DATA_DIR / "wiki_cache.json"
 
 _wiki_cache: WikiCache = {}
 _wiki_cache_loaded: bool = False

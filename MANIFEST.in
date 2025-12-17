@@ -24,8 +24,7 @@ recursive-include frontend/static *.css *.js *.png *.jpg *.svg
 # Incluir datos de ejemplo / cachés (si decides distribuirlos)
 # Si prefieres no incluirlos, elimina esta sección.
 # ---------------------------------------------
-include omdb_cache.json
-include wiki_cache.json
+recursive-include backend/Data *.json
 
 # ---------------------------------------------
 # Asegurar inclusión del paquete backend

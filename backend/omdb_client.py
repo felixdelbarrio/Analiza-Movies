@@ -15,6 +15,7 @@ from urllib3.util.retry import Retry
 
 from backend import logger as _logger
 from backend.config import (
+    DATA_DIR,
     OMDB_API_KEY,
     OMDB_RATE_LIMIT_WAIT_SECONDS,
     OMDB_RATE_LIMIT_MAX_RETRIES,
@@ -154,7 +155,7 @@ def extract_year_from_omdb(omdb_data: Mapping[str, object]) -> int | None:
 # ============================================================
 
 CACHE_FILE: Final[str] = "omdb_cache.json"
-CACHE_PATH: Final[Path] = Path(CACHE_FILE)
+CACHE_PATH: Final[Path] = DATA_DIR / CACHE_FILE
 
 
 def load_cache() -> dict[str, object]:
