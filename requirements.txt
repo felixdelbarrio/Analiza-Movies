@@ -1,0 +1,18 @@
+# Runtime dependencies for Analiza Movies
+
+python-dotenv
+requests
+plexapi
+pandas
+streamlit
+altair
+streamlit-aggrid
+
+# If you are developing locally, you can also install the package in editable mode
+# with development extras (mypy, black, pytest, etc.) using:
+#
+#   pip install -e .[dev]
+#
+# or, if you insist on using this requirements file for that:
+#
+# -e .[dev]

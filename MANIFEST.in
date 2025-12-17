@@ -1,0 +1,48 @@
+###############################################################################
+# MANIFEST.in
+# Archivos adicionales incluidos en el paquete distribuido
+# (cuando se hace `pip install` o `python -m build`).
+###############################################################################
+
+# ---------------------------------------------
+# Incluir documentación principal
+# ---------------------------------------------
+include README.md
+include LICENSE
+
+# ---------------------------------------------
+# Incluir plantillas HTML del dashboard / reportes
+# ---------------------------------------------
+recursive-include frontend/templates *.html
+
+# ---------------------------------------------
+# Incluir archivos estáticos del frontend (si existen)
+# ---------------------------------------------
+recursive-include frontend/static *.css *.js *.png *.jpg *.svg
+
+# ---------------------------------------------
+# Incluir datos de ejemplo / cachés (si decides distribuirlos)
+# Si prefieres no incluirlos, elimina esta sección.
+# ---------------------------------------------
+include omdb_cache.json
+include wiki_cache.json
+
+# ---------------------------------------------
+# Asegurar inclusión del paquete backend
+# Los .py se incluyen automáticamente, pero por claridad añadimos:
+# ---------------------------------------------
+recursive-include backend *.py
+
+# ---------------------------------------------
+# Incluir dependencias adicionales del entorno
+# ---------------------------------------------
+include requirements.txt
+include setup.py
+
+# ---------------------------------------------
+# Excluir archivos temporales y basura
+# ---------------------------------------------
+exclude *.pyc
+exclude *.pyo
+exclude *~
+exclude __pycache__/
