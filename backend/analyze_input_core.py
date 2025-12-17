@@ -17,18 +17,17 @@ incorrecta.
 from collections.abc import Callable, Mapping
 from typing import TypedDict
 
-from backend.movie_input import MovieInput
 from backend.decision_logic import detect_misidentified
+from backend.movie_input import MovieInput
 from backend.omdb_client import extract_ratings_from_omdb
 from backend.scoring import decide_action
 
 
 class AnalysisRow(TypedDict, total=False):
-    """
-    Contrato de salida mínimo del core genérico.
+    """Contrato de salida mínimo del core genérico.
 
     Esta fila es luego enriquecida por capas superiores (por ejemplo,
-    el analizador específico de Plex) antes de volcarse a CSV.
+    el pipeline de colección) antes de volcarse a CSV.
     """
 
     source: str
@@ -57,17 +56,24 @@ FetchOmdbCallable = Callable[[str, int | None], Mapping[str, object]]
 def analyze_input_movie(
     movie: MovieInput,
     fetch_omdb: FetchOmdbCallable,
+    *,
+    plex_title: str | None = None,
+    plex_year: int | None = None,
+    plex_rating: float | None = None,
+    metacritic_score: int | None = None,
 ) -> AnalysisRow:
-    """
-    Analiza una película genérica (`MovieInput`) usando OMDb.
+    """Analiza una película genérica (`MovieInput`) usando OMDb.
 
     Pasos:
       1. Llama a `fetch_omdb(title, year)` para obtener un dict tipo OMDb.
-      2. Usa `extract_ratings_from_omdb` para sacar imdb_rating, imdb_votes, rt_score.
-      3. Llama a `scoring.decide_action` (Bayes + thresholds del .env vía config.py).
-      4. Usa `decision_logic.detect_misidentified` para construir `misidentified_hint`.
-      5. Devuelve una fila `AnalysisRow` mínima, lista para ser enriquecida
-         por capas superiores (Plex, DLNA concreto, etc.).
+      2. Usa `extract_ratings_from_omdb` para sacar imdb_rating, imdb_votes,
+         rt_score.
+      3. Llama a `scoring.decide_action` (Bayes + thresholds del .env vía
+         config.py).
+      4. Usa `decision_logic.detect_misidentified` para construir
+         `misidentified_hint`.
+      5. Devuelve una fila `AnalysisRow` mínima, lista para ser enriquecida por
+         capas superiores (Plex, DLNA concreto, etc.).
 
     No realiza I/O de ficheros ni logging directamente.
     """
@@ -95,15 +101,18 @@ def analyze_input_movie(
         imdb_votes=imdb_votes,
         rt_score=rt_score,
         year=movie.year,
-        metacritic_score=None,
+        metacritic_score=metacritic_score,
     )
 
     # ------------------------------------------------------------------
     # 4) Detección de posibles películas mal identificadas
     # ------------------------------------------------------------------
+    detect_title = plex_title if plex_title is not None else movie.title
+    detect_year = plex_year if plex_year is not None else movie.year
+
     misidentified_hint = detect_misidentified(
-        plex_title=movie.title,
-        plex_year=movie.year,
+        plex_title=detect_title,
+        plex_year=detect_year,
         omdb_data=omdb_data,
         imdb_rating=imdb_rating,
         imdb_votes=imdb_votes,
@@ -121,7 +130,7 @@ def analyze_input_movie(
         "imdb_rating": imdb_rating,
         "rt_score": rt_score,
         "imdb_votes": imdb_votes,
-        "plex_rating": None,  # dlna/local no tienen rating Plex aquí
+        "plex_rating": plex_rating,
         "decision": decision,
         "reason": reason,
         "misidentified_hint": misidentified_hint,

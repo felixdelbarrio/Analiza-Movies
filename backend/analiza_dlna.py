@@ -9,30 +9,27 @@ Este script:
   1. Pregunta por un directorio raíz.
   2. Busca ficheros de vídeo de forma recursiva.
   3. Para cada fichero construye un MovieInput.
-  4. Usa el core genérico `analyze_input_movie` para obtener una fila base.
-  5. Enriquece la fila con algunos campos adicionales.
-  6. Escribe:
+  4. Usa el pipeline único `collection_analysis.analyze_movie` para obtener
+     una fila final homogénea (enriquecida).
+  5. Escribe:
        - un CSV completo (todas las filas)
        - un CSV filtrado (DELETE / MAYBE)
        - un CSV de sugerencias de metadata vacío (para compatibilidad con dashboard)
 """
 
-import json
 import os
 from pathlib import Path
 
 from backend import logger as _logger
+from backend.collection_analysis import analyze_movie
 from backend.config import (
-    REPORT_ALL_PATH,
-    REPORT_FILTERED_PATH,
-    METADATA_FIX_PATH,
     EXCLUDE_DLNA_LIBRARIES,
+    METADATA_OUTPUT_PREFIX,
+    OUTPUT_PREFIX,
 )
 from backend.decision_logic import sort_filtered_rows
-from backend.reporting import write_all_csv, write_filtered_csv, write_suggestions_csv
 from backend.movie_input import MovieInput
-from backend.analyze_input_core import analyze_input_movie
-from backend.wiki_client import get_movie_record
+from backend.reporting import write_all_csv, write_filtered_csv, write_suggestions_csv
 
 VIDEO_EXTENSIONS: set[str] = {
     ".mp4",
@@ -150,33 +147,14 @@ def analyze_dlna_server() -> None:
     all_rows: list[dict[str, object]] = []
     suggestions_rows: list[dict[str, object]] = []
 
-    # -------------------------------------------------
-    # Bucle principal de análisis por fichero
-    # -------------------------------------------------
     for file_path in files:
         title, year = _guess_title_year(file_path)
 
-        # `library` es el mismo para todos los ficheros (nombre del root)
         try:
             stat = file_path.stat()
             file_size: int | None = stat.st_size
         except OSError:
             file_size = None
-
-        def fetch_omdb(
-            title_for_fetch: str,
-            year_for_fetch: int | None,
-        ) -> dict[str, object]:
-            record = get_movie_record(
-                title=title_for_fetch,
-                year=year_for_fetch,
-                imdb_id_hint=None,
-            )
-            if record is None:
-                return {}
-            if isinstance(record, dict):
-                return record
-            return dict(record)
 
         movie_input = MovieInput(
             source="dlna",
@@ -192,79 +170,12 @@ def analyze_dlna_server() -> None:
             extra={},
         )
 
-        try:
-            base_row = analyze_input_movie(movie_input, fetch_omdb)
-        except Exception as exc:  # pragma: no cover
-            _logger.error(
-                f"[DLNA] Error analizando {file_path}: {exc}",
-                always=True,
-            )
-            continue
+        row, _, logs = analyze_movie(movie_input, source_movie=None)
+        for log in logs:
+            _logger.info(log)
 
-        if not base_row:
-            _logger.warning(
-                f"[DLNA] analyze_input_movie devolvió fila vacía para {file_path}",
-                always=True,
-            )
-            continue
-
-        # Enriquecemos la fila con campos adicionales usados por reporting.
-        row: dict[str, object] = dict(base_row)
-        row["file"] = str(file_path)
-
-        # file_size_bytes -> file_size (por compatibilidad con dashboard)
-        file_size_bytes = row.get("file_size_bytes")
-        if isinstance(file_size_bytes, int):
-            row["file_size"] = file_size_bytes
-        else:
-            row["file_size"] = file_size
-
-        # Campos adicionales desde OMDb/Wiki
-        omdb_data = fetch_omdb(title, year)
-        poster_url: str | None = None
-        trailer_url: str | None = None
-        imdb_id: str | None = None
-        omdb_json_str: str | None = None
-        wikidata_id: str | None = None
-        wikipedia_title: str | None = None
-
-        if omdb_data:
-            poster_raw = omdb_data.get("Poster")
-            trailer_raw = omdb_data.get("Website")
-            imdb_id_raw = omdb_data.get("imdbID")
-
-            if isinstance(poster_raw, str):
-                poster_url = poster_raw
-            if isinstance(trailer_raw, str):
-                trailer_url = trailer_raw
-            if isinstance(imdb_id_raw, str):
-                imdb_id = imdb_id_raw
-
-            try:
-                omdb_json_str = json.dumps(omdb_data, ensure_ascii=False)
-            except Exception:
-                omdb_json_str = str(omdb_data)
-
-            wiki_raw = omdb_data.get("__wiki")
-            if isinstance(wiki_raw, dict):
-                wikidata_val = wiki_raw.get("wikidata_id")
-                wiki_title_val = wiki_raw.get("wikipedia_title")
-                if isinstance(wikidata_val, str):
-                    wikidata_id = wikidata_val
-                if isinstance(wiki_title_val, str):
-                    wikipedia_title = wiki_title_val
-
-        row["poster_url"] = poster_url
-        row["trailer_url"] = trailer_url
-        row["imdb_id"] = imdb_id
-        row["thumb"] = None
-        row["omdb_json"] = omdb_json_str
-        row["wikidata_id"] = wikidata_id
-        row["wikipedia_title"] = wikipedia_title
-        row["guid"] = None
-        row["rating_key"] = None
-
-        all_rows.append(row)
+        if row:
+            all_rows.append(row)
 
     if not all_rows:
         _logger.info(
@@ -273,19 +184,20 @@ def analyze_dlna_server() -> None:
         )
         return
 
-    # Filtrado DELETE/MAYBE + ordenación
     filtered_rows = [r for r in all_rows if r.get("decision") in {"DELETE", "MAYBE"}]
     filtered_rows = sort_filtered_rows(filtered_rows) if filtered_rows else []
 
-    # Salidas (estándar): misma nomenclatura que Plex, en REPORTS_DIR
-    write_all_csv(REPORT_ALL_PATH, all_rows)
-    write_filtered_csv(REPORT_FILTERED_PATH, filtered_rows)
-    # Por ahora no generamos sugerencias para DLNA, pero escribimos CSV vacío compatible
-    write_suggestions_csv(METADATA_FIX_PATH, suggestions_rows)
+    all_path = f"{OUTPUT_PREFIX}_dlna_all.csv"
+    filtered_path = f"{OUTPUT_PREFIX}_dlna_filtered.csv"
+    suggestions_path = f"{METADATA_OUTPUT_PREFIX}_dlna.csv"
+
+    write_all_csv(all_path, all_rows)
+    write_filtered_csv(filtered_path, filtered_rows)
+    write_suggestions_csv(suggestions_path, suggestions_rows)
 
     _logger.info(
-        f"[DLNA] Análisis completado. CSV completo: {REPORT_ALL_PATH} | "
-        f"CSV filtrado: {REPORT_FILTERED_PATH}",
+        f"[DLNA] Análisis completado. CSV completo: {all_path} | "
+        f"CSV filtrado: {filtered_path}",
         always=True,
     )
 
