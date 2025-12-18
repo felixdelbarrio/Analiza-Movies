@@ -73,7 +73,7 @@ OUTPUT_PREFIX: str = os.getenv("OUTPUT_PREFIX", "report")
 # ----------------------------------------------------
 # Rutas de salida estándar (CSV)
 # ----------------------------------------------------
-REPORTS_DIR: Final[str] = os.getenv("REPORTS_DIR", "Reports")
+REPORTS_DIR: Final[str] = os.getenv("REPORTS_DIR", "reports")
 
 REPORT_ALL_FILENAME: Final[str] = "report_all.csv"
 REPORT_FILTERED_FILENAME: Final[str] = "report_filtered.csv"
