@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import urljoin
+import re
+from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
@@ -30,7 +31,13 @@ class _DlnaVideoItem:
     title: str
     resource_url: str
     size_bytes: int | None
-    year: int | None
+
+
+_TITLE_YEAR_SUFFIX_RE: re.Pattern[str] = re.compile(
+    r"(?P<base>.*?)"
+    r"(?P<sep>\s*\.?\s*)"
+    r"\(\s*(?P<year>\d{4})\s*\)\s*$"
+)
 
 
 def _is_plex_server(device: DLNADevice) -> bool:
@@ -116,7 +123,6 @@ def _soap_browse_direct_children(
     soap_action = f"\"{service_type}#Browse\""
     headers = {
         "Content-Type": 'text/xml; charset="utf-8"',
-        # Compatibilidad: algunos servidores esperan SOAPAction, otros SOAPACTION.
         "SOAPAction": soap_action,
         "SOAPACTION": soap_action,
     }
@@ -237,8 +243,6 @@ def _is_plex_virtual_container_title(title: str) -> bool:
     if not t:
         return True
 
-    # Heurística genérica Plex: “vistas/servicios” típicos, no carpetas físicas.
-    # No depende del usuario ni de la instalación.
     plex_virtual_tokens = (
         "video channels",
         "channels",
@@ -519,19 +523,10 @@ def _is_video_item(elem: ET.Element) -> bool:
     return False
 
 
-def _extract_year_from_date(date_str: str) -> int | None:
-    if len(date_str) >= 4 and date_str[:4].isdigit():
-        y = int(date_str[:4])
-        if 1900 <= y <= 2100:
-            return y
-    return None
-
-
 def _extract_video_item(elem: ET.Element) -> _DlnaVideoItem | None:
     title: str | None = None
     resource_url: str | None = None
     size_bytes: int | None = None
-    year: int | None = None
 
     for ch in list(elem):
         if not isinstance(ch.tag, str):
@@ -539,10 +534,6 @@ def _extract_video_item(elem: ET.Element) -> _DlnaVideoItem | None:
 
         if ch.tag.endswith("title") and title is None:
             title = _xml_text(ch)
-        elif ch.tag.endswith("date") and year is None:
-            dt = _xml_text(ch)
-            if dt:
-                year = _extract_year_from_date(dt)
         elif ch.tag.endswith("res") and resource_url is None:
             resource_url = _xml_text(ch)
             size_attr = ch.attrib.get("size")
@@ -556,7 +547,6 @@ def _extract_video_item(elem: ET.Element) -> _DlnaVideoItem | None:
         title=title,
         resource_url=resource_url,
         size_bytes=size_bytes,
-        year=year,
     )
 
 
@@ -614,6 +604,39 @@ def _iter_video_items_recursive(device: DLNADevice, root_object_id: str) -> list
     return results
 
 
+def _extract_year_from_title(title: str) -> tuple[str, int | None]:
+    raw = title.strip()
+    if not raw:
+        return title, None
+
+    match = _TITLE_YEAR_SUFFIX_RE.match(raw)
+    if not match:
+        return title, None
+
+    year_str = match.group("year")
+    if not year_str.isdigit():
+        return title, None
+
+    year = int(year_str)
+    if not (1900 <= year <= 2100):
+        return title, None
+
+    base = match.group("base").strip()
+    base = base.rstrip(".").strip()
+    return (base or title), year
+
+
+def _dlna_display_file(library: str, resource_url: str) -> tuple[str, str]:
+    parsed = urlparse(resource_url)
+    filename = parsed.path.rsplit("/", 1)[-1].strip()
+    filename = unquote(filename)
+
+    if not filename:
+        filename = resource_url
+
+    return f"{library}/{filename}", resource_url
+
+
 def analyze_dlna_server(device: DLNADevice | None = None) -> None:
     if device is None:
         device = _ask_dlna_device()
@@ -661,7 +684,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
     if selected_containers is None:
         return
 
-    candidates: list[tuple[str, int | None, str, int | None, str]] = []
+    candidates: list[tuple[str, str, int | None, str]] = []
     for container in selected_containers:
         if container.title in EXCLUDE_DLNA_LIBRARIES:
             _logger.info(f"[DLNA] Omitiendo '{container.title}' por EXCLUDE_DLNA_LIBRARIES.", always=True)
@@ -669,7 +692,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
 
         items = _iter_video_items_recursive(device, container.object_id)
         for it in items:
-            candidates.append((it.title, it.year, it.resource_url, it.size_bytes, container.title))
+            candidates.append((it.title, it.resource_url, it.size_bytes, container.title))
 
     if not candidates:
         _logger.info("[DLNA] No se han encontrado items de vídeo para analizar.", always=True)
@@ -680,13 +703,16 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
     all_rows: list[dict[str, object]] = []
     suggestions_rows: list[dict[str, object]] = []
 
-    for title, year, file_path_str, file_size, library in candidates:
+    for raw_title, resource_url, file_size, library in candidates:
+        clean_title, extracted_year = _extract_year_from_title(raw_title)
+        display_file, file_url = _dlna_display_file(library, resource_url)
+
         movie_input = MovieInput(
             source="dlna",
             library=library,
-            title=title,
-            year=year,
-            file_path=file_path_str,
+            title=clean_title,
+            year=extracted_year,
+            file_path=file_url,
             file_size_bytes=file_size,
             imdb_id_hint=None,
             plex_guid=None,
@@ -698,13 +724,15 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
         try:
             row, meta_sugg, logs = analyze_movie(movie_input, source_movie=None)
         except Exception as exc:  # pragma: no cover
-            _logger.error(f"[DLNA] Error analizando {file_path_str}: {exc}", always=True)
+            _logger.error(f"[DLNA] Error analizando {file_url}: {exc}", always=True)
             continue
 
         for log in logs:
             _logger.info(log)
 
         if row:
+            row["file_url"] = file_url
+            row["file"] = display_file
             all_rows.append(row)
 
         if meta_sugg:
@@ -717,9 +745,6 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
     filtered_rows = [r for r in all_rows if r.get("decision") in {"DELETE", "MAYBE"}]
     filtered_rows = sort_filtered_rows(filtered_rows) if filtered_rows else []
 
-    # ---------------------------------------------------
-    # Salidas CSV unificadas (siempre mismos nombres y en /reports)
-    # ---------------------------------------------------
     write_all_csv(REPORT_ALL_PATH, all_rows)
     write_filtered_csv(REPORT_FILTERED_PATH, filtered_rows)
     write_suggestions_csv(METADATA_FIX_PATH, suggestions_rows)
