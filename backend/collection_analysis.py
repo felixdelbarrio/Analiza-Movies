@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from typing import TypeAlias
 
 from backend import logger as _logger
 from backend.analyze_input_core import AnalysisRow, analyze_input_movie
 from backend.metadata_fix import generate_metadata_suggestions_row
 from backend.movie_input import MovieInput
 from backend.wiki_client import get_movie_record
+
+
+_OmdbCacheKey: TypeAlias = tuple[str, int | None, str | None]
 
 
 def _safe_int(value: object) -> int | None:
@@ -87,7 +91,6 @@ def analyze_movie(
     omdb_data: Mapping[str, object] | None = None
     wiki_meta: dict[str, object] = {}
 
-    _OmdbCacheKey = tuple[str, int | None, str | None]
     omdb_cache: dict[_OmdbCacheKey, dict[str, object]] = {}
     wiki_cache: dict[_OmdbCacheKey, dict[str, object]] = {}
 
@@ -255,6 +258,10 @@ def analyze_movie(
         row["file_size"] = movie_input.file_size_bytes
 
     row["file"] = movie_input.file_path or row.get("file", "")
+
+    # NUEVO: URL real del origen (DLNA/UPnP, etc.)
+    source_url_obj = movie_input.extra.get("source_url")
+    row["source_url"] = source_url_obj if isinstance(source_url_obj, str) else ""
 
     # Campos Plex
     row["rating_key"] = movie_input.rating_key

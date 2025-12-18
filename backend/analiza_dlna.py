@@ -626,15 +626,44 @@ def _extract_year_from_title(title: str) -> tuple[str, int | None]:
     return (base or title), year
 
 
-def _dlna_display_file(library: str, resource_url: str) -> tuple[str, str]:
-    parsed = urlparse(resource_url)
-    filename = parsed.path.rsplit("/", 1)[-1].strip()
-    filename = unquote(filename)
+def _extract_ext_from_resource_url(resource_url: str) -> str:
+    try:
+        parsed = urlparse(resource_url)
+        filename = parsed.path.rsplit("/", 1)[-1].strip()
+        filename = unquote(filename)
+        if "." not in filename:
+            return ""
+        ext = f".{filename.rsplit('.', 1)[-1].strip()}"
+        if ext == ".":
+            return ""
+        if len(ext) > 8:
+            return ""
+        if not ext[1:].isalnum():
+            return ""
+        return ext
+    except Exception:
+        return ""
 
-    if not filename:
-        filename = resource_url
 
-    return f"{library}/{filename}", resource_url
+def _dlna_display_file(library: str, raw_title: str, resource_url: str) -> tuple[str, str]:
+    """
+    Requisito DLNA:
+      - file (friendly) = "{library}/{Nombre original del registro sin normalizar}{ext}"
+      - file_url         = URL real del servidor
+    """
+    ext = _extract_ext_from_resource_url(resource_url)
+
+    base = raw_title.strip()
+    if not base:
+        base = "UNKNOWN"
+
+    if ext:
+        base_l = base.lower()
+        ext_l = ext.lower()
+        if not base_l.endswith(ext_l):
+            base = f"{base}{ext}"
+
+    return f"{library}/{base}", resource_url
 
 
 def analyze_dlna_server(device: DLNADevice | None = None) -> None:
@@ -705,20 +734,22 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
 
     for raw_title, resource_url, file_size, library in candidates:
         clean_title, extracted_year = _extract_year_from_title(raw_title)
-        display_file, file_url = _dlna_display_file(library, resource_url)
+        display_file, file_url = _dlna_display_file(library, raw_title, resource_url)
 
         movie_input = MovieInput(
             source="dlna",
             library=library,
             title=clean_title,
             year=extracted_year,
-            file_path=file_url,
+            file_path=display_file,
             file_size_bytes=file_size,
             imdb_id_hint=None,
             plex_guid=None,
             rating_key=None,
             thumb_url=None,
-            extra={},
+            extra={
+                "source_url": file_url,
+            },
         )
 
         try:
@@ -731,6 +762,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
             _logger.info(log)
 
         if row:
+            # Mantener compatibilidad con tu pipeline actual:
             row["file_url"] = file_url
             row["file"] = display_file
             all_rows.append(row)
