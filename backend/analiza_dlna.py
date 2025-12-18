@@ -305,7 +305,10 @@ def _list_child_containers(device: DLNADevice, parent_object_id: str) -> list[_D
         return []
 
     children, _ = children_resp
+<<<<<<< Updated upstream
 
+=======
+>>>>>>> Stashed changes
     candidates: list[_DlnaContainer] = []
     for elem in children:
         if not (isinstance(elem.tag, str) and elem.tag.endswith("container")):
@@ -382,7 +385,88 @@ def _navigate_subfolders(device: DLNADevice, start: _DlnaContainer) -> _DlnaCont
         current = filtered[val - 1]
 
 
+<<<<<<< Updated upstream
 def _ask_video_root_container(device: DLNADevice) -> _DlnaContainer | None:
+=======
+def _parse_comma_selection(raw: str, max_value: int) -> list[int] | None:
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if not parts:
+        return None
+
+    values: list[int] = []
+    for part in parts:
+        if not part.isdigit():
+            return None
+        val = int(part)
+        if not (1 <= val <= max_value):
+            return None
+        values.append(val)
+
+    # mantener orden, sin duplicados
+    seen: set[int] = set()
+    unique: list[int] = []
+    for v in values:
+        if v not in seen:
+            seen.add(v)
+            unique.append(v)
+
+    return unique
+
+
+def _select_folders_menu_non_plex(device: DLNADevice, base: _DlnaContainer) -> list[_DlnaContainer] | None:
+    """Menú:
+    0) Todas las carpetas de vídeo de DLNA
+    1) Seleccionar qué carpetas analizar (múltiple con comas)
+    Enter cancela.
+    """
+    _logger.info(
+        "\nOpciones de análisis DLNA (Enter cancela):",
+        always=True,
+    )
+    _logger.info("  0) Todas las carpetas de vídeo de DLNA", always=True)
+    _logger.info("  1) Seleccionar qué carpetas analizar", always=True)
+
+    raw = input("Selecciona una opción (0/1) o pulsa Enter para cancelar: ").strip()
+    if not raw:
+        return None
+    if raw not in ("0", "1"):
+        _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
+        return _select_folders_menu_non_plex(device, base)
+
+    if raw == "0":
+        return [base]
+
+    folders = _list_child_containers(device, base.object_id)
+    folders = [c for c in folders if not _is_non_video_container_title(c.title)]
+    folders = [c for c in folders if c.title not in EXCLUDE_DLNA_LIBRARIES]
+
+    if not folders:
+        _logger.warning("No se han encontrado carpetas dentro de este contenedor.", always=True)
+        return None
+
+    _logger.info("\nCarpetas disponibles (Enter cancela):", always=True)
+    for idx, c in enumerate(folders, start=1):
+        _logger.info(f"  {idx}) {c.title}", always=True)
+
+    raw_sel = input(
+        "Selecciona carpetas separadas por comas (ej: 1,2) o pulsa Enter para cancelar: "
+    ).strip()
+    if not raw_sel:
+        return None
+
+    selected_nums = _parse_comma_selection(raw_sel, len(folders))
+    if selected_nums is None:
+        _logger.warning(
+            f"Selección no válida. Usa números 1-{len(folders)} separados por comas (ej: 1,2).",
+            always=True,
+        )
+        return _select_folders_menu_non_plex(device, base)
+
+    return [folders[n - 1] for n in selected_nums]
+
+
+def _ask_video_root_containers_to_analyze(device: DLNADevice) -> list[_DlnaContainer] | None:
+>>>>>>> Stashed changes
     roots = _list_video_root_containers(device)
     if not roots:
         _logger.error(
@@ -393,12 +477,22 @@ def _ask_video_root_container(device: DLNADevice) -> _DlnaContainer | None:
 
     if len(roots) == 1:
         chosen = _auto_descend_folder_browse(device, roots[0])
+<<<<<<< Updated upstream
         return _navigate_subfolders(device, chosen)
+=======
+        if _is_plex_server(device):
+            single = _navigate_subfolders(device, chosen)
+            if single is None:
+                return None
+            return [single]
+        return _select_folders_menu_non_plex(device, chosen)
+>>>>>>> Stashed changes
 
     _logger.info("\nSe han encontrado los siguientes directorios raíz de vídeo:", always=True)
     for idx, c in enumerate(roots, start=1):
         _logger.info(f"  {idx}) {c.title}", always=True)
 
+<<<<<<< Updated upstream
     while True:
         raw = input(
             f"Selecciona un directorio de vídeo (1-{len(roots)}) o pulsa Enter para cancelar: "
@@ -416,6 +510,30 @@ def _ask_video_root_container(device: DLNADevice) -> _DlnaContainer | None:
 
         chosen = _auto_descend_folder_browse(device, roots[val - 1])
         return _navigate_subfolders(device, chosen)
+=======
+    raw = input(
+        f"Selecciona un directorio de vídeo (1-{len(roots)}) o pulsa Enter para cancelar: "
+    ).strip()
+    if not raw:
+        return None
+    if not raw.isdigit():
+        _logger.warning("Selecciona un número válido (o Enter para cancelar).", always=True)
+        return _ask_video_root_containers_to_analyze(device)
+
+    val = int(raw)
+    if not (1 <= val <= len(roots)):
+        _logger.warning("Opción fuera de rango.", always=True)
+        return _ask_video_root_containers_to_analyze(device)
+
+    chosen = _auto_descend_folder_browse(device, roots[val - 1])
+    if _is_plex_server(device):
+        single = _navigate_subfolders(device, chosen)
+        if single is None:
+            return None
+        return [single]
+
+    return _select_folders_menu_non_plex(device, chosen)
+>>>>>>> Stashed changes
 
 
 def _extract_year_from_date(date_str: str) -> int | None:
@@ -579,13 +697,17 @@ def _iter_video_files(root: Path) -> list[Path]:
 
 
 def analyze_dlna_server(device: DLNADevice | None = None) -> None:
+<<<<<<< Updated upstream
     library: str
 
     selected_container: _DlnaContainer | None = None
+=======
+>>>>>>> Stashed changes
     local_root: Path | None = None
 
     if device is None:
         local_root = _ask_root_directory()
+<<<<<<< Updated upstream
         library = local_root.name
     else:
         selected_container = _ask_video_root_container(device)
@@ -600,11 +722,67 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
             always=True,
         )
         return
+=======
+
+        library = local_root.name
+        if library in EXCLUDE_DLNA_LIBRARIES:
+            _logger.info(
+                f"[DLNA] La biblioteca '{library}' está en EXCLUDE_DLNA_LIBRARIES; se omite el análisis.",
+                always=True,
+            )
+            return
+
+        files = _iter_video_files(local_root)
+        if not files:
+            _logger.info(f"No se han encontrado ficheros de vídeo en {local_root}", always=True)
+            return
+
+        _logger.info(f"Analizando {len(files)} ficheros de vídeo bajo {local_root}", always=True)
+
+        candidates: list[tuple[str, int | None, str, int | None, str]] = []
+        for file_path in files:
+            title, year = _guess_title_year(file_path)
+            try:
+                file_size = file_path.stat().st_size
+            except OSError:
+                file_size = None
+            candidates.append((title, year, str(file_path), file_size, library))
+    else:
+        selected_containers = _ask_video_root_containers_to_analyze(device)
+        if selected_containers is None:
+            _logger.info("[DLNA] Operación cancelada.", always=True)
+            return
+
+        candidates = []
+        total_items = 0
+        for container in selected_containers:
+            if container.title in EXCLUDE_DLNA_LIBRARIES:
+                _logger.info(
+                    f"[DLNA] La carpeta '{container.title}' está en EXCLUDE_DLNA_LIBRARIES; se omite.",
+                    always=True,
+                )
+                continue
+
+            items = _iter_video_items_recursive(device, container.object_id)
+            total_items += len(items)
+            for item in items:
+                candidates.append((item.title, item.year, item.resource_url, item.size_bytes, container.title))
+
+        if not candidates:
+            _logger.info("[DLNA] No se han encontrado items de vídeo para analizar.", always=True)
+            return
+
+        _logger.info(
+            f"[DLNA] Analizando {total_items} item(s) de vídeo en las carpetas seleccionadas.",
+            always=True,
+        )
+>>>>>>> Stashed changes
 
     all_rows: list[dict[str, object]] = []
     suggestions_rows: list[dict[str, object]] = []
     candidates: list[tuple[str, int | None, str, int | None]] = []
 
+<<<<<<< Updated upstream
     if device is None:
         if local_root is None:
             return
@@ -645,6 +823,10 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
 
     for title, year, file_path_str, file_size in candidates:
 
+=======
+    for title, year, file_path_str, file_size, library in candidates:
+
+>>>>>>> Stashed changes
         def fetch_omdb(title_for_fetch: str, year_for_fetch: int | None) -> dict[str, object]:
             record = get_movie_record(title=title_for_fetch, year=year_for_fetch, imdb_id_hint=None)
             if record is None:
