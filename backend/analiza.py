@@ -9,14 +9,14 @@ Al ejecutarse, pregunta al usuario si quiere analizar:
 
 Según la opción elegida, delega en:
   - backend.analiza_plex.analyze_all_libraries()
-  - backend.analiza_dlna.analyze_dlna_server()
+  - backend.analiza_dlna.analyze_dlna_server(device)
 
 Para el caso DLNA:
   - Primero se descubren servidores DLNA/UPnP en la red.
   - Se listan numerados para que el usuario elija uno.
 """
 
-from typing import Literal, Optional
+from typing import Literal
 
 from .analiza_dlna import analyze_dlna_server
 from .analiza_plex import analyze_all_libraries
@@ -40,7 +40,7 @@ def _ask_source() -> Choice:
         print("Opción no válida. Introduce 1 o 2.")
 
 
-def _select_dlna_device() -> Optional[DLNADevice]:
+def _select_dlna_device() -> DLNADevice | None:
     """
     Descubre servidores DLNA en la red, los lista numerados y
     permite seleccionar uno.
@@ -93,14 +93,13 @@ def main() -> None:
 
     if choice == "1":
         analyze_all_libraries()
-    else:
-        device = _select_dlna_device()
-        if device is None:
-            return
+        return
 
-        # De momento el análisis DLNA trabaja sobre directorio local;
-        # más adelante puedes adaptar analyze_dlna_server para usar `device`.
-        analyze_dlna_server()
+    device = _select_dlna_device()
+    if device is None:
+        return
+
+    analyze_dlna_server(device)
 
 
 if __name__ == "__main__":
