@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from typing import Callable
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
 from backend import logger as _logger
-from backend.analyze_input_core import analyze_input_movie
+from backend.collection_analysis import analyze_movie
 from backend.config import (
     EXCLUDE_DLNA_LIBRARIES,
     METADATA_FIX_PATH,
@@ -19,7 +17,6 @@ from backend.decision_logic import sort_filtered_rows
 from backend.dlna_discovery import DLNADevice, discover_dlna_devices
 from backend.movie_input import MovieInput
 from backend.reporting import write_all_csv, write_filtered_csv, write_suggestions_csv
-from backend.wiki_client import get_movie_record
 
 
 @dataclass(frozen=True, slots=True)
@@ -680,14 +677,6 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
 
     _logger.info(f"[DLNA] Analizando {len(candidates)} item(s) de vídeo...", always=True)
 
-    def fetch_omdb(title_for_fetch: str, year_for_fetch: int | None) -> dict[str, object]:
-        record = get_movie_record(title=title_for_fetch, year=year_for_fetch, imdb_id_hint=None)
-        if record is None:
-            return {}
-        if isinstance(record, dict):
-            return record
-        return dict(record)
-
     all_rows: list[dict[str, object]] = []
     suggestions_rows: list[dict[str, object]] = []
 
@@ -707,69 +696,19 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
         )
 
         try:
-            base_row = analyze_input_movie(movie_input, fetch_omdb)
+            row, meta_sugg, logs = analyze_movie(movie_input, source_movie=None)
         except Exception as exc:  # pragma: no cover
             _logger.error(f"[DLNA] Error analizando {file_path_str}: {exc}", always=True)
             continue
 
-        if not base_row:
-            continue
+        for log in logs:
+            _logger.info(log)
 
-        row: dict[str, object] = dict(base_row)
-        row["file"] = file_path_str
+        if row:
+            all_rows.append(row)
 
-        file_size_bytes = row.get("file_size_bytes")
-        if isinstance(file_size_bytes, int):
-            row["file_size"] = file_size_bytes
-        else:
-            row["file_size"] = file_size
-
-        omdb_data = fetch_omdb(title, year)
-
-        poster_url: str | None = None
-        trailer_url: str | None = None
-        imdb_id: str | None = None
-        omdb_json_str: str | None = None
-        wikidata_id: str | None = None
-        wikipedia_title: str | None = None
-
-        if omdb_data:
-            poster_raw = omdb_data.get("Poster")
-            trailer_raw = omdb_data.get("Website")
-            imdb_id_raw = omdb_data.get("imdbID")
-
-            if isinstance(poster_raw, str):
-                poster_url = poster_raw
-            if isinstance(trailer_raw, str):
-                trailer_url = trailer_raw
-            if isinstance(imdb_id_raw, str):
-                imdb_id = imdb_id_raw
-
-            try:
-                omdb_json_str = json.dumps(omdb_data, ensure_ascii=False)
-            except Exception:
-                omdb_json_str = str(omdb_data)
-
-            wiki_raw = omdb_data.get("__wiki")
-            if isinstance(wiki_raw, dict):
-                wikidata_val = wiki_raw.get("wikidata_id")
-                wiki_title_val = wiki_raw.get("wikipedia_title")
-                if isinstance(wikidata_val, str):
-                    wikidata_id = wikidata_val
-                if isinstance(wiki_title_val, str):
-                    wikipedia_title = wiki_title_val
-
-        row["poster_url"] = poster_url
-        row["trailer_url"] = trailer_url
-        row["imdb_id"] = imdb_id
-        row["thumb"] = None
-        row["omdb_json"] = omdb_json_str
-        row["wikidata_id"] = wikidata_id
-        row["wikipedia_title"] = wikipedia_title
-        row["guid"] = None
-        row["rating_key"] = None
-
-        all_rows.append(row)
+        if meta_sugg:
+            suggestions_rows.append(meta_sugg)
 
     if not all_rows:
         _logger.info("[DLNA] No se han generado filas de análisis.", always=True)
