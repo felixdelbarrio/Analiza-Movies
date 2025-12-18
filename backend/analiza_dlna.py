@@ -240,6 +240,8 @@ def _is_plex_virtual_container_title(title: str) -> bool:
     if not t:
         return True
 
+    # Heurística genérica Plex: “vistas/servicios” típicos, no carpetas físicas.
+    # No depende del usuario ni de la instalación.
     plex_virtual_tokens = (
         "video channels",
         "channels",
@@ -368,10 +370,7 @@ def _ask_dlna_device() -> DLNADevice | None:
             _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
         if not raw.isdigit():
-            _logger.warning(
-                "Opción no válida. Debe ser un número (o Enter para cancelar).",
-                always=True,
-            )
+            _logger.warning("Opción no válida. Debe ser un número (o Enter para cancelar).", always=True)
             continue
         num = int(raw)
         if not (1 <= num <= len(devices)):
@@ -419,10 +418,7 @@ def _select_folders_non_plex(base: _DlnaContainer, device: DLNADevice) -> list[_
             _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
         if raw not in ("0", "1"):
-            _logger.warning(
-                "Opción no válida. Introduce 0 o 1 (o Enter para cancelar).",
-                always=True,
-            )
+            _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
             continue
 
         if raw == "0":
@@ -432,10 +428,7 @@ def _select_folders_non_plex(base: _DlnaContainer, device: DLNADevice) -> list[_
         folders = [c for c in folders if c.title not in EXCLUDE_DLNA_LIBRARIES]
 
         if not folders:
-            _logger.error(
-                "[DLNA] No se han encontrado carpetas dentro del contenedor seleccionado.",
-                always=True,
-            )
+            _logger.error("[DLNA] No se han encontrado carpetas dentro del contenedor seleccionado.", always=True)
             return None
 
         _logger.info("\nCarpetas detectadas (Enter cancela):", always=True)
@@ -471,10 +464,7 @@ def _select_folders_plex(base: _DlnaContainer, device: DLNADevice) -> list[_Dlna
             _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
         if raw not in ("0", "1"):
-            _logger.warning(
-                "Opción no válida. Introduce 0 o 1 (o Enter para cancelar).",
-                always=True,
-            )
+            _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
             continue
 
         if raw == "0":
@@ -677,10 +667,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
     candidates: list[tuple[str, int | None, str, int | None, str]] = []
     for container in selected_containers:
         if container.title in EXCLUDE_DLNA_LIBRARIES:
-            _logger.info(
-                f"[DLNA] Omitiendo '{container.title}' por EXCLUDE_DLNA_LIBRARIES.",
-                always=True,
-            )
+            _logger.info(f"[DLNA] Omitiendo '{container.title}' por EXCLUDE_DLNA_LIBRARIES.", always=True)
             continue
 
         items = _iter_video_items_recursive(device, container.object_id)
@@ -692,8 +679,6 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
         return
 
     _logger.info(f"[DLNA] Analizando {len(candidates)} item(s) de vídeo...", always=True)
-
-    fetch_omdb: Callable[[str, int | None], dict[str, object]]
 
     def fetch_omdb(title_for_fetch: str, year_for_fetch: int | None) -> dict[str, object]:
         record = get_movie_record(title=title_for_fetch, year=year_for_fetch, imdb_id_hint=None)
