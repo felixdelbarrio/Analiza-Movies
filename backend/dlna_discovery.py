@@ -1,4 +1,3 @@
-# backend/dlna_discovery.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,19 +11,15 @@ import xml.etree.ElementTree as ET
 from backend import logger as _logger
 
 
-# Dirección multicast SSDP estándar
 SSDP_ADDR: Tuple[str, int] = ("239.255.255.250", 1900)
 
-# Usamos un ST genérico para que responda el máximo número de servidores
-# (incluyendo Plex u otros MediaServers que no anuncian exactamente
-# "urn:schemas-upnp-org:device:MediaServer:1").
+# Mantenemos ssdp:all para no perder servidores que anuncian mal (p.ej. Plex),
+# pero filtramos luego por ContentDirectory.
 SSDP_ST: str = "ssdp:all"
-
-# MX: segundos máximos que los servidores pueden esperar antes de responder
 SSDP_MX: int = 2
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class DLNADevice:
     friendly_name: str
     location: str
@@ -33,9 +28,6 @@ class DLNADevice:
 
 
 def _parse_ssdp_response(data: bytes) -> Dict[str, str]:
-    """
-    Parsea una respuesta SSDP (tipo cabeceras HTTP) a dict de headers en minúsculas.
-    """
     try:
         text = data.decode("utf-8", errors="ignore")
     except Exception:
@@ -44,7 +36,7 @@ def _parse_ssdp_response(data: bytes) -> Dict[str, str]:
     lines = text.split("\r\n")
     headers: Dict[str, str] = {}
 
-    for line in lines[1:]:  # saltamos la primera línea "HTTP/1.1 200 OK"
+    for line in lines[1:]:
         if not line.strip():
             continue
         if ":" not in line:
@@ -55,42 +47,45 @@ def _parse_ssdp_response(data: bytes) -> Dict[str, str]:
     return headers
 
 
-def _fetch_friendly_name(location: str) -> str:
-    """
-    Descarga la descripción del dispositivo UPnP (XML) desde LOCATION y
-    extrae el <friendlyName>. Si falla, devuelve la LOCATION como fallback.
-    """
+def _fetch_device_description(location: str) -> bytes | None:
     try:
         with urlopen(location, timeout=3) as resp:
-            xml_data = resp.read()
-    except Exception as exc:  # pragma: no cover (errores de red reales)
+            return resp.read()
+    except Exception as exc:  # pragma: no cover
         _logger.warning(f"[DLNA] No se pudo descargar LOCATION {location}: {exc}")
-        return location
+        return None
 
+
+def _extract_friendly_name(xml_data: bytes, fallback: str) -> str:
     try:
         root = ET.fromstring(xml_data)
-        # El friendlyName típico está en device/friendlyName
-        # namespace libre o con ns; probamos ambas cosas de forma simple
-        # Sin namespaces:
-        for dev in root.iter("device"):
-            fn = dev.findtext("friendlyName")
-            if fn:
-                return fn.strip()
+    except Exception:  # pragma: no cover
+        return fallback
 
-        # Con posibles namespaces (heurística mínima)
-        for elem in root.iter():
-            if elem.tag.endswith("device"):
-                fn = None
-                for child in elem:
-                    if isinstance(child.tag, str) and child.tag.endswith("friendlyName"):
-                        fn = child.text
-                        break
-                if fn:
-                    return fn.strip()
-    except Exception as exc:  # pragma: no cover
-        _logger.warning(f"[DLNA] Error parseando XML de {location}: {exc}")
+    for elem in root.iter():
+        if isinstance(elem.tag, str) and elem.tag.endswith("friendlyName"):
+            if elem.text:
+                name = elem.text.strip()
+                if name:
+                    return name
+            break
 
-    return location
+    return fallback
+
+
+def _has_content_directory(xml_data: bytes) -> bool:
+    try:
+        root = ET.fromstring(xml_data)
+    except Exception:  # pragma: no cover
+        return False
+
+    for elem in root.iter():
+        if not (isinstance(elem.tag, str) and elem.tag.endswith("serviceType")):
+            continue
+        if elem.text and "ContentDirectory" in elem.text:
+            return True
+
+    return False
 
 
 def discover_dlna_devices(
@@ -98,83 +93,79 @@ def discover_dlna_devices(
     st: str = SSDP_ST,
     mx: int = SSDP_MX,
 ) -> List[DLNADevice]:
-    """
-    Descubre dispositivos DLNA/UPnP MediaServer en la red usando SSDP.
-
-    Devuelve una lista de DLNADevice con:
-      - friendly_name
-      - location (URL completa de descripción)
-      - host
-      - port
-
-    Si no se encuentra ningún dispositivo con el ST indicado y éste no es
-    "ssdp:all", se hace un reintento automático con ST="ssdp:all".
-    """
     msg = (
         "M-SEARCH * HTTP/1.1\r\n"
         f"HOST: {SSDP_ADDR[0]}:{SSDP_ADDR[1]}\r\n"
         'MAN: "ssdp:discover"\r\n'
-        f"MX: {int(mx)}\r\n"
         f"ST: {st}\r\n"
+        f"MX: {mx}\r\n"
         "\r\n"
-    ).encode("utf-8")
+    )
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
     try:
         sock.settimeout(timeout)
-        # Algunos stacks requieren permitir reuse
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.sendto(msg, SSDP_ADDR)
+        sock.sendto(msg.encode("utf-8"), SSDP_ADDR)
 
         start = time.time()
-        locations: Dict[str, DLNADevice] = {}
+        found: Dict[str, DLNADevice] = {}
 
         while True:
             remaining = timeout - (time.time() - start)
             if remaining <= 0:
                 break
 
+            sock.settimeout(remaining)
+
             try:
-                sock.settimeout(remaining)
-                data, addr = sock.recvfrom(65535)
+                data, _ = sock.recvfrom(65507)
             except socket.timeout:
                 break
-            except Exception:  # pragma: no cover
+            except Exception as exc:  # pragma: no cover
+                _logger.warning(f"[DLNA] Error recibiendo SSDP: {exc}")
                 break
 
             headers = _parse_ssdp_response(data)
-            loc = headers.get("location")
-            if not loc:
+            location = headers.get("location")
+            if not location:
                 continue
 
-            # Deduplicamos por LOCATION
-            if loc in locations:
+            parsed = urlparse(location)
+            if not parsed.hostname:
                 continue
 
-            parsed = urlparse(loc)
-            host = parsed.hostname or addr[0]
-            port = parsed.port or 80
+            host = parsed.hostname
+            port = parsed.port if parsed.port is not None else 80
 
-            friendly = _fetch_friendly_name(loc)
-            locations[loc] = DLNADevice(
-                friendly_name=friendly,
-                location=loc,
-                host=host,
-                port=port,
-            )
+            xml_data = _fetch_device_description(location)
+            if xml_data is None:
+                continue
 
-        devices = list(locations.values())
+            if not _has_content_directory(xml_data):
+                _logger.info(
+                    f"[DLNA] Ignorando dispositivo sin ContentDirectory: {location}",
+                    always=True,
+                )
+                continue
 
-        # Fallback: si no hay dispositivos y el ST no era ya "ssdp:all",
-        # reintentamos una vez con ST genérico.
-        if not devices and st != "ssdp:all":
-            _logger.info(
-                f"[DLNA] Ningún dispositivo con ST={st!r}, "
-                "reintentando con ST='ssdp:all'."
-            )
-            return discover_dlna_devices(timeout=timeout, st="ssdp:all", mx=mx)
+            friendly = _extract_friendly_name(xml_data, fallback=location)
 
-        _logger.info(f"[DLNA] Descubiertos {len(devices)} servidor(es) DLNA/UPnP.")
+            if location not in found:
+                found[location] = DLNADevice(
+                    friendly_name=friendly,
+                    location=location,
+                    host=host,
+                    port=port,
+                )
+
+        devices = list(found.values())
+        _logger.info(f"[DLNA] Descubiertos {len(devices)} servidor(es) DLNA/UPnP.", always=True)
         return devices
+
     finally:
-        sock.close()
+        try:
+            sock.close()
+        except Exception:
+            pass

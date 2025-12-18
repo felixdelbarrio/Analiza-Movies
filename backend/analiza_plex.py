@@ -10,8 +10,9 @@ from backend import logger as _logger
 from backend.collection_analysis import analyze_movie
 from backend.config import (
     EXCLUDE_PLEX_LIBRARIES,
-    METADATA_OUTPUT_PREFIX,
-    OUTPUT_PREFIX,
+    METADATA_FIX_PATH,
+    REPORT_ALL_PATH,
+    REPORT_FILTERED_PATH,
 )
 from backend.decision_logic import sort_filtered_rows
 from backend.plex_client import (
@@ -105,10 +106,10 @@ def analyze_all_libraries() -> None:
     filtered = sort_filtered_rows(filtered)
 
     # ---------------------------------------------------
-    # Salida CSV
+    # Salida CSV (rutas estándar en /reports)
     # ---------------------------------------------------
-    write_all_csv(f"{OUTPUT_PREFIX}_plex_all.csv", all_rows)
-    write_filtered_csv(f"{OUTPUT_PREFIX}_plex_filtered.csv", filtered)
-    write_suggestions_csv(f"{METADATA_OUTPUT_PREFIX}_plex.csv", suggestion_rows)
+    write_all_csv(REPORT_ALL_PATH, all_rows)
+    write_filtered_csv(REPORT_FILTERED_PATH, filtered)
+    write_suggestions_csv(METADATA_FIX_PATH, suggestion_rows)
 
     _logger.info("[PLEX] Análisis completado.")
