@@ -12,6 +12,38 @@ from backend import logger as _logger
 
 
 # ============================================================
+#          FIELDNAMES ESTÁNDAR PARA REPORTS (ALL/FILTERED)
+# ============================================================
+
+# Orden fijo para que el CSV sea idéntico entre fuentes (Plex/DLNA/...)
+# y estable en el tiempo aunque se añadan keys extra en el futuro.
+_STANDARD_REPORT_FIELDS: Final[list[str]] = [
+    "library",
+    "title",
+    "year",
+    "plex_rating",
+    "imdb_rating",
+    "imdb_votes",
+    "rt_score",
+    "metacritic_score",
+    "decision",
+    "reason",
+    "misidentified_hint",
+    "file",
+    "file_size",
+    "rating_key",
+    "guid",
+    "imdb_id",
+    "poster_url",
+    "trailer_url",
+    "thumb",
+    "omdb_json",
+    "wikidata_id",
+    "wikipedia_title",
+]
+
+
+# ============================================================
 #                   UTILIDADES INTERNAS CSV
 # ============================================================
 
@@ -33,6 +65,7 @@ def _write_dict_rows_csv(
     path: str,
     rows: Iterable[Mapping[str, object]],
     *,
+    fixed_fieldnames: list[str] | None = None,
     default_fieldnames: list[str] | None = None,
     empty_message: str | None = None,
     kind_label: str = "CSV",
@@ -40,7 +73,9 @@ def _write_dict_rows_csv(
     """
     Escritura atómica de CSV desde un iterable de dict/Mapping.
 
-    - Si hay filas → usa unión de sus claves como cabecera.
+    - Si fixed_fieldnames está definido → se usa SIEMPRE (orden fijo).
+      Keys extra en filas se ignoran (extrasaction="ignore") para estabilidad.
+    - Si hay filas y no fixed_fieldnames → usa unión de claves (modo legacy).
     - Si no hay filas → usa default_fieldnames, o no escribe nada.
     """
     pathp = Path(path)
@@ -49,7 +84,9 @@ def _write_dict_rows_csv(
 
     rows_list = list(rows)  # para poder iterar varias veces
 
-    if rows_list:
+    if fixed_fieldnames is not None:
+        fieldnames = list(fixed_fieldnames)
+    elif rows_list:
         fieldnames = _collect_fieldnames(rows_list)
     else:
         if default_fieldnames is None:
@@ -68,7 +105,11 @@ def _write_dict_rows_csv(
             dir=str(dirpath),
             newline="",
         ) as tf:
-            writer = csv.DictWriter(tf, fieldnames=fieldnames)
+            writer = csv.DictWriter(
+                tf,
+                fieldnames=fieldnames,
+                extrasaction="ignore",
+            )
             writer.writeheader()
             if rows_list:
                 writer.writerows(rows_list)
@@ -86,20 +127,22 @@ def _write_dict_rows_csv(
 
 
 def write_all_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
-    """Escribe el CSV completo con todas las películas analizadas."""
+    """Escribe el CSV completo con todas las películas analizadas (cabecera fija)."""
     _write_dict_rows_csv(
         path,
         rows,
+        fixed_fieldnames=_STANDARD_REPORT_FIELDS,
         empty_message="No hay filas para escribir en report_all.csv",
         kind_label="CSV completo",
     )
 
 
 def write_filtered_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
-    """Escribe el CSV filtrado con DELETE/MAYBE."""
+    """Escribe el CSV filtrado con DELETE/MAYBE (cabecera fija)."""
     _write_dict_rows_csv(
         path,
         rows,
+        fixed_fieldnames=_STANDARD_REPORT_FIELDS,
         empty_message="No hay filas filtradas para escribir en report_filtered.csv",
         kind_label="CSV filtrado",
     )
