@@ -1,365 +1,559 @@
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, List, Tuple
+from typing import Callable
 
-import os
-import json
 import pytest
+import xml.etree.ElementTree as ET
 
-from backend import analiza_dlna
-
-
-# ============================================================
-# Helpers
-# ============================================================
+import backend.analiza_dlna as dlna
+from backend.dlna_discovery import DLNADevice
+from tests.conftest import URLOpenMock, build_soap_envelope
 
 
-class Recorder:
-    """Helper para registrar llamadas a funciones mockeadas."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
-
-    def __call__(self, *args: Any, **kwargs: Any) -> None:
-        self.calls.append((args, kwargs))
-
-
-# ============================================================
-# Tests de helpers internos (_is_video_file, _guess_title_year)
-# ============================================================
+def _device(*, friendly_name: str = "Test") -> DLNADevice:
+    return DLNADevice(
+        host="192.168.1.2",
+        port=8200,
+        friendly_name=friendly_name,
+        location="http://192.168.1.2:8200/desc.xml",
+    )
 
 
-def test_is_video_file_true_and_false(tmp_path: Path) -> None:
-    video = tmp_path / "movie.mkv"
-    text = tmp_path / "notes.txt"
+class TestUnitHelpers:
+    def test_xml_text_none(self) -> None:
+        assert dlna._xml_text(None) is None
 
-    video.write_bytes(b"123")
-    text.write_text("hola", encoding="utf-8")
+    def test_xml_text_strips_and_none_for_empty(self) -> None:
+        e = ET.Element("x")
+        e.text = "   "
+        assert dlna._xml_text(e) is None
 
-    assert analiza_dlna._is_video_file(video) is True
-    assert analiza_dlna._is_video_file(text) is False
-    # Directorio tampoco debe considerarse vídeo
-    subdir = tmp_path / "dir"
-    subdir.mkdir()
-    assert analiza_dlna._is_video_file(subdir) is False
+        e.text = "  ABC  "
+        assert dlna._xml_text(e) == "ABC"
+
+    def test_is_plex_server_case_insensitive(self) -> None:
+        assert dlna._is_plex_server(_device(friendly_name="Plex Media Server")) is True
+        assert dlna._is_plex_server(_device(friendly_name="PLEX MEDIA SERVER")) is True
+        assert dlna._is_plex_server(_device(friendly_name="Jellyfin")) is False
+
+    def test_is_likely_video_root_title_positive_negative_mix(self) -> None:
+        assert dlna._is_likely_video_root_title("Vídeos") is True
+        assert dlna._is_likely_video_root_title("Videos") is True
+        assert dlna._is_likely_video_root_title("Photos") is False
+        assert dlna._is_likely_video_root_title("Video & Photos") is False
+        assert dlna._is_likely_video_root_title("   ") is False
+
+    def test_folder_browse_container_score(self) -> None:
+        assert dlna._folder_browse_container_score("By Folder") == 100
+        assert dlna._folder_browse_container_score("Browse Folders") == 100
+        assert dlna._folder_browse_container_score("Examinar carpetas") == 100
+        assert dlna._folder_browse_container_score("Movies") == 0
+        assert dlna._folder_browse_container_score("   ") == 0
+
+    def test_is_plex_virtual_container_title_defaults_true_for_empty(self) -> None:
+        assert dlna._is_plex_virtual_container_title("") is True
+        assert dlna._is_plex_virtual_container_title("   ") is True
+
+    def test_is_plex_virtual_container_title_tokens(self) -> None:
+        assert dlna._is_plex_virtual_container_title("Recently Added") is True
+        assert dlna._is_plex_virtual_container_title("By Genre") is True
+        assert dlna._is_plex_virtual_container_title("Movies") is False
+
+    def test_parse_multi_selection_valid_and_unique_preserve_order(self) -> None:
+        assert dlna._parse_multi_selection("1,2,3", 3) == [1, 2, 3]
+        assert dlna._parse_multi_selection(" 1 , 2 ", 5) == [1, 2]
+        assert dlna._parse_multi_selection("1,2,2,3", 3) == [1, 2, 3]
+
+    def test_parse_multi_selection_invalid(self) -> None:
+        assert dlna._parse_multi_selection("", 3) is None
+        assert dlna._parse_multi_selection(" , , ", 3) is None
+        assert dlna._parse_multi_selection("a,1", 3) is None
+        assert dlna._parse_multi_selection("0", 3) is None
+        assert dlna._parse_multi_selection("4", 3) is None
+
+    def test_extract_year_from_date(self) -> None:
+        assert dlna._extract_year_from_date("1999-01-01") == 1999
+        assert dlna._extract_year_from_date("1999") == 1999
+        assert dlna._extract_year_from_date("1899-01-01") is None
+        assert dlna._extract_year_from_date("2101-01-01") is None
+        assert dlna._extract_year_from_date("abcd") is None
+
+    def test_is_video_item_by_class_or_protocolinfo(self) -> None:
+        item = ET.Element("item")
+        cls = ET.SubElement(item, "upnp:class")
+        cls.text = "object.item.videoItem.movie"
+        assert dlna._is_video_item(item) is True
+
+        item2 = ET.Element("item")
+        res = ET.SubElement(item2, "res")
+        res.attrib["protocolInfo"] = "http-get:*:video/mp4:*"
+        assert dlna._is_video_item(item2) is True
+
+        item3 = ET.Element("item")
+        ET.SubElement(item3, "dc:title").text = "No"
+        assert dlna._is_video_item(item3) is False
+
+    def test_extract_container_title_and_id(self) -> None:
+        c = ET.Element("container")
+        c.attrib["id"] = "c1"
+        ET.SubElement(c, "dc:title").text = "Movies"
+        out = dlna._extract_container_title_and_id(c)
+        assert out is not None
+        assert out.object_id == "c1"
+        assert out.title == "Movies"
+
+        c2 = ET.Element("container")
+        ET.SubElement(c2, "dc:title").text = "Movies"
+        assert dlna._extract_container_title_and_id(c2) is None
+
+        c3 = ET.Element("container")
+        c3.attrib["id"] = "c1"
+        assert dlna._extract_container_title_and_id(c3) is None
+
+    def test_extract_video_item_parses_fields(self) -> None:
+        item = ET.Element("item")
+        ET.SubElement(item, "dc:title").text = "My Movie"
+        ET.SubElement(item, "dc:date").text = "1999-01-01"
+        res = ET.SubElement(item, "res")
+        res.text = "http://example/video.mp4"
+        res.attrib["size"] = "123"
+
+        out = dlna._extract_video_item(item)
+        assert out is not None
+        assert out.title == "My Movie"
+        assert out.year == 1999
+        assert out.resource_url == "http://example/video.mp4"
+        assert out.size_bytes == 123
+
+    def test_extract_video_item_requires_title_and_res(self) -> None:
+        item = ET.Element("item")
+        ET.SubElement(item, "dc:date").text = "1999-01-01"
+        assert dlna._extract_video_item(item) is None
+
+        item2 = ET.Element("item")
+        ET.SubElement(item2, "dc:title").text = "X"
+        assert dlna._extract_video_item(item2) is None
+
+    def test_extract_video_item_size_non_numeric_is_none(self) -> None:
+        item = ET.Element("item")
+        ET.SubElement(item, "dc:title").text = "My Movie"
+        res = ET.SubElement(item, "res")
+        res.text = "http://example/video.mp4"
+        res.attrib["size"] = "12a"
+
+        out = dlna._extract_video_item(item)
+        assert out is not None
+        assert out.size_bytes is None
 
 
-@pytest.mark.parametrize(
-    "filename,expected_title,expected_year",
-    [
-        ("Good.Movie (2001).mkv", "Good.Movie", 2001),
-        ("Another.Movie.1999.1080p.mkv", "Another.Movie.1999.1080p", 1999),
-        ("TitleWithoutYear.mkv", "TitleWithoutYear", None),
-    ],
-)
-def test_guess_title_year_patterns(
-    tmp_path: Path,
-    filename: str,
-    expected_title: str,
-    expected_year: int | None,
-) -> None:
-    f = tmp_path / filename
-    f.write_bytes(b"data")
-    title, year = analiza_dlna._guess_title_year(f)
-    assert title == expected_title
-    assert year == expected_year
+class TestSoap:
+    def test_fetch_xml_root_ok(
+        self, monkeypatch: pytest.MonkeyPatch, device_description_xml: bytes
+    ) -> None:
+        mock = URLOpenMock(lambda _url: device_description_xml)
+        monkeypatch.setattr(dlna, "urlopen", mock)
+
+        root = dlna._fetch_xml_root("http://device/desc.xml")
+        assert root is not None
+        assert isinstance(root, ET.Element)
+        assert mock.calls and mock.calls[0].timeout == 5.0
+
+    def test_fetch_xml_root_download_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def raising(_url: object, timeout: float | None = None) -> object:  # pragma: no cover
+            raise OSError("boom")
+
+        monkeypatch.setattr(dlna, "urlopen", raising)
+        assert dlna._fetch_xml_root("http://device/desc.xml") is None
+
+    def test_find_content_directory_endpoints(
+        self, monkeypatch: pytest.MonkeyPatch, device_description_xml: bytes
+    ) -> None:
+        mock = URLOpenMock(lambda _url: device_description_xml)
+        monkeypatch.setattr(dlna, "urlopen", mock)
+
+        endpoints = dlna._find_content_directory_endpoints("http://192.168.1.2:8200/desc.xml")
+        assert endpoints is not None
+        control_url, service_type = endpoints
+        assert service_type == "urn:schemas-upnp-org:service:ContentDirectory:1"
+        assert control_url == "http://192.168.1.2:8200/ctl/ContentDir"
+
+    def test_soap_browse_direct_children_parses_didl(
+        self, monkeypatch: pytest.MonkeyPatch, didl_container_and_item_xml: str
+    ) -> None:
+        soap_bytes = build_soap_envelope(didl_container_and_item_xml, total_matches=2)
+
+        mock = URLOpenMock(lambda _url: soap_bytes)
+        monkeypatch.setattr(dlna, "urlopen", mock)
+
+        out = dlna._soap_browse_direct_children(
+            "http://device/ctl",
+            "urn:schemas-upnp-org:service:ContentDirectory:1",
+            "0",
+            0,
+            10,
+        )
+        assert out is not None
+        children, total = out
+        assert total == 2
+        assert len(children) == 2
+
+        req_obj = mock.calls[0].url
+        assert hasattr(req_obj, "headers")
+        headers = getattr(req_obj, "headers")
+        assert any(k.lower() == "soapaction" for k in headers)
+
+    def test_soap_browse_direct_children_fallback_unescape(
+        self, monkeypatch: pytest.MonkeyPatch, didl_container_and_item_xml: str
+    ) -> None:
+        escaped = (
+            didl_container_and_item_xml.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&apos;")
+        )
+        soap_bytes = build_soap_envelope(escaped, total_matches=None)
+
+        mock = URLOpenMock(lambda _url: soap_bytes)
+        monkeypatch.setattr(dlna, "urlopen", mock)
+
+        out = dlna._soap_browse_direct_children(
+            "http://device/ctl",
+            "urn:schemas-upnp-org:service:ContentDirectory:1",
+            "0",
+            0,
+            10,
+        )
+        assert out is not None
+        children, total = out
+        assert len(children) == 2
+        assert total == 2
+
+    def test_soap_browse_direct_children_no_result_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        soap = (
+            "<?xml version='1.0'?>"
+            "<s:Envelope xmlns:s='http://schemas.xmlsoap.org/soap/envelope/'>"
+            "<s:Body><u:BrowseResponse xmlns:u='urn:schemas-upnp-org:service:ContentDirectory:1'>"
+            "<TotalMatches>0</TotalMatches>"
+            "</u:BrowseResponse></s:Body></s:Envelope>"
+        ).encode("utf-8")
+
+        mock = URLOpenMock(lambda _url: soap)
+        monkeypatch.setattr(dlna, "urlopen", mock)
+
+        out = dlna._soap_browse_direct_children(
+            "http://device/ctl",
+            "urn:schemas-upnp-org:service:ContentDirectory:1",
+            "0",
+            0,
+            10,
+        )
+        assert out is None
 
 
-# ============================================================
-# Tests del flujo principal analyze_dlna_server
-# ============================================================
+class TestNavigation:
+    def test_list_video_root_containers_filters(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        dev = _device()
+        roots = [
+            dlna._DlnaContainer(object_id="1", title="Music"),
+            dlna._DlnaContainer(object_id="2", title="Videos"),
+            dlna._DlnaContainer(object_id="3", title="Photos"),
+            dlna._DlnaContainer(object_id="4", title="Vídeos"),
+        ]
 
+        monkeypatch.setattr(dlna, "_list_root_containers", lambda _d: (roots, ("ctl", "st")))
+        out = dlna._list_video_root_containers(dev)
+        assert [c.object_id for c in out] == ["2", "4"]
 
-def _make_fake_files(tmp_path: Path) -> list[Path]:
-    """
-    Crea un pequeño set de ficheros de vídeo de prueba.
+    def test_auto_descend_folder_browse_descends_best_scored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dev = _device()
+        start = dlna._DlnaContainer(object_id="root", title="Videos")
 
-    - Good.Movie (2001).mkv   → título 'Good.Movie', year=2001
-    - Bad.Movie.2005.mkv      → título 'Bad.Movie.2005', year=2005 (patrón .YYYY.)
-    """
-    good = tmp_path / "Good.Movie (2001).mkv"
-    bad = tmp_path / "Bad.Movie.2005.mkv"
-
-    good.write_bytes(b"123456")
-    bad.write_bytes(b"abcdef")
-
-    return [good, bad]
-
-
-def test_analyze_dlna_server_with_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # 1) _ask_root_directory devuelve nuestro tmp_path
-    monkeypatch.setattr(analiza_dlna, "_ask_root_directory", lambda: tmp_path)
-
-    # 2) Forzamos la lista de vídeo a un set controlado
-    files = _make_fake_files(tmp_path)
-    monkeypatch.setattr(analiza_dlna, "_iter_video_files", lambda root: files)
-
-    # 3) Stub de OMDb/Wiki: get_movie_record → datos mínimos
-    def fake_get_movie_record(title: str, year: int | None, imdb_id_hint: str | None = None):
-        # Devolvemos algo tipo OMDb + __wiki para comprobar enriquecimiento
-        return {
-            "Title": title,
-            "Year": str(year) if year is not None else None,
-            "Poster": f"http://poster/{title}",
-            "Website": f"http://trailer/{title}",
-            "imdbID": "tt1234567",
-            "__wiki": {
-                "wikidata_id": "Q1",
-                "wikipedia_title": f"Wiki {title}",
-            },
+        tree: dict[str, list[dlna._DlnaContainer]] = {
+            "root": [
+                dlna._DlnaContainer(object_id="a", title="Movies"),
+                dlna._DlnaContainer(object_id="b", title="By Folder"),
+            ],
+            "b": [
+                dlna._DlnaContainer(object_id="c", title="Browse Folders"),
+            ],
+            "c": [
+                dlna._DlnaContainer(object_id="d", title="Not a folder view"),
+            ],
         }
 
-    monkeypatch.setattr(analiza_dlna, "get_movie_record", fake_get_movie_record)
+        monkeypatch.setattr(dlna, "_list_child_containers", lambda _d, oid: tree.get(oid, []))
 
-    # 4) Stub del core genérico analyze_input_movie
-    collected_inputs: list[Tuple[str, int | None, str]] = []
+        out = dlna._auto_descend_folder_browse(dev, start)
+        assert out.object_id == "c"
 
-    def fake_analyze_input_movie(dlna_input, fetch_omdb):
-        # Registramos lo que entra para asegurar que _guess_title_year
-        # se aplicó correctamente.
-        collected_inputs.append(
-            (dlna_input.title, dlna_input.year, dlna_input.file_path)
+    def test_auto_descend_folder_browse_caps_three_levels(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dev = _device()
+        start = dlna._DlnaContainer(object_id="0", title="Videos")
+
+        def children(_d: DLNADevice, oid: str) -> list[dlna._DlnaContainer]:
+            if oid == "0":
+                return [dlna._DlnaContainer(object_id="1", title="By Folder")]
+            if oid == "1":
+                return [dlna._DlnaContainer(object_id="2", title="By Folder")]
+            if oid == "2":
+                return [dlna._DlnaContainer(object_id="3", title="By Folder")]
+            if oid == "3":
+                return [dlna._DlnaContainer(object_id="4", title="By Folder")]
+            return []
+
+        monkeypatch.setattr(dlna, "_list_child_containers", children)
+        out = dlna._auto_descend_folder_browse(dev, start)
+        assert out.object_id == "3"
+
+
+class TestItemsRecursion:
+    def test_iter_video_items_recursive_paginates_and_descends(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dev = _device()
+
+        monkeypatch.setattr(
+            dlna,
+            "_find_content_directory_endpoints",
+            lambda _loc: ("http://device/ctl", "urn:schemas-upnp-org:service:ContentDirectory:1"),
         )
 
-        # Simulamos una decisión: GOOD → KEEP, BAD → DELETE
-        decision = "KEEP" if "Good" in dlna_input.title else "DELETE"
+        calls: list[tuple[str, int, int]] = []
 
-        return {
-            "source": dlna_input.source,
-            "library": dlna_input.library,
-            "title": dlna_input.title,
-            "year": dlna_input.year,
-            "imdb_rating": 7.0,
-            "rt_score": 80,
-            "imdb_votes": 1000,
-            "plex_rating": None,
-            "decision": decision,
-            "reason": "reason",
-            "misidentified_hint": "",
-            "file": dlna_input.file_path,
-            "file_size_bytes": dlna_input.file_size_bytes,
-        }
+        def browse(
+            _ctl: str, _st: str, object_id: str, start: int, count: int
+        ) -> tuple[list[ET.Element], int] | None:
+            calls.append((object_id, start, count))
 
-    monkeypatch.setattr(analiza_dlna, "analyze_input_movie", fake_analyze_input_movie)
+            if object_id == "A":
+                if start == 0:
+                    return [ET.Element("container", {"id": "B"})], 450
 
-    # 5) sort_filtered_rows → identidad, pero registramos la llamada
-    sort_rec = Recorder()
+                items_out: list[ET.Element] = []
+                n = min(200, 450 - start)
+                for i in range(n):
+                    it = ET.Element("item")
+                    ET.SubElement(it, "upnp:class").text = "object.item.videoItem.movie"
+                    ET.SubElement(it, "dc:title").text = f"Movie {start + i}"
+                    res = ET.SubElement(it, "res")
+                    res.text = f"http://example/{start + i}.mp4"
+                    items_out.append(it)
+                return items_out, 450
 
-    def fake_sort_filtered_rows(rows):
-        sort_rec(rows)
-        return rows
+            if object_id == "B":
+                it = ET.Element("item")
+                ET.SubElement(it, "upnp:class").text = "object.item.videoItem.movie"
+                ET.SubElement(it, "dc:title").text = "Sub Movie"
+                res = ET.SubElement(it, "res")
+                res.text = "http://example/sub.mp4"
+                return [it], 1
 
-    monkeypatch.setattr(analiza_dlna, "sort_filtered_rows", fake_sort_filtered_rows)
+            return [], 0
 
-    # 6) Capturamos escrituras CSV
-    rec_all = Recorder()
-    rec_filtered = Recorder()
-    rec_sugg = Recorder()
+        monkeypatch.setattr(dlna, "_soap_browse_direct_children", browse)
 
-    monkeypatch.setattr(analiza_dlna, "write_all_csv", rec_all)
-    monkeypatch.setattr(analiza_dlna, "write_filtered_csv", rec_filtered)
-    monkeypatch.setattr(analiza_dlna, "write_suggestions_csv", rec_sugg)
+        out = dlna._iter_video_items_recursive(dev, "A")
+        assert len(out) == 451
+        assert any(x.title == "Sub Movie" for x in out)
 
-    # 7) Prefijos
-    monkeypatch.setattr(analiza_dlna, "OUTPUT_PREFIX", "OUTDLNA")
-    monkeypatch.setattr(analiza_dlna, "METADATA_OUTPUT_PREFIX", "METADLNA")
+        assert ("A", 0, 200) in calls
+        assert ("A", 200, 200) in calls
+        assert ("A", 400, 200) in calls
+        assert ("B", 0, 200) in calls
 
-    # 8) Capturamos logs info para no depender de stdout
-    info_logs: list[str] = []
-    monkeypatch.setattr(
-        analiza_dlna._logger,
-        "info",
-        lambda msg, **kw: info_logs.append(str(msg)),
-    )
-    monkeypatch.setattr(
-        analiza_dlna._logger,
-        "warning",
-        lambda msg, **kw: info_logs.append(str(msg)),
-    )
-    monkeypatch.setattr(
-        analiza_dlna._logger,
-        "error",
-        lambda msg, **kw: info_logs.append(str(msg)),
-    )
+    def test_iter_video_items_recursive_breaks_on_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        dev = _device()
 
-    # Ejecutamos el flujo principal
-    analiza_dlna.analyze_dlna_server()
+        monkeypatch.setattr(
+            dlna,
+            "_find_content_directory_endpoints",
+            lambda _loc: ("http://device/ctl", "urn:schemas-upnp-org:service:ContentDirectory:1"),
+        )
 
-    # -----------------------------------------------------
-    # Verificaciones
-    # -----------------------------------------------------
+        def browse(
+            _ctl: str, _st: str, _oid: str, _start: int, _count: int
+        ) -> tuple[list[ET.Element], int] | None:
+            return None
 
-    # 1) Entradas al core (títulos / años) coherentes
-    collected_titles = {t for (t, y, p) in collected_inputs}
-    collected_years = {y for (t, y, p) in collected_inputs}
-    assert "Good.Movie" in collected_titles  # se parseó bien "Good.Movie (2001)"
-    assert 2001 in collected_years
-    # El otro título puede incluir ".2005" porque _guess_title_year no lo recorta
-    assert any("Bad.Movie" in t for (t, _, _) in collected_inputs)
-
-    # 2) write_all_csv llamado correctamente
-    assert len(rec_all.calls) == 1
-    (args_all, kwargs_all) = rec_all.calls[0]
-    assert kwargs_all == {}
-    out_all, rows_all = args_all
-    assert out_all == "OUTDLNA_dlna_all.csv"
-    assert len(rows_all) == 2
-
-    titles_all = {r["title"] for r in rows_all}
-    assert "Good.Movie" in titles_all
-    # Título del malo puede ser "Bad.Movie.2005" (según _guess_title_year)
-    assert any("Bad.Movie" in t for t in titles_all)
-
-    # 3) write_filtered_csv contiene solo DELETE (el "Bad")
-    assert len(rec_filtered.calls) == 1
-    (args_f, kwargs_f) = rec_filtered.calls[0]
-    assert kwargs_f == {}
-    out_f, rows_f = args_f
-    assert out_f == "OUTDLNA_dlna_filtered.csv"
-    assert {r["decision"] for r in rows_f} == {"DELETE"}
-
-    # 4) write_suggestions_csv se llama con lista vacía (por el momento DLNA no genera sugerencias)
-    assert len(rec_sugg.calls) == 1
-    (args_s, kwargs_s) = rec_sugg.calls[0]
-    assert kwargs_s == {}
-    out_s, rows_s = args_s
-    assert out_s == "METADLNA_dlna.csv"
-    assert rows_s == []
-
-    # 5) sort_filtered_rows se llamó con las filas DELETE/MAYBE
-    assert len(sort_rec.calls) == 1
-    (args_sort, _kwargs_sort) = sort_rec.calls[0]
-    rows_in = args_sort[0]
-    assert all(r["decision"] in {"DELETE", "MAYBE"} for r in rows_in)
-
-    # 6) Log final de completado
-    assert any("Análisis completado." in m for m in info_logs)
+        monkeypatch.setattr(dlna, "_soap_browse_direct_children", browse)
+        assert dlna._iter_video_items_recursive(dev, "A") == []
 
 
-def test_analyze_dlna_server_analyze_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Si analyze_input_movie lanza error para un fichero, se loggea y se sigue con el resto."""
-    monkeypatch.setattr(analiza_dlna, "_ask_root_directory", lambda: tmp_path)
+class TestCliFlows:
+    def test_ask_dlna_device_cancel(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        devs = [DLNADevice(host="h", port=1, friendly_name="A", location="loc")]
+        monkeypatch.setattr(dlna, "discover_dlna_devices", lambda: devs)
+        monkeypatch.setattr(dlna, "input", lambda _prompt="": "")
+        assert dlna._ask_dlna_device() is None
 
-    files = _make_fake_files(tmp_path)
-    monkeypatch.setattr(analiza_dlna, "_iter_video_files", lambda root: files)
+    def test_ask_dlna_device_invalid_then_select(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        devs = [
+            DLNADevice(host="h", port=1, friendly_name="A", location="loc"),
+            DLNADevice(host="h", port=2, friendly_name="B", location="loc2"),
+        ]
+        monkeypatch.setattr(dlna, "discover_dlna_devices", lambda: devs)
 
-    # Primer fichero lanza error, segundo funciona
-    calls: list[str] = []
+        answers = iter(["x", "9", "2"])
+        monkeypatch.setattr(dlna, "input", lambda _prompt="": next(answers))
+        chosen = dlna._ask_dlna_device()
+        assert chosen is not None
+        assert chosen.friendly_name == "B"
 
-    def fake_analyze_input_movie(dlna_input, fetch_omdb):
-        calls.append(dlna_input.file_path)
-        if "Good.Movie" in dlna_input.file_path:
-            raise RuntimeError("Test error")
-        return {
-            "source": dlna_input.source,
-            "library": dlna_input.library,
-            "title": dlna_input.title,
-            "year": dlna_input.year,
-            "imdb_rating": 5.0,
-            "rt_score": 40,
-            "imdb_votes": 100,
-            "plex_rating": None,
-            "decision": "DELETE",
-            "reason": "reason",
-            "misidentified_hint": "",
-            "file": dlna_input.file_path,
-            "file_size_bytes": dlna_input.file_size_bytes,
-        }
+    def test_select_folders_non_plex_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        base = dlna._DlnaContainer(object_id="root", title="Videos")
+        dev = DLNADevice(host="h", port=1, friendly_name="A", location="loc")
 
-    monkeypatch.setattr(analiza_dlna, "analyze_input_movie", fake_analyze_input_movie)
+        monkeypatch.setattr(dlna, "input", lambda _prompt="": "0")
+        assert dlna._select_folders_non_plex(base, dev) == [base]
 
-    # get_movie_record stub mínimo
-    monkeypatch.setattr(
-        analiza_dlna,
-        "get_movie_record",
-        lambda *a, **k: {"Title": "X", "Year": "2000"},
-    )
+    def test_select_folders_non_plex_choose_subset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        base = dlna._DlnaContainer(object_id="root", title="Videos")
+        dev = DLNADevice(host="h", port=1, friendly_name="A", location="loc")
 
-    # CSV recorders
-    rec_all = Recorder()
-    rec_filtered = Recorder()
-    rec_sugg = Recorder()
-    monkeypatch.setattr(analiza_dlna, "write_all_csv", rec_all)
-    monkeypatch.setattr(analiza_dlna, "write_filtered_csv", rec_filtered)
-    monkeypatch.setattr(analiza_dlna, "write_suggestions_csv", rec_sugg)
+        folders = [
+            dlna._DlnaContainer(object_id="1", title="Movies"),
+            dlna._DlnaContainer(object_id="2", title="Kids"),
+            dlna._DlnaContainer(object_id="3", title="IgnoreMe"),
+        ]
 
-    # Prefijos
-    monkeypatch.setattr(analiza_dlna, "OUTPUT_PREFIX", "OUTERR")
-    monkeypatch.setattr(analiza_dlna, "METADATA_OUTPUT_PREFIX", "METAERR")
+        monkeypatch.setattr(dlna, "EXCLUDE_DLNA_LIBRARIES", {"IgnoreMe"})
+        monkeypatch.setattr(dlna, "_list_child_containers", lambda _d, _oid: folders)
 
-    # Logs
-    info_logs: list[str] = []
-    monkeypatch.setattr(
-        analiza_dlna._logger,
-        "info",
-        lambda msg, **kw: info_logs.append(str(msg)),
-    )
-    monkeypatch.setattr(
-        analiza_dlna._logger,
-        "warning",
-        lambda msg, **kw: info_logs.append(str(msg)),
-    )
-    monkeypatch.setattr(
-        analiza_dlna._logger,
-        "error",
-        lambda msg, **kw: info_logs.append(str(msg)),
-    )
+        answers = iter(["1", "1,2"])
+        monkeypatch.setattr(dlna, "input", lambda _prompt="": next(answers))
 
-    analiza_dlna.analyze_dlna_server()
+        selected = dlna._select_folders_non_plex(base, dev)
+        assert selected is not None
+        assert [c.title for c in selected] == ["Movies", "Kids"]
 
-    # Debe haberse intentado analizar ambos ficheros
-    assert len(calls) == 2
+    def test_select_folders_plex_filters_virtual(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        base = dlna._DlnaContainer(object_id="root", title="Videos")
+        dev = DLNADevice(host="h", port=1, friendly_name="Plex Media Server", location="loc")
 
-    # Pero solo el segundo acaba en los CSV (el primero provocó excepción)
-    assert len(rec_all.calls) == 1
-    (args_all, _kw_all) = rec_all.calls[0]
-    _, rows_all = args_all
-    assert len(rows_all) == 1
-    only_row = rows_all[0]
-    # El título del segundo fichero depende de _guess_title_year,
-    # que mantendrá "Bad.Movie.2005" como title.
-    assert "Bad.Movie" in only_row["title"]
+        folders = [
+            dlna._DlnaContainer(object_id="1", title="Movies"),
+            dlna._DlnaContainer(object_id="2", title="Recently Added"),
+        ]
 
-    # El filtrado DELETE/MAYBE también solo debe contener esa fila
-    assert len(rec_filtered.calls) == 1
-    (args_f, _kw_f) = rec_filtered.calls[0]
-    _, rows_f = args_f
-    assert len(rows_f) == 1
-    assert rows_f[0]["decision"] == "DELETE"
+        monkeypatch.setattr(dlna, "EXCLUDE_DLNA_LIBRARIES", set())
+        monkeypatch.setattr(dlna, "_list_child_containers", lambda _d, _oid: folders)
 
-    # Se ha logueado el error para el primer fichero
-    assert any("Error analizando" in m for m in info_logs)
-    # Y se loguea completado
-    assert any("Análisis completado." in m for m in info_logs)
+        answers = iter(["1", "1"])
+        monkeypatch.setattr(dlna, "input", lambda _prompt="": next(answers))
+
+        selected = dlna._select_folders_plex(base, dev)
+        assert selected is not None
+        assert [c.title for c in selected] == ["Movies"]
 
 
-def test_analyze_dlna_server_no_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Si no hay ficheros de vídeo, no se escriben CSVs y se loguea el mensaje correspondiente."""
-    monkeypatch.setattr(analiza_dlna, "_ask_root_directory", lambda: tmp_path)
-    monkeypatch.setattr(analiza_dlna, "_iter_video_files", lambda root: [])
+class TestE2EPipeline:
+    def test_analyze_dlna_server_pipeline_writes_csv_and_filters(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dev = DLNADevice(host="h", port=1, friendly_name="Non Plex", location="loc")
 
-    rec_all = Recorder()
-    rec_filtered = Recorder()
-    rec_sugg = Recorder()
-    monkeypatch.setattr(analiza_dlna, "write_all_csv", rec_all)
-    monkeypatch.setattr(analiza_dlna, "write_filtered_csv", rec_filtered)
-    monkeypatch.setattr(analiza_dlna, "write_suggestions_csv", rec_sugg)
+        root = dlna._DlnaContainer(object_id="root", title="Videos")
+        library_container = dlna._DlnaContainer(object_id="lib1", title="Movies")
 
-    info_logs: list[str] = []
-    monkeypatch.setattr(
-        analiza_dlna._logger,
-        "info",
-        lambda msg, **kw: info_logs.append(str(msg)),
-    )
+        monkeypatch.setattr(dlna, "_list_video_root_containers", lambda _d: [root])
+        monkeypatch.setattr(dlna, "_auto_descend_folder_browse", lambda _d, c: c)
+        monkeypatch.setattr(dlna, "_select_folders_non_plex", lambda _b, _d: [library_container])
+        monkeypatch.setattr(dlna, "_is_plex_server", lambda _d: False)
 
-    analiza_dlna.analyze_dlna_server()
+        items = [
+            dlna._DlnaVideoItem(title="Movie A", resource_url="http://x/a.mp4", size_bytes=10, year=2001),
+            dlna._DlnaVideoItem(title="Movie B", resource_url="http://x/b.mp4", size_bytes=None, year=None),
+        ]
+        monkeypatch.setattr(dlna, "_iter_video_items_recursive", lambda _d, _oid: items)
 
-    # No debe haberse intentado escribir ningún CSV
-    assert rec_all.calls == []
-    assert rec_filtered.calls == []
-    assert rec_sugg.calls == []
+        def fake_get_movie_record(*, title: str, year: int | None, imdb_id_hint: str | None) -> dict[str, object]:
+            return {
+                "Poster": f"http://poster/{title}",
+                "Website": f"http://trailer/{title}",
+                "imdbID": "tt1234567",
+                "__wiki": {"wikidata_id": "Q1", "wikipedia_title": "Some Title"},
+            }
 
-    # Y se loguea el mensaje de "no se han encontrado ficheros"
-    assert any("No se han encontrado ficheros de vídeo" in m for m in info_logs)
+        monkeypatch.setattr(dlna, "get_movie_record", fake_get_movie_record)
+
+        def fake_analyze_input_movie(
+            movie_input: object,
+            fetch_omdb: Callable[[str, int | None], dict[str, object]],
+        ) -> dict[str, object]:
+            title = getattr(movie_input, "title")
+            year = getattr(movie_input, "year")
+            library = getattr(movie_input, "library")
+            file_size_bytes = getattr(movie_input, "file_size_bytes")
+
+            _ = fetch_omdb(title, year)
+
+            decision = "DELETE" if title == "Movie A" else "KEEP"
+            return {
+                "title": title,
+                "year": year,
+                "library": library,
+                "file_size_bytes": file_size_bytes,
+                "decision": decision,
+            }
+
+        monkeypatch.setattr(dlna, "analyze_input_movie", fake_analyze_input_movie)
+
+        sort_called: list[bool] = []
+
+        def fake_sort(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+            sort_called.append(True)
+            return rows
+
+        monkeypatch.setattr(dlna, "sort_filtered_rows", fake_sort)
+
+        written: dict[str, object] = {}
+
+        def capture_all(path: str, rows: list[dict[str, object]]) -> None:
+            written["all_path"] = path
+            written["all_rows"] = rows
+
+        def capture_filtered(path: str, rows: list[dict[str, object]]) -> None:
+            written["filtered_path"] = path
+            written["filtered_rows"] = rows
+
+        def capture_sugg(path: str, rows: list[dict[str, object]]) -> None:
+            written["sugg_path"] = path
+            written["sugg_rows"] = rows
+
+        monkeypatch.setattr(dlna, "write_all_csv", capture_all)
+        monkeypatch.setattr(dlna, "write_filtered_csv", capture_filtered)
+        monkeypatch.setattr(dlna, "write_suggestions_csv", capture_sugg)
+
+        dlna.analyze_dlna_server(device=dev)
+
+        all_rows_obj = written.get("all_rows")
+        assert isinstance(all_rows_obj, list)
+        assert len(all_rows_obj) == 2
+
+        row0 = all_rows_obj[0]
+        assert row0["library"] == "Movies"
+        assert row0["poster_url"] is not None
+        assert row0["trailer_url"] is not None
+        assert row0["imdb_id"] is not None
+        assert row0["omdb_json"] is not None
+        assert row0["wikidata_id"] is not None
+        assert row0["wikipedia_title"] is not None
+        assert row0["file"] in {"http://x/a.mp4", "http://x/b.mp4"}
+        assert "file_size" in row0
+
+        filtered_rows_obj = written.get("filtered_rows")
+        assert isinstance(filtered_rows_obj, list)
+        assert len(filtered_rows_obj) == 1
+        assert filtered_rows_obj[0]["decision"] == "DELETE"
+        assert sort_called == [True]
+
+        sugg_rows_obj = written.get("sugg_rows")
+        assert isinstance(sugg_rows_obj, list)
+        assert sugg_rows_obj == []
