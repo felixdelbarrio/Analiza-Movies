@@ -290,6 +290,46 @@ def is_omdb_data_empty_for_ratings(data: Mapping[str, object] | None) -> bool:
     return imdb_rating is None and imdb_votes is None and rt_score is None
 
 
+def _maybe_persist_imdb_alias_from_title_result(data: Mapping[str, object] | None) -> None:
+    """
+    Optimización:
+    Si una búsqueda por título/año devuelve Response=True e imdbID,
+    persistimos también esa misma respuesta bajo la clave imdbID.
+
+    Reglas (alineadas con tu flujo):
+      - Si imdbID no existe en omdb_cache -> guardar
+      - Si imdbID existe:
+          - si OMDB_RETRY_EMPTY_CACHE=True y la entrada está "vacía de ratings" -> sobrescribir
+          - si no -> no tocar
+    """
+    if not isinstance(data, Mapping):
+        return
+    if data.get("Response") != "True":
+        return
+
+    imdb_id_obj = data.get("imdbID")
+    if not isinstance(imdb_id_obj, str):
+        return
+    imdb_id = imdb_id_obj.strip()
+    if not imdb_id:
+        return
+
+    existing = omdb_cache.get(imdb_id)
+    if existing is None:
+        omdb_cache[imdb_id] = dict(data)
+        save_cache(omdb_cache)
+        return
+
+    if not OMDB_RETRY_EMPTY_CACHE:
+        return
+
+    if isinstance(existing, dict) and not is_omdb_data_empty_for_ratings(existing):
+        return
+
+    omdb_cache[imdb_id] = dict(data)
+    save_cache(omdb_cache)
+
+
 # ============================================================
 #                      PETICIONES OMDb
 # ============================================================
@@ -470,6 +510,9 @@ def search_omdb_by_title_and_year(
         params_no_year = dict(params)
         params_no_year.pop("y", None)
         data = omdb_query_with_cache(cache_key_no_year, params_no_year)
+
+    # Optimización: si obtuvimos imdbID por title search, persistir alias por imdbID
+    _maybe_persist_imdb_alias_from_title_result(data)
 
     return data
 
