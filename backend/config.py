@@ -67,8 +67,6 @@ dlna_PORT: int = _get_env_int("dlna_PORT", 8200)
 PLEX_TOKEN: str | None = os.getenv("PLEX_TOKEN")
 OMDB_API_KEY: str | None = os.getenv("OMDB_API_KEY")
 
-# Prefijo de ficheros de salida (report_all, report_filtered, etc.)
-OUTPUT_PREFIX: str = os.getenv("OUTPUT_PREFIX", "report")
 
 # ----------------------------------------------------
 # Rutas de salida estándar (CSV)
@@ -184,7 +182,6 @@ BAYES_MIN_TITLES_FOR_GLOBAL_MEAN: int = _get_env_int(
 OMDB_RATE_LIMIT_WAIT_SECONDS: int = _get_env_int("OMDB_RATE_LIMIT_WAIT_SECONDS", 60)
 OMDB_RATE_LIMIT_MAX_RETRIES: int = _get_env_int("OMDB_RATE_LIMIT_MAX_RETRIES", 1)
 
-METADATA_OUTPUT_PREFIX: str = os.getenv("METADATA_OUTPUT_PREFIX", "metadata_fix")
 METADATA_MIN_RATING_FOR_OK: float = _get_env_float("METADATA_MIN_RATING_FOR_OK", 6.0)
 METADATA_MIN_VOTES_FOR_OK: int = _get_env_int("METADATA_MIN_VOTES_FOR_OK", 2000)
 
