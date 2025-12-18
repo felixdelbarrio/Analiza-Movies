@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
-import xml.etree.ElementTree as ET
 
 from backend import logger as _logger
 from backend.analyze_input_core import analyze_input_movie
@@ -104,6 +104,16 @@ def _find_content_directory_endpoints(device_location: str) -> tuple[str, str] |
     return None
 
 
+def _unescape_xml_text(value: str) -> str:
+    return (
+        value.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+    )
+
+
 def _soap_browse_direct_children(
     control_url: str,
     service_type: str,
@@ -126,86 +136,121 @@ def _soap_browse_direct_children(
         "</u:Browse>"
         "</s:Body>"
         "</s:Envelope>"
-    ).encode("utf-8")
+    )
 
+    # Compatibilidad: algunos servidores esperan SOAPACTION (mayúsculas),
+    # otros SOAPAction. Enviamos ambos.
+    soap_action_value = f"\"{service_type}#Browse\""
     headers = {
-        "Content-Type": "text/xml; charset=\"utf-8\"",
-        "SOAPACTION": f"\"{service_type}#Browse\"",
+        "Content-Type": 'text/xml; charset="utf-8"',
+        "SOAPACTION": soap_action_value,
+        "SOAPAction": soap_action_value,
     }
 
-    req = Request(control_url, data=body, headers=headers, method="POST")
-
+    req = Request(control_url, data=body.encode("utf-8"), headers=headers, method="POST")
     try:
         with urlopen(req, timeout=10.0) as resp:
-            xml_bytes = resp.read()
+            raw = resp.read()
     except Exception as exc:  # pragma: no cover
-        _logger.warning(f"[DLNA] Error SOAP Browse en {control_url}: {exc}")
+        _logger.error(f"[DLNA] Error SOAP Browse contra {control_url}: {exc}", always=True)
         return None
 
     try:
-        root = ET.fromstring(xml_bytes)
+        envelope = ET.fromstring(raw)
     except Exception as exc:  # pragma: no cover
-        _logger.warning(f"[DLNA] Error parseando respuesta SOAP: {exc}")
+        _logger.error(f"[DLNA] Respuesta SOAP inválida: {exc}", always=True)
         return None
 
-    result_xml: str | None = None
+    result_text: str | None = None
     total_matches: int | None = None
 
-    for elem in root.iter():
+    for elem in envelope.iter():
         if not isinstance(elem.tag, str):
             continue
         if elem.tag.endswith("Result"):
-            result_xml = _xml_text(elem)
+            result_text = _xml_text(elem)
         elif elem.tag.endswith("TotalMatches"):
-            raw = _xml_text(elem)
-            if raw and raw.isdigit():
-                total_matches = int(raw)
+            tm = _xml_text(elem)
+            if tm and tm.isdigit():
+                total_matches = int(tm)
 
-    if not result_xml:
+    if result_text is None:
         return None
 
     try:
-        didl_root = ET.fromstring(result_xml)
-    except Exception:  # pragma: no cover
-        return None
+        didl = ET.fromstring(result_text)
+    except Exception:
+        try:
+            didl = ET.fromstring(_unescape_xml_text(result_text))
+        except Exception as exc:  # pragma: no cover
+            _logger.error(f"[DLNA] No se pudo parsear DIDL-Lite: {exc}", always=True)
+            return None
 
-    children = list(didl_root)
-    return children, (total_matches or 0)
+    children = list(didl)
+    return children, (total_matches or len(children))
 
 
-def _extract_container_title_and_id(elem: ET.Element) -> _DlnaContainer | None:
-    object_id = elem.attrib.get("id")
-    if not object_id:
+def _extract_container_title_and_id(container: ET.Element) -> _DlnaContainer | None:
+    obj_id = container.attrib.get("id")
+    if not obj_id:
         return None
 
     title: str | None = None
-    for ch in list(elem):
-        if not isinstance(ch.tag, str):
-            continue
-        if ch.tag.endswith("title"):
+    for ch in list(container):
+        if isinstance(ch.tag, str) and ch.tag.endswith("title"):
             title = _xml_text(ch)
             break
 
     if not title:
         return None
 
-    return _DlnaContainer(object_id=object_id, title=title)
+    return _DlnaContainer(object_id=obj_id, title=title)
 
 
 def _is_likely_video_root_title(title: str) -> bool:
     t = title.strip().lower()
     if not t:
         return False
-    keywords = ("video", "vídeo", "movies", "films", "películas", "cine")
-    return any(k in t for k in keywords)
+
+    negative = (
+        "music",
+        "música",
+        "audio",
+        "photo",
+        "photos",
+        "foto",
+        "fotos",
+        "picture",
+        "pictures",
+        "imagen",
+        "imágenes",
+    )
+    if any(n in t for n in negative):
+        return False
+
+    positive = ("video", "vídeo", "videos", "vídeos", "movies", "films", "películas", "cine")
+    return any(p in t for p in positive)
 
 
 def _is_non_video_container_title(title: str) -> bool:
     t = title.strip().lower()
     if not t:
         return True
-    bad = ("music", "música", "photo", "foto", "images", "imagenes", "pictures")
-    return any(k in t for k in bad)
+
+    negative = (
+        "music",
+        "música",
+        "audio",
+        "photo",
+        "photos",
+        "foto",
+        "fotos",
+        "picture",
+        "pictures",
+        "imagen",
+        "imágenes",
+    )
+    return any(n in t for n in negative)
 
 
 def _folder_browse_container_score(title: str) -> int:
@@ -213,29 +258,32 @@ def _folder_browse_container_score(title: str) -> int:
     if not t:
         return 0
 
-    score = 0
-    if "movies" in t or "pel" in t or "cine" in t or "films" in t:
-        score += 3
-    if "video" in t or "vídeo" in t:
-        score += 2
-    if "all" in t or "todo" in t:
-        score += 1
-    if "library" in t or "biblioteca" in t:
-        score += 1
+    strong = (
+        "by folder",
+        "browse folders",
+        "examinar carpetas",
+        "carpetas",
+        "por carpeta",
+        "folders",
+    )
+    for s in strong:
+        if t == s or s in t:
+            return 100
 
-    return score
+    return 0
 
 
-def _list_root_containers(
-    device: DLNADevice,
-) -> tuple[list[_DlnaContainer], tuple[str, str] | None]:
+def _list_root_containers(device: DLNADevice) -> tuple[list[_DlnaContainer], tuple[str, str] | None]:
     endpoints = _find_content_directory_endpoints(device.location)
     if endpoints is None:
+        _logger.error(
+            f"[DLNA] El dispositivo '{device.friendly_name}' no expone ContentDirectory.",
+            always=True,
+        )
         return [], None
 
     control_url, service_type = endpoints
-
-    root_children = _soap_browse_direct_children(control_url, service_type, "0", 0, 500)
+    root_children = _soap_browse_direct_children(control_url, service_type, "0", 0, 200)
     if root_children is None:
         return [], endpoints
 
@@ -293,8 +341,8 @@ def _auto_descend_folder_browse(device: DLNADevice, container: _DlnaContainer) -
         for c in children:
             score = _folder_browse_container_score(c.title)
             if score > best_score:
-                best = c
                 best_score = score
+                best = c
 
         if best is None or best_score <= 0:
             return current
@@ -304,11 +352,17 @@ def _auto_descend_folder_browse(device: DLNADevice, container: _DlnaContainer) -
     return current
 
 
-def _navigate_subfolders(device: DLNADevice, container: _DlnaContainer) -> _DlnaContainer | None:
-    current = container
-    for _ in range(10):
+def _navigate_subfolders(device: DLNADevice, start: _DlnaContainer) -> _DlnaContainer | None:
+    current = start
+
+    while True:
         children = _list_child_containers(device, current.object_id)
-        filtered = [c for c in children if not _is_non_video_container_title(c.title)]
+
+        if _is_plex_server(device):
+            filtered = children
+        else:
+            filtered = [c for c in children if not _is_non_video_container_title(c.title)]
+
         filtered = [c for c in filtered if c.title not in EXCLUDE_DLNA_LIBRARIES]
 
         if not filtered:
@@ -337,8 +391,6 @@ def _navigate_subfolders(device: DLNADevice, container: _DlnaContainer) -> _Dlna
             continue
 
         current = filtered[val - 1]
-
-    return current
 
 
 def _parse_comma_selection(raw: str, max_value: int) -> list[int] | None:
@@ -369,11 +421,6 @@ def _select_folders_menu_non_plex(
     device: DLNADevice,
     base: _DlnaContainer,
 ) -> list[_DlnaContainer] | None:
-    """Menú:
-    0) Todas las carpetas de vídeo de DLNA
-    1) Seleccionar qué carpetas analizar (múltiple con comas)
-    Enter cancela.
-    """
     _logger.info(
         "\nOpciones de análisis DLNA (Enter cancela):",
         always=True,
@@ -399,10 +446,7 @@ def _select_folders_menu_non_plex(
     folders = [c for c in folders if c.title not in EXCLUDE_DLNA_LIBRARIES]
 
     if not folders:
-        _logger.warning(
-            "No se han encontrado carpetas dentro de este contenedor.",
-            always=True,
-        )
+        _logger.warning("No se han encontrado carpetas dentro de este contenedor.", always=True)
         return None
 
     _logger.info("\nCarpetas disponibles (Enter cancela):", always=True)
@@ -459,10 +503,7 @@ def _ask_video_root_containers_to_analyze(
     if not raw:
         return None
     if not raw.isdigit():
-        _logger.warning(
-            "Selecciona un número válido (o Enter para cancelar).",
-            always=True,
-        )
+        _logger.warning("Selecciona un número válido (o Enter para cancelar).", always=True)
         return _ask_video_root_containers_to_analyze(device)
 
     val = int(raw)
@@ -503,7 +544,7 @@ def _is_video_item(elem: ET.Element) -> bool:
     if upnp_class and "videoItem" in upnp_class:
         return True
 
-    if protocol_info and "video" in protocol_info.lower():
+    if protocol_info and ":video" in protocol_info.lower():
         return True
 
     return False
@@ -511,99 +552,112 @@ def _is_video_item(elem: ET.Element) -> bool:
 
 def _extract_video_item(elem: ET.Element) -> _DlnaVideoItem | None:
     title: str | None = None
-    res_url: str | None = None
+    resource_url: str | None = None
     size_bytes: int | None = None
     year: int | None = None
 
     for ch in list(elem):
         if not isinstance(ch.tag, str):
             continue
-        if ch.tag.endswith("title"):
-            title = _xml_text(ch)
-        elif ch.tag.endswith("res"):
-            res_url = _xml_text(ch)
-            size_raw = ch.attrib.get("size")
-            if size_raw and size_raw.isdigit():
-                size_bytes = int(size_raw)
-        elif ch.tag.endswith("date"):
-            date_str = _xml_text(ch)
-            if date_str:
-                year = _extract_year_from_date(date_str)
 
-    if not title or not res_url:
+        if ch.tag.endswith("title") and title is None:
+            title = _xml_text(ch)
+        elif ch.tag.endswith("date") and year is None:
+            dt = _xml_text(ch)
+            if dt:
+                year = _extract_year_from_date(dt)
+        elif ch.tag.endswith("res") and resource_url is None:
+            resource_url = _xml_text(ch)
+            size_attr = ch.attrib.get("size")
+            if size_attr and size_attr.isdigit():
+                size_bytes = int(size_attr)
+
+    if not title or not resource_url:
         return None
 
     return _DlnaVideoItem(
         title=title,
-        resource_url=res_url,
+        resource_url=resource_url,
         size_bytes=size_bytes,
         year=year,
     )
 
 
-def _iter_video_items_recursive(device: DLNADevice, container_object_id: str) -> list[_DlnaVideoItem]:
+def _iter_video_items_recursive(device: DLNADevice, root_object_id: str) -> list[_DlnaVideoItem]:
     endpoints = _find_content_directory_endpoints(device.location)
     if endpoints is None:
         return []
 
     control_url, service_type = endpoints
 
-    start = 0
-    step = 200
-    all_items: list[_DlnaVideoItem] = []
+    results: list[_DlnaVideoItem] = []
+    stack: list[str] = [root_object_id]
+    page_size = 200
 
-    while True:
-        resp = _soap_browse_direct_children(control_url, service_type, container_object_id, start, step)
-        if resp is None:
-            break
+    while stack:
+        current_id = stack.pop()
+        start = 0
+        total = 1
 
-        children, total_matches = resp
-        if not children:
-            break
+        while start < total:
+            browse = _soap_browse_direct_children(
+                control_url,
+                service_type,
+                current_id,
+                start,
+                page_size,
+            )
+            if browse is None:
+                break
 
-        for elem in children:
-            if not isinstance(elem.tag, str):
-                continue
+            children, total_matches = browse
+            total = total_matches
 
-            if elem.tag.endswith("container"):
-                sub = _extract_container_title_and_id(elem)
-                if sub is None:
+            for elem in children:
+                if not isinstance(elem.tag, str):
                     continue
-                if _is_non_video_container_title(sub.title):
-                    continue
-                all_items.extend(_iter_video_items_recursive(device, sub.object_id))
 
-            elif elem.tag.endswith("item"):
+                if elem.tag.endswith("container"):
+                    c = _extract_container_title_and_id(elem)
+                    if c is None:
+                        continue
+                    if not _is_plex_server(device) and _is_non_video_container_title(c.title):
+                        continue
+                    if c.title in EXCLUDE_DLNA_LIBRARIES:
+                        continue
+                    stack.append(c.object_id)
+                    continue
+
+                if not elem.tag.endswith("item"):
+                    continue
+
                 if not _is_video_item(elem):
                     continue
+
                 item = _extract_video_item(elem)
                 if item is not None:
-                    all_items.append(item)
+                    results.append(item)
 
-        start += len(children)
-        if total_matches and start >= total_matches:
-            break
+            start += page_size
 
-        if len(children) < step:
-            break
-
-    return all_items
+    return results
 
 
 def _is_video_file(path: Path) -> bool:
-    return path.suffix.lower() in VIDEO_EXTENSIONS
+    return path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
 
 
-def _guess_title_year(path: Path) -> tuple[str, int | None]:
-    stem = path.stem
+def _guess_title_year(file_path: Path) -> tuple[str, int | None]:
+    stem = file_path.stem
     title = stem
     year: int | None = None
 
     if "(" in stem and ")" in stem:
-        before = stem.split("(", 1)[0]
-        inside = stem.split("(", 1)[1].split(")", 1)[0]
-        if inside.strip().isdigit():
-            year_int = int(inside.strip())
+        before, _, after = stem.partition("(")
+        maybe_year, _, _ = after.partition(")")
+        maybe_year = maybe_year.strip()
+        if len(maybe_year) == 4 and maybe_year.isdigit():
+            year_int = int(maybe_year)
             if 1900 <= year_int <= 2100:
                 return before.strip(), year_int
 
@@ -663,10 +717,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
 
         files = _iter_video_files(local_root)
         if not files:
-            _logger.info(
-                f"No se han encontrado ficheros de vídeo en {local_root}",
-                always=True,
-            )
+            _logger.info(f"No se han encontrado ficheros de vídeo en {local_root}", always=True)
             return
 
         _logger.info(
@@ -702,6 +753,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
 
             items = _iter_video_items_recursive(device, container.object_id)
             total_items += len(items)
+
             for item in items:
                 candidates.append(
                     (
@@ -714,10 +766,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                 )
 
         if not candidates:
-            _logger.info(
-                "[DLNA] No se han encontrado items de vídeo para analizar.",
-                always=True,
-            )
+            _logger.info("[DLNA] No se han encontrado items de vídeo para analizar.", always=True)
             return
 
         _logger.info(
@@ -733,10 +782,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
 
     for title, year, file_path_str, file_size, library in candidates:
 
-        def fetch_omdb(
-            title_for_fetch: str,
-            year_for_fetch: int | None,
-        ) -> dict[str, object]:
+        def fetch_omdb(title_for_fetch: str, year_for_fetch: int | None) -> dict[str, object]:
             record = get_movie_record(
                 title=title_for_fetch,
                 year=year_for_fetch,
