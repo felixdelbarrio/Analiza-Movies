@@ -9,7 +9,12 @@ import xml.etree.ElementTree as ET
 
 from backend import logger as _logger
 from backend.analyze_input_core import analyze_input_movie
-from backend.config import EXCLUDE_DLNA_LIBRARIES, METADATA_OUTPUT_PREFIX, OUTPUT_PREFIX
+from backend.config import (
+    EXCLUDE_DLNA_LIBRARIES,
+    METADATA_FIX_PATH,
+    REPORT_ALL_PATH,
+    REPORT_FILTERED_PATH,
+)
 from backend.decision_logic import sort_filtered_rows
 from backend.dlna_discovery import DLNADevice, discover_dlna_devices
 from backend.movie_input import MovieInput
@@ -111,9 +116,12 @@ def _soap_browse_direct_children(
         "</s:Envelope>"
     )
 
+    soap_action = f"\"{service_type}#Browse\""
     headers = {
         "Content-Type": 'text/xml; charset="utf-8"',
-        "SOAPAction": f'"{service_type}#Browse"',
+        # Compatibilidad: algunos servidores esperan SOAPAction, otros SOAPACTION.
+        "SOAPAction": soap_action,
+        "SOAPACTION": soap_action,
     }
 
     req = Request(control_url, data=body.encode("utf-8"), headers=headers, method="POST")
@@ -547,7 +555,12 @@ def _extract_video_item(elem: ET.Element) -> _DlnaVideoItem | None:
     if not title or not resource_url:
         return None
 
-    return _DlnaVideoItem(title=title, resource_url=resource_url, size_bytes=size_bytes, year=year)
+    return _DlnaVideoItem(
+        title=title,
+        resource_url=resource_url,
+        size_bytes=size_bytes,
+        year=year,
+    )
 
 
 def _iter_video_items_recursive(device: DLNADevice, root_object_id: str) -> list[_DlnaVideoItem]:
@@ -566,7 +579,13 @@ def _iter_video_items_recursive(device: DLNADevice, root_object_id: str) -> list
         total = 1
 
         while start < total:
-            browse = _soap_browse_direct_children(control_url, service_type, current_id, start, page_size)
+            browse = _soap_browse_direct_children(
+                control_url,
+                service_type,
+                current_id,
+                start,
+                page_size,
+            )
             if browse is None:
                 break
 
@@ -759,15 +778,17 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
     filtered_rows = [r for r in all_rows if r.get("decision") in {"DELETE", "MAYBE"}]
     filtered_rows = sort_filtered_rows(filtered_rows) if filtered_rows else []
 
-    all_path = f"{OUTPUT_PREFIX}_dlna_all.csv"
-    filtered_path = f"{OUTPUT_PREFIX}_dlna_filtered.csv"
-    suggestions_path = f"{METADATA_OUTPUT_PREFIX}_dlna.csv"
-
-    write_all_csv(all_path, all_rows)
-    write_filtered_csv(filtered_path, filtered_rows)
-    write_suggestions_csv(suggestions_path, suggestions_rows)
+    # ---------------------------------------------------
+    # Salidas CSV unificadas (siempre mismos nombres y en /reports)
+    # ---------------------------------------------------
+    write_all_csv(REPORT_ALL_PATH, all_rows)
+    write_filtered_csv(REPORT_FILTERED_PATH, filtered_rows)
+    write_suggestions_csv(METADATA_FIX_PATH, suggestions_rows)
 
     _logger.info(
-        f"[DLNA] Análisis completado. CSV completo: {all_path} | CSV filtrado: {filtered_path}",
+        (
+            f"[DLNA] Análisis completado. CSV completo: {REPORT_ALL_PATH} | "
+            f"CSV filtrado: {REPORT_FILTERED_PATH}"
+        ),
         always=True,
     )
