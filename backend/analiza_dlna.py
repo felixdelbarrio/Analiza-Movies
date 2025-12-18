@@ -1,34 +1,20 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
 from backend import logger as _logger
+from backend.analyze_input_core import analyze_input_movie
 from backend.config import EXCLUDE_DLNA_LIBRARIES, METADATA_OUTPUT_PREFIX, OUTPUT_PREFIX
 from backend.decision_logic import sort_filtered_rows
 from backend.dlna_discovery import DLNADevice, discover_dlna_devices
 from backend.movie_input import MovieInput
 from backend.reporting import write_all_csv, write_filtered_csv, write_suggestions_csv
 from backend.wiki_client import get_movie_record
-from backend.analyze_input_core import analyze_input_movie
-
-
-VIDEO_EXTENSIONS: set[str] = {
-    ".mp4",
-    ".mkv",
-    ".avi",
-    ".mov",
-    ".wmv",
-    ".flv",
-    ".mpg",
-    ".mpeg",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +227,41 @@ def _folder_browse_container_score(title: str) -> int:
     return 0
 
 
+def _is_plex_virtual_container_title(title: str) -> bool:
+    t = title.strip().lower()
+    if not t:
+        return True
+
+    # Heurística genérica Plex: “vistas/servicios” típicos, no carpetas físicas.
+    # No depende del usuario ni de la instalación.
+    plex_virtual_tokens = (
+        "video channels",
+        "channels",
+        "shared video",
+        "remote video",
+        "watch later",
+        "recommended",
+        "preferences",
+        "continue watching",
+        "recently viewed",
+        "recently added",
+        "recently released",
+        "by collection",
+        "by edition",
+        "by genre",
+        "by year",
+        "by decade",
+        "by director",
+        "by starring actor",
+        "by country",
+        "by content rating",
+        "by rating",
+        "by resolution",
+        "by first letter",
+    )
+    return any(tok in t for tok in plex_virtual_tokens)
+
+
 def _list_root_containers(device: DLNADevice) -> tuple[list[_DlnaContainer], tuple[str, str] | None]:
     endpoints = _find_content_directory_endpoints(device.location)
     if endpoints is None:
@@ -341,14 +362,17 @@ def _ask_dlna_device() -> DLNADevice | None:
             _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
         if not raw.isdigit():
-            _logger.warning("Opción no válida. Debe ser un número.", always=True)
+            _logger.warning("Opción no válida. Debe ser un número (o Enter para cancelar).", always=True)
             continue
         num = int(raw)
         if not (1 <= num <= len(devices)):
             _logger.warning("Opción fuera de rango.", always=True)
             continue
         chosen = devices[num - 1]
-        _logger.info(f"\nHas seleccionado: {chosen.friendly_name} ({chosen.host}:{chosen.port})\n", always=True)
+        _logger.info(
+            f"\nHas seleccionado: {chosen.friendly_name} ({chosen.host}:{chosen.port})\n",
+            always=True,
+        )
         return chosen
 
 
@@ -392,7 +416,6 @@ def _select_folders_non_plex(base: _DlnaContainer, device: DLNADevice) -> list[_
         if raw == "0":
             return [base]
 
-        # Opción 1: listar carpetas hijas del contenedor base
         folders = _list_child_containers(device, base.object_id)
         folders = [c for c in folders if c.title not in EXCLUDE_DLNA_LIBRARIES]
 
@@ -422,36 +445,54 @@ def _select_folders_non_plex(base: _DlnaContainer, device: DLNADevice) -> list[_
         return [folders[i - 1] for i in selected]
 
 
-def _navigate_subfolders_plex(start: _DlnaContainer, device: DLNADevice) -> _DlnaContainer | None:
-    current = start
+def _select_folders_plex(base: _DlnaContainer, device: DLNADevice) -> list[_DlnaContainer] | None:
+    _logger.info("\nOpciones Plex (Enter cancela):", always=True)
+    _logger.info("  0) Todas las carpetas de vídeo de Plex Media Server", always=True)
+    _logger.info("  1) Seleccionar qué carpetas analizar", always=True)
+
     while True:
-        children = _list_child_containers(device, current.object_id)
-        children = [c for c in children if c.title not in EXCLUDE_DLNA_LIBRARIES]
-
-        if not children:
-            return current
-
-        _logger.info("\nSubdirectorios disponibles:", always=True)
-        _logger.info("  0) Usar este directorio", always=True)
-        for idx, c in enumerate(children, start=1):
-            _logger.info(f"  {idx}) {c.title}", always=True)
-
-        raw = input(
-            f"Selecciona un subdirectorio (0-{len(children)}) o pulsa Enter para cancelar: "
-        ).strip()
+        raw = input("Selecciona una opción (0/1) o pulsa Enter para cancelar: ").strip()
         if raw == "":
             _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
-        if not raw.isdigit():
-            _logger.warning("Opción no válida. Debe ser un número.", always=True)
+        if raw not in ("0", "1"):
+            _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
             continue
-        val = int(raw)
-        if val == 0:
-            return current
-        if not (1 <= val <= len(children)):
-            _logger.warning("Opción fuera de rango.", always=True)
+
+        if raw == "0":
+            return [base]
+
+        folders = _list_child_containers(device, base.object_id)
+        folders = [c for c in folders if c.title not in EXCLUDE_DLNA_LIBRARIES]
+        folders = [c for c in folders if not _is_plex_virtual_container_title(c.title)]
+
+        if not folders:
+            _logger.error(
+                "[DLNA] No se han encontrado carpetas Plex seleccionables (tras filtrar vistas/servicios).",
+                always=True,
+            )
+            return None
+
+        _logger.info("\nCarpetas detectadas en Plex (Enter cancela):", always=True)
+        for idx, c in enumerate(folders, start=1):
+            _logger.info(f"  {idx}) {c.title}", always=True)
+
+        raw_sel = input(
+            "Selecciona carpetas separadas por comas (ej: 1,2) o pulsa Enter para cancelar: "
+        ).strip()
+        if raw_sel == "":
+            _logger.info("[DLNA] Operación cancelada.", always=True)
+            return None
+
+        selected = _parse_multi_selection(raw_sel, len(folders))
+        if selected is None:
+            _logger.warning(
+                f"Selección no válida. Usa números 1-{len(folders)} separados por comas (ej: 1,2).",
+                always=True,
+            )
             continue
-        current = children[val - 1]
+
+        return [folders[i - 1] for i in selected]
 
 
 def _is_video_item(elem: ET.Element) -> bool:
@@ -557,38 +598,12 @@ def _iter_video_items_recursive(device: DLNADevice, root_object_id: str) -> list
     return results
 
 
-def _ask_root_directory() -> Path:
-    while True:
-        raw = input("Ruta del directorio raíz a analizar (local) o pulsa Enter para cancelar: ").strip()
-        if raw == "":
-            raise KeyboardInterrupt
-
-        path = Path(raw).expanduser().resolve()
-        if not path.exists() or not path.is_dir():
-            _logger.error(f"La ruta {path} no existe o no es un directorio.", always=True)
-            continue
-        return path
-
-
-def _iter_video_files(root: Path) -> list[Path]:
-    out: list[Path] = []
-    for dirpath, _, filenames in os.walk(root):
-        base = Path(dirpath)
-        for name in filenames:
-            p = base / name
-            if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS:
-                out.append(p)
-    return out
-
-
 def analyze_dlna_server(device: DLNADevice | None = None) -> None:
-    # Si no nos pasan device, asumimos modo DLNA guiado.
     if device is None:
         device = _ask_dlna_device()
         if device is None:
             return
 
-    # Elegir root de vídeo
     roots = _list_video_root_containers(device)
     if not roots:
         _logger.error("[DLNA] No se han encontrado contenedores raíz de vídeo.", always=True)
@@ -598,7 +613,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
     if len(roots) == 1:
         chosen_root = roots[0]
     else:
-        _logger.info("\nDirectorios raíz de vídeo:", always=True)
+        _logger.info("\nDirectorios raíz de vídeo (Enter cancela):", always=True)
         for idx, c in enumerate(roots, start=1):
             _logger.info(f"  {idx}) {c.title}", always=True)
 
@@ -619,30 +634,23 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
             chosen_root = roots[n - 1]
             break
 
-    # Auto-bajar a "Browse folders / Carpetas / By Folder" si existe
     base = _auto_descend_folder_browse(device, chosen_root)
 
-    # Selección guiada:
-    # - Plex: navegación normal
-    # - No-Plex (FATM-PI): menú 0/1 y multi-selección
     selected_containers: list[_DlnaContainer] | None
     if _is_plex_server(device):
-        leaf = _navigate_subfolders_plex(base, device)
-        if leaf is None:
-            return
-        selected_containers = [leaf]
+        selected_containers = _select_folders_plex(base, device)
     else:
         selected_containers = _select_folders_non_plex(base, device)
 
     if selected_containers is None:
         return
 
-    # Construir candidatos
     candidates: list[tuple[str, int | None, str, int | None, str]] = []
     for container in selected_containers:
         if container.title in EXCLUDE_DLNA_LIBRARIES:
             _logger.info(f"[DLNA] Omitiendo '{container.title}' por EXCLUDE_DLNA_LIBRARIES.", always=True)
             continue
+
         items = _iter_video_items_recursive(device, container.object_id)
         for it in items:
             candidates.append((it.title, it.year, it.resource_url, it.size_bytes, container.title))
