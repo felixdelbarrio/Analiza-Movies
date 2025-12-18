@@ -5,10 +5,8 @@ from collections.abc import Mapping
 
 from backend import logger as _logger
 from backend.analyze_input_core import AnalysisRow, analyze_input_movie
-from backend.decision_logic import detect_misidentified
 from backend.metadata_fix import generate_metadata_suggestions_row
 from backend.movie_input import MovieInput
-from backend.scoring import decide_action
 from backend.wiki_client import get_movie_record
 
 
@@ -57,6 +55,11 @@ def analyze_movie(
         1) Datos nativos de Plex (si existen) prevalecen en título/año, ids y rating.
         2) OMDb (Metascore, Poster, Website, imdbID).
         3) Wiki/Wikidata (fallback de metacritic_score y ids).
+
+    Importante:
+    - `misidentified_hint` se calcula UNA sola vez en `analyze_input_movie`,
+      usando `plex_title/plex_year` (precedencia Plex cuando aplica).
+      Aquí no se recalcula ni se sobrescribe.
     """
     logs: list[str] = []
 
@@ -71,6 +74,7 @@ def analyze_movie(
         if isinstance(display_title_raw, str) and display_title_raw.strip()
         else movie_input.title
     )
+
     display_year: int | None
     if isinstance(display_year_raw, int):
         display_year = display_year_raw
@@ -87,15 +91,17 @@ def analyze_movie(
     omdb_cache: dict[_OmdbCacheKey, dict[str, object]] = {}
     wiki_cache: dict[_OmdbCacheKey, dict[str, object]] = {}
 
+    def _norm_imdb_hint() -> str | None:
+        hint = movie_input.imdb_id_hint
+        if isinstance(hint, str):
+            h = hint.strip()
+            return h or None
+        return None
+
     def fetch_omdb(title_for_fetch: str, year_for_fetch: int | None) -> Mapping[str, object]:
         nonlocal omdb_data, wiki_meta
 
-        imdb_hint: str | None
-        if isinstance(movie_input.imdb_id_hint, str) and movie_input.imdb_id_hint.strip():
-            imdb_hint = movie_input.imdb_id_hint.strip()
-        else:
-            imdb_hint = None
-
+        imdb_hint = _norm_imdb_hint()
         key: _OmdbCacheKey = (title_for_fetch, year_for_fetch, imdb_hint)
 
         cached = omdb_cache.get(key)
@@ -146,7 +152,7 @@ def analyze_movie(
         plex_rating = _safe_float(plex_user_rating) or _safe_float(plex_rating_raw)
 
     # ------------------------------------------------------------------
-    # 4) Core genérico: ratings + decisión + hint misidentified (base)
+    # 4) Core genérico: ratings + decisión + misidentified_hint (único)
     # ------------------------------------------------------------------
     try:
         base_row: AnalysisRow = analyze_input_movie(
@@ -173,32 +179,17 @@ def analyze_movie(
         )
         return None, None, logs
 
-    imdb_rating = base_row.get("imdb_rating")
-    imdb_votes = base_row.get("imdb_votes")
-    rt_score = base_row.get("rt_score")
-
-    # ------------------------------------------------------------------
-    # 5) Misidentificación (con título/año de Plex si están)
-    # ------------------------------------------------------------------
-    omdb_dict: dict[str, object] = dict(omdb_data) if omdb_data else {}
-    misidentified_hint = detect_misidentified(
-        plex_title=display_title,
-        plex_year=display_year,
-        omdb_data=omdb_dict or None,
-        imdb_rating=imdb_rating,
-        imdb_votes=imdb_votes,
-        rt_score=rt_score,
-    )
-
-    if misidentified_hint:
+    misidentified_hint = base_row.get("misidentified_hint")
+    if isinstance(misidentified_hint, str) and misidentified_hint:
         logs.append(
             f"[MISIDENTIFIED] {movie_input.library} / {display_title} ({display_year}): "
             f"{misidentified_hint}"
         )
 
     # ------------------------------------------------------------------
-    # 6) Sugerencias de metadata (solo Plex)
+    # 5) Sugerencias de metadata (solo Plex)
     # ------------------------------------------------------------------
+    omdb_dict: dict[str, object] = dict(omdb_data) if omdb_data else {}
     meta_sugg: dict[str, object] | None = None
     if movie_input.source == "plex" and source_movie is not None:
         try:
@@ -219,7 +210,7 @@ def analyze_movie(
             )
 
     # ------------------------------------------------------------------
-    # 7) Enriquecimiento estándar para reporting
+    # 6) Enriquecimiento estándar para reporting
     # ------------------------------------------------------------------
     poster_url: str | None = None
     trailer_url: str | None = None
@@ -236,8 +227,9 @@ def analyze_movie(
         if isinstance(imdb_id_raw, str):
             imdb_id = imdb_id_raw
 
-    if imdb_id is None and isinstance(movie_input.imdb_id_hint, str):
-        imdb_id = movie_input.imdb_id_hint
+    imdb_hint = _norm_imdb_hint()
+    if imdb_id is None and imdb_hint is not None:
+        imdb_id = imdb_hint
 
     if omdb_dict:
         try:
@@ -246,7 +238,7 @@ def analyze_movie(
             omdb_json_str = str(omdb_dict)
 
     # ------------------------------------------------------------------
-    # 8) Construcción fila final (Plex prevalece en campos nativos)
+    # 7) Construcción fila final (Plex prevalece en campos nativos)
     # ------------------------------------------------------------------
     row: dict[str, object] = dict(base_row)
 
@@ -278,7 +270,6 @@ def analyze_movie(
     row["wikidata_id"] = wiki_meta.get("wikidata_id")
     row["wikipedia_title"] = wiki_meta.get("wikipedia_title")
 
-    # Sobrescribir misidentified final (usando display_title/year)
-    row["misidentified_hint"] = misidentified_hint
+    # Importante: NO se recalcula ni se sobrescribe misidentified_hint aquí.
 
     return row, meta_sugg, logs
