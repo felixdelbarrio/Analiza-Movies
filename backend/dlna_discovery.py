@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
 import socket
 import time
+from typing import Dict, List, Tuple
 from urllib.parse import urlparse
 from urllib.request import urlopen
 import xml.etree.ElementTree as ET
@@ -55,42 +55,74 @@ def _parse_ssdp_response(data: bytes) -> Dict[str, str]:
     return headers
 
 
-def _fetch_friendly_name(location: str) -> str:
+def _fetch_device_description_root(location: str) -> ET.Element | None:
     """
-    Descarga la descripción del dispositivo UPnP (XML) desde LOCATION y
-    extrae el <friendlyName>. Si falla, devuelve la LOCATION como fallback.
+    Descarga la descripción del dispositivo UPnP (XML) desde LOCATION.
+    Devuelve el root del XML si se puede descargar/parsear; si no, None.
     """
     try:
         with urlopen(location, timeout=3) as resp:
             xml_data = resp.read()
     except Exception as exc:  # pragma: no cover (errores de red reales)
         _logger.warning(f"[DLNA] No se pudo descargar LOCATION {location}: {exc}")
-        return location
+        return None
 
     try:
-        root = ET.fromstring(xml_data)
-        # El friendlyName típico está en device/friendlyName
-        # namespace libre o con ns; probamos ambas cosas de forma simple
-        # Sin namespaces:
-        for dev in root.iter("device"):
-            fn = dev.findtext("friendlyName")
-            if fn:
-                return fn.strip()
-
-        # Con posibles namespaces (heurística mínima)
-        for elem in root.iter():
-            if elem.tag.endswith("device"):
-                fn = None
-                for child in elem:
-                    if isinstance(child.tag, str) and child.tag.endswith("friendlyName"):
-                        fn = child.text
-                        break
-                if fn:
-                    return fn.strip()
+        return ET.fromstring(xml_data)
     except Exception as exc:  # pragma: no cover
         _logger.warning(f"[DLNA] Error parseando XML de {location}: {exc}")
+        return None
 
-    return location
+
+def _extract_friendly_name(root: ET.Element) -> str | None:
+    """
+    Extrae <friendlyName> del device description.
+    """
+    # Sin namespaces:
+    for dev in root.iter("device"):
+        fn = dev.findtext("friendlyName")
+        if fn:
+            return fn.strip()
+
+    # Con posibles namespaces (heurística mínima)
+    for elem in root.iter():
+        if not (isinstance(elem.tag, str) and elem.tag.endswith("device")):
+            continue
+        for child in elem:
+            if isinstance(child.tag, str) and child.tag.endswith("friendlyName") and child.text:
+                return child.text.strip()
+
+    return None
+
+
+def _is_dlna_media_server(root: ET.Element) -> bool:
+    """
+    Valida si el device description corresponde a un DLNA/UPnP MediaServer.
+
+    Criterio:
+      - deviceType contiene "MediaServer"
+        O
+      - presence de serviceType contiene "ContentDirectory"
+    """
+    # 1) deviceType
+    for elem in root.iter():
+        if not (isinstance(elem.tag, str) and elem.tag.endswith("deviceType")):
+            continue
+        if not elem.text:
+            continue
+        if "MediaServer" in elem.text.strip():
+            return True
+
+    # 2) ContentDirectory service
+    for elem in root.iter():
+        if not (isinstance(elem.tag, str) and elem.tag.endswith("serviceType")):
+            continue
+        if not elem.text:
+            continue
+        if "ContentDirectory" in elem.text.strip():
+            return True
+
+    return False
 
 
 def discover_dlna_devices(
@@ -107,8 +139,10 @@ def discover_dlna_devices(
       - host
       - port
 
-    Si no se encuentra ningún dispositivo con el ST indicado y éste no es
-    "ssdp:all", se hace un reintento automático con ST="ssdp:all".
+    Nota importante:
+      SSDP/UPnP devuelve *muchos* dispositivos que no son servidores de medios
+      (p.ej. routers IGD). Para evitar falsos positivos, filtramos confirmando
+      que el device description sea MediaServer o exponga ContentDirectory.
     """
     msg = (
         "M-SEARCH * HTTP/1.1\r\n"
@@ -135,8 +169,8 @@ def discover_dlna_devices(
                 break
 
             try:
-                sock.settimeout(remaining)
-                data, addr = sock.recvfrom(65535)
+                sock.settimeout(max(0.1, remaining))
+                data, addr = sock.recvfrom(65507)
             except socket.timeout:
                 break
             except Exception:  # pragma: no cover
@@ -155,7 +189,17 @@ def discover_dlna_devices(
             host = parsed.hostname or addr[0]
             port = parsed.port or 80
 
-            friendly = _fetch_friendly_name(loc)
+            root = _fetch_device_description_root(loc)
+            if root is None:
+                _logger.info(f"[DLNA] Ignorando dispositivo sin device description válido: {loc}")
+                continue
+
+            if not _is_dlna_media_server(root):
+                _logger.info(f"[DLNA] Ignorando dispositivo no MediaServer: {loc}")
+                continue
+
+            friendly = _extract_friendly_name(root) or loc
+
             locations[loc] = DLNADevice(
                 friendly_name=friendly,
                 location=loc,
