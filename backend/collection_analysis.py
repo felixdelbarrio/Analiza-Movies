@@ -78,28 +78,55 @@ def analyze_movie(
         display_year = movie_input.year
 
     # ------------------------------------------------------------------
-    # 1) Fetch OMDb/Wiki (unificado)
+    # 1) Fetch OMDb/Wiki (unificado) + caché local por iteración
     # ------------------------------------------------------------------
     omdb_data: Mapping[str, object] | None = None
     wiki_meta: dict[str, object] = {}
 
+    _OmdbCacheKey = tuple[str, int | None, str | None]
+    omdb_cache: dict[_OmdbCacheKey, dict[str, object]] = {}
+    wiki_cache: dict[_OmdbCacheKey, dict[str, object]] = {}
+
     def fetch_omdb(title_for_fetch: str, year_for_fetch: int | None) -> Mapping[str, object]:
         nonlocal omdb_data, wiki_meta
+
+        imdb_hint: str | None
+        if isinstance(movie_input.imdb_id_hint, str) and movie_input.imdb_id_hint.strip():
+            imdb_hint = movie_input.imdb_id_hint.strip()
+        else:
+            imdb_hint = None
+
+        key: _OmdbCacheKey = (title_for_fetch, year_for_fetch, imdb_hint)
+
+        cached = omdb_cache.get(key)
+        if cached is not None:
+            omdb_data = cached
+            wiki_meta = wiki_cache.get(key, {})
+            return cached
 
         record = get_movie_record(
             title=title_for_fetch,
             year=year_for_fetch,
-            imdb_id_hint=movie_input.imdb_id_hint,
+            imdb_id_hint=imdb_hint,
         )
 
         if record is None:
-            omdb_data = {}
+            empty: dict[str, object] = {}
+            omdb_cache[key] = empty
+            wiki_cache[key] = {}
+            omdb_data = empty
             wiki_meta = {}
-            return {}
+            return empty
 
-        omdb_data = dict(record) if isinstance(record, Mapping) else {}
-        wiki_meta = _extract_wiki_meta(omdb_data)
-        return omdb_data
+        omdb_dict = dict(record) if isinstance(record, Mapping) else {}
+        wiki_dict = _extract_wiki_meta(omdb_dict)
+
+        omdb_cache[key] = omdb_dict
+        wiki_cache[key] = wiki_dict
+
+        omdb_data = omdb_dict
+        wiki_meta = wiki_dict
+        return omdb_dict
 
     # ------------------------------------------------------------------
     # 2) Metacritic final (OMDb -> Wiki)
