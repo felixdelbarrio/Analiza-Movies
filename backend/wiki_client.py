@@ -31,8 +31,12 @@ class WikiMeta(TypedDict, total=False):
     imdb_id: str | None
 
 
+class _AliasRecord(TypedDict):
+    __alias: str
+
+
 WikiRecord = dict[str, object]
-WikiCache = dict[str, WikiRecord]
+WikiCache = dict[str, object]
 
 
 # --------------------------------------------------------------------
@@ -54,10 +58,6 @@ _CURRENT_PROGRESS: dict[str, object | None] = {
 
 
 def set_wiki_progress(idx: int, total: int, library_title: str, movie_title: str) -> None:
-    """
-    Se llama desde analiza_plex para que los logs de wiki_client sepan
-    en qué punto del análisis estamos y puedan prefijar (x/total).
-    """
     _CURRENT_PROGRESS["idx"] = idx
     _CURRENT_PROGRESS["total"] = total
     _CURRENT_PROGRESS["library"] = library_title
@@ -82,9 +82,6 @@ def _progress_prefix() -> str:
 
 
 def _log_wiki(msg: str) -> None:
-    """
-    Log interno de wiki_client controlado por SILENT_MODE.
-    """
     prefix = _progress_prefix()
     text = f"{prefix}{msg}"
     try:
@@ -101,7 +98,6 @@ _SESSION: requests.Session | None = None
 
 
 def _get_session() -> requests.Session:
-    """Return a cached requests.Session configured with retries/backoff."""
     global _SESSION
     if _SESSION is not None:
         return _SESSION
@@ -133,10 +129,7 @@ def _load_wiki_cache() -> None:
         try:
             with WIKI_CACHE_PATH.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, dict):
-                _wiki_cache = {str(k): v for k, v in data.items()}
-            else:
-                _wiki_cache = {}
+            _wiki_cache = dict(data) if isinstance(data, dict) else {}
             _log_wiki(f"[WIKI] wiki_cache cargada ({len(_wiki_cache)} entradas)")
         except Exception as exc:
             _logger.warning(f"[WIKI] Error cargando wiki_cache.json: {exc}")
@@ -151,6 +144,7 @@ def _load_wiki_cache() -> None:
         _wiki_cache = {}
 
     _wiki_cache_loaded = True
+    _upgrade_wiki_cache_to_alias_format()
 
 
 def _save_wiki_cache() -> None:
@@ -174,6 +168,143 @@ def _save_wiki_cache() -> None:
 
 def _normalize_title(title: str) -> str:
     return " ".join((title or "").strip().lower().split())
+
+
+def _safe_str(value: object) -> str | None:
+    if isinstance(value, str):
+        v = value.strip()
+        return v or None
+    return None
+
+
+def _ratings_fields() -> tuple[str, ...]:
+    return ("imdbRating", "imdbVotes", "Ratings", "Metascore")
+
+
+def _is_meaningful_omdb_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip().upper() == "N/A":
+        return False
+    if isinstance(value, str) and not value.strip():
+        return False
+    return True
+
+
+def _extract_wiki_part(record: WikiRecord | None) -> dict[str, object]:
+    if not record:
+        return {}
+    w = record.get("__wiki")
+    return dict(w) if isinstance(w, dict) else {}
+
+
+def _extract_imdb_from_record(record: WikiRecord) -> str | None:
+    imdb_obj = record.get("imdbID")
+    imdb = _safe_str(imdb_obj)
+    if imdb:
+        return imdb
+
+    w = record.get("__wiki")
+    if isinstance(w, dict):
+        imdb2 = _safe_str(w.get("imdb_id"))
+        if imdb2:
+            return imdb2
+    return None
+
+
+def _make_imdb_key(imdb_id: str) -> str:
+    return f"imdb:{imdb_id.strip().lower()}"
+
+
+def _is_alias_record(obj: object) -> bool:
+    return isinstance(obj, dict) and isinstance(obj.get("__alias"), str)
+
+
+def _resolve_cache_record(key: str, *, max_depth: int = 10) -> WikiRecord | None:
+    current_key = key
+    seen: set[str] = set()
+
+    for _ in range(max_depth):
+        if current_key in seen:
+            return None
+        seen.add(current_key)
+
+        raw = _wiki_cache.get(current_key)
+        if raw is None:
+            return None
+        if _is_alias_record(raw):
+            target = raw.get("__alias")
+            if not isinstance(target, str) or not target.strip():
+                return None
+            current_key = target
+            continue
+        return dict(raw) if isinstance(raw, dict) else None
+
+    return None
+
+
+def _set_alias(alias_key: str, target_key: str) -> None:
+    _wiki_cache[alias_key] = _AliasRecord(__alias=target_key)
+
+
+def _upgrade_wiki_cache_to_alias_format() -> None:
+    """
+    Migra en memoria:
+      - Si existe un title:* con record completo que tiene imdbID → convertir a alias
+        y asegurar canon imdb:*.
+      - Si existe un imdb:* → siempre se considera canónico.
+    """
+    changed = False
+
+    for key, value in list(_wiki_cache.items()):
+        if not isinstance(key, str):
+            continue
+        if not key.startswith("title:"):
+            continue
+        if not isinstance(value, dict):
+            continue
+        if _is_alias_record(value):
+            continue
+
+        imdb_id = _extract_imdb_from_record(value)
+        if not imdb_id:
+            continue
+
+        canon_key = _make_imdb_key(imdb_id)
+        canon_obj = _wiki_cache.get(canon_key)
+
+        if canon_obj is None or _is_alias_record(canon_obj):
+            _wiki_cache[canon_key] = dict(value)
+            changed = True
+
+        _set_alias(key, canon_key)
+        changed = True
+
+    if changed:
+        _save_wiki_cache()
+        _log_wiki("[WIKI] wiki_cache migrada a formato alias (imdb único).")
+
+
+def _apply_ratings_from_omdb_cache(record: WikiRecord, imdb_id: str) -> bool:
+    cached_obj = omdb_cache.get(imdb_id)
+    cached = cached_obj if isinstance(cached_obj, dict) else None
+    if cached is None:
+        return False
+
+    changed = False
+    for k in _ratings_fields():
+        if k not in cached:
+            continue
+        val = cached.get(k)
+        if not _is_meaningful_omdb_value(val):
+            continue
+
+        cur = record.get(k)
+        if cur != val:
+            record[k] = val
+            changed = True
+
+    return changed
 
 
 # --------------------------------------------------------------------
@@ -211,10 +342,6 @@ def _wikidata_get_entity(wikidata_id: str) -> dict[str, object] | None:
 
 
 def _wikidata_search_by_imdb(imdb_id: str) -> tuple[str, dict[str, object]] | None:
-    """
-    Busca en Wikidata por propiedad P345 (IMDb ID).
-    Devuelve (wikidata_id, entity) o None.
-    """
     query = f"""
     SELECT ?item WHERE {{
       ?item wdt:P345 "{imdb_id}" .
@@ -260,10 +387,6 @@ def _wikidata_search_by_title(
     year: int | None,
     language: str = "en",
 ) -> tuple[str, dict[str, object]] | None:
-    """
-    Busca una película por título (y opcionalmente año) usando wbsearchentities.
-    Filtra por tipo 'film' y comprueba fecha aproximada de publicación.
-    """
     try:
         session = _get_session()
         resp = session.get(
@@ -300,7 +423,6 @@ def _wikidata_search_by_title(
             if not isinstance(claims, dict):
                 continue
 
-            # P31 = instance of → film / animated film
             if "P31" in claims:
                 ok_type = False
                 for inst in claims["P31"]:
@@ -312,15 +434,14 @@ def _wikidata_search_by_title(
                         .get("value", {})
                     )
                     if isinstance(val, dict) and val.get("id") in {
-                        "Q11424",  # film
-                        "Q24869",  # animated film
+                        "Q11424",
+                        "Q24869",
                     }:
                         ok_type = True
                         break
                 if not ok_type:
                     continue
 
-            # P577 = publication date
             if year is not None and "P577" in claims:
                 try:
                     first_p577 = claims["P577"][0]
@@ -380,53 +501,6 @@ def _extract_wikipedia_title(entity: dict[str, object], language: str) -> str | 
     return None
 
 
-def _safe_str(value: object) -> str | None:
-    if isinstance(value, str):
-        v = value.strip()
-        return v or None
-    return None
-
-
-def _ratings_fields() -> tuple[str, ...]:
-    return ("imdbRating", "imdbVotes", "Ratings", "Metascore")
-
-
-def _is_meaningful_omdb_value(value: object) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str) and value.strip().upper() == "N/A":
-        return False
-    if isinstance(value, str) and not value.strip():
-        return False
-    return True
-
-
-def _apply_ratings_from_omdb_cache(record: WikiRecord, imdb_id: str) -> bool:
-    """
-    Aplica (solo) campos de ratings desde omdb_cache al record maestro.
-    Devuelve True si ha cambiado algo.
-    """
-    cached_obj = omdb_cache.get(imdb_id)
-    cached = cached_obj if isinstance(cached_obj, dict) else None
-    if cached is None:
-        return False
-
-    changed = False
-    for k in _ratings_fields():
-        if k not in cached:
-            continue
-        val = cached.get(k)
-        if not _is_meaningful_omdb_value(val):
-            continue
-
-        cur = record.get(k)
-        if cur != val:
-            record[k] = val
-            changed = True
-
-    return changed
-
-
 def _wiki_meta_from_entity(
     *,
     wikidata_id: str | None,
@@ -446,38 +520,12 @@ def _wiki_meta_from_entity(
     }
 
 
-def _extract_wiki_part(record: WikiRecord | None) -> dict[str, object]:
-    if not record:
-        return {}
-    w = record.get("__wiki")
-    return dict(w) if isinstance(w, dict) else {}
-
-
-def _extract_imdb_from_record(record: WikiRecord) -> str | None:
-    imdb_obj = record.get("imdbID")
-    imdb = _safe_str(imdb_obj)
-    if imdb:
-        return imdb
-
-    w = record.get("__wiki")
-    if isinstance(w, dict):
-        imdb2 = _safe_str(w.get("imdb_id"))
-        if imdb2:
-            return imdb2
-    return None
-
-
 def _try_resolve_imdb_from_wiki_cache_by_title(norm_title: str) -> str | None:
-    """
-    Intenta resolver imdbID buscando en wiki_cache.json por título normalizado,
-    ignorando el año. Solo devuelve un imdbID si existe exactamente 1 posible
-    (si hay 0 o >1, devuelve None).
-    """
     if not norm_title:
         return None
 
     imdb_ids: set[str] = set()
-    for key, record in _wiki_cache.items():
+    for key in list(_wiki_cache.keys()):
         if not isinstance(key, str):
             continue
         if not key.startswith("title:"):
@@ -491,14 +539,14 @@ def _try_resolve_imdb_from_wiki_cache_by_title(norm_title: str) -> str | None:
         if key_norm_title != norm_title:
             continue
 
-        if not isinstance(record, dict):
+        resolved = _resolve_cache_record(key)
+        if resolved is None:
             continue
 
-        imdb = _extract_imdb_from_record(record)
+        imdb = _extract_imdb_from_record(resolved)
         imdb_norm = imdb.lower() if isinstance(imdb, str) and imdb.strip() else None
         if imdb_norm:
             imdb_ids.add(imdb_norm)
-
         if len(imdb_ids) > 1:
             return None
 
@@ -518,21 +566,12 @@ def get_movie_record(
     imdb_id_hint: str | None = None,
     language: str = "en",
 ) -> WikiRecord | None:
-    """
-    Devuelve un registro "tipo OMDb" enriquecido con metadata de Wikipedia/Wikidata,
-    usando wiki_cache.json como master.
-    """
     _load_wiki_cache()
 
     norm_title = _normalize_title(title)
     imdb_norm = _safe_str(imdb_id_hint)
     imdb_norm_l = imdb_norm.lower() if imdb_norm else None
 
-    # ----------------------------------------------------------------
-    # (DLNA/UPnP mejora acordada)
-    # Si no tenemos imdb_id_hint, intentar resolver desde wiki_cache por nombre
-    # SOLO si hay exactamente 1 imdbID posible para ese título.
-    # ----------------------------------------------------------------
     if imdb_norm_l is None:
         resolved = _try_resolve_imdb_from_wiki_cache_by_title(norm_title)
         if resolved is not None:
@@ -542,9 +581,8 @@ def get_movie_record(
                 f"norm='{norm_title}' → imdbID={imdb_norm_l}"
             )
 
-    imdb_key = f"imdb:{imdb_norm_l}" if imdb_norm_l else None
+    imdb_key = _make_imdb_key(imdb_norm_l) if imdb_norm_l else None
     title_key = f"title:{year}:{norm_title}"
-
     base_cache_key = imdb_key if imdb_key else title_key
 
     _log_wiki(
@@ -552,19 +590,15 @@ def get_movie_record(
         f"→ base_cache_key='{base_cache_key}'"
     )
 
-    # ----------------------------------------------------------------
-    # 0) HIT en wiki_cache (reglas: si hay imdb_id, se mira por imdb key)
-    # ----------------------------------------------------------------
     cached: WikiRecord | None = None
     if imdb_key:
-        cached = _wiki_cache.get(imdb_key)
+        cached = _resolve_cache_record(imdb_key)
     else:
-        cached = _wiki_cache.get(title_key)
+        cached = _resolve_cache_record(title_key)
 
     if cached is not None:
         _log_wiki(f"[WIKI] cache HIT para {imdb_key or title_key}")
 
-        # Refresco opcional de ratings
         if OMDB_RETRY_EMPTY_CACHE and is_omdb_data_empty_for_ratings(cached):
             imdb_cached = _extract_imdb_from_record(cached)
             if imdb_cached:
@@ -577,17 +611,18 @@ def get_movie_record(
                     merged: WikiRecord = dict(cached)
                     merged.update(refreshed)
 
-                    # Conservar __wiki del master
                     wiki_part = cached.get("__wiki")
                     if isinstance(wiki_part, dict):
                         merged["__wiki"] = wiki_part
 
-                    _wiki_cache[imdb_key or title_key] = merged
-                    if imdb_cached and not imdb_key:
-                        _wiki_cache[f"imdb:{imdb_cached.lower()}"] = merged
+                    canon_key = _make_imdb_key(imdb_cached)
+                    _wiki_cache[canon_key] = merged
+                    _set_alias(title_key, canon_key)
+                    if imdb_key:
+                        _set_alias(imdb_key, canon_key)
                     _save_wiki_cache()
                     _log_wiki(
-                        f"[WIKI] wiki_cache actualizada con datos OMDb para {imdb_key or title_key}"
+                        f"[WIKI] wiki_cache actualizada con datos OMDb para {canon_key} (alias por título)."
                     )
                     return merged
 
@@ -595,16 +630,12 @@ def get_movie_record(
 
     _log_wiki(f"[WIKI] cache MISS para {base_cache_key}, resolviendo...")
 
-    # ----------------------------------------------------------------
-    # 1) Resolver Wikidata / imdb_id_final según reglas
-    # ----------------------------------------------------------------
     wikidata_id: str | None = None
     entity: dict[str, object] | None = None
     imdb_id_from_wiki: str | None = None
     source_lang: str = language
 
     if imdb_norm_l:
-        # (2.a.a) Wikidata por imdb_id
         result = _wikidata_search_by_imdb(imdb_norm_l)
         if result is not None:
             wikidata_id, entity = result
@@ -614,13 +645,12 @@ def get_movie_record(
                 f"wikidata_id={wikidata_id}, imdb_id_wiki={imdb_id_from_wiki}"
             )
 
-        # (2.a.b) Si falla por imdb_id, reintento por title/year
         if entity is None:
             for lang in (language, "es"):
-                result = _wikidata_search_by_title(title, year, language=lang)
-                if result is None:
+                result2 = _wikidata_search_by_title(title, year, language=lang)
+                if result2 is None:
                     continue
-                wikidata_id, entity = result
+                wikidata_id, entity = result2
                 imdb_id_from_wiki = _extract_imdb_id_from_entity(entity)
                 source_lang = lang
                 _log_wiki(
@@ -629,12 +659,11 @@ def get_movie_record(
                 )
                 break
     else:
-        # (2.b.a) Wikidata por title/year
         for lang in (language, "es"):
-            result = _wikidata_search_by_title(title, year, language=lang)
-            if result is None:
+            result3 = _wikidata_search_by_title(title, year, language=lang)
+            if result3 is None:
                 continue
-            wikidata_id, entity = result
+            wikidata_id, entity = result3
             imdb_id_from_wiki = _extract_imdb_id_from_entity(entity)
             source_lang = lang
             _log_wiki(
@@ -643,45 +672,23 @@ def get_movie_record(
             )
             break
 
-    imdb_id_final = imdb_id_from_wiki or imdb_norm_l
+    imdb_id_final = (imdb_id_from_wiki or imdb_norm_l) if (imdb_id_from_wiki or imdb_norm_l) else None
 
-    # ----------------------------------------------------------------
-    # 1.b) Si tenemos imdb_id_final, reintentar HIT por imdb en wiki_cache
-    # ----------------------------------------------------------------
     if imdb_id_final:
-        imdb_key_final = f"imdb:{imdb_id_final.lower()}"
-        cached2 = _wiki_cache.get(imdb_key_final)
+        canon_key = _make_imdb_key(imdb_id_final)
+        cached2 = _resolve_cache_record(canon_key)
         if cached2 is not None:
-            _log_wiki(f"[WIKI] cache HIT (post-resolve) para {imdb_key_final}")
-
-            # Mantener alias por título si aplica (sin cambiar formato aquí)
-            _wiki_cache[title_key] = cached2
+            _log_wiki(f"[WIKI] cache HIT (post-resolve) para {canon_key}")
+            _set_alias(title_key, canon_key)
+            if imdb_key:
+                _set_alias(imdb_key, canon_key)
             _save_wiki_cache()
-
-            # Refresco opcional de ratings
-            if OMDB_RETRY_EMPTY_CACHE and is_omdb_data_empty_for_ratings(cached2):
-                refreshed = search_omdb_by_imdb_id(imdb_id_final)
-                if isinstance(refreshed, dict) and refreshed.get("Response") == "True":
-                    merged2: WikiRecord = dict(cached2)
-                    merged2.update(refreshed)
-                    wiki_part2 = cached2.get("__wiki")
-                    if isinstance(wiki_part2, dict):
-                        merged2["__wiki"] = wiki_part2
-                    _wiki_cache[imdb_key_final] = merged2
-                    _wiki_cache[title_key] = merged2
-                    _save_wiki_cache()
-                    return merged2
-
             return cached2
 
-    # ----------------------------------------------------------------
-    # 2) Resolver OMDb con mínimo de duplicidad
-    # ----------------------------------------------------------------
     omdb_data: dict[str, object] | None = None
     omdb_called_by_title = False
 
     if imdb_id_final is None:
-        # (2.b.b) si Wikidata no devolvió imdb_id → OMDb por title/year
         omdb_called_by_title = True
         omdb_data = search_omdb_with_candidates(title, year)
         if isinstance(omdb_data, dict) and omdb_data.get("Response") == "True":
@@ -691,12 +698,8 @@ def get_movie_record(
                 imdb_id_final = imdb_id_from_omdb.lower()
 
     if imdb_id_final is not None and not omdb_called_by_title:
-        # (3) OMDb por imdb_id (omdb_client gestiona cache/retry)
         omdb_data = search_omdb_by_imdb_id(imdb_id_final)
 
-    # ----------------------------------------------------------------
-    # 3) Construir record_out y determinar claves de persistencia
-    # ----------------------------------------------------------------
     wiki_meta = _wiki_meta_from_entity(
         wikidata_id=wikidata_id,
         entity=entity,
@@ -718,30 +721,23 @@ def get_movie_record(
     if wiki_meta:
         record_out["__wiki"] = wiki_meta
 
-    keys_to_write: set[str] = {title_key}
     if imdb_id_final:
-        keys_to_write.add(f"imdb:{imdb_id_final.lower()}")
-    if imdb_key:
-        keys_to_write.add(imdb_key)
+        _apply_ratings_from_omdb_cache(record_out, imdb_id_final)
 
-    # ----------------------------------------------------------------
-    # 4) Lógica: comparar con existente y evitar escrituras inútiles
-    # ----------------------------------------------------------------
     existing: WikiRecord | None = None
-    if imdb_id_final:
-        existing = _wiki_cache.get(f"imdb:{imdb_id_final.lower()}")
+    canon_key_final: str | None = _make_imdb_key(imdb_id_final) if imdb_id_final else None
+
+    if canon_key_final:
+        existing = _resolve_cache_record(canon_key_final)
     if existing is None:
-        existing = _wiki_cache.get(title_key)
+        existing = _resolve_cache_record(title_key)
     if existing is None and imdb_key:
-        existing = _wiki_cache.get(imdb_key)
+        existing = _resolve_cache_record(imdb_key)
 
     if existing is not None and not wiki_meta:
         existing_wiki = existing.get("__wiki")
         if isinstance(existing_wiki, dict):
             record_out["__wiki"] = existing_wiki
-
-    if imdb_id_final:
-        _apply_ratings_from_omdb_cache(record_out, imdb_id_final)
 
     if existing is not None:
         old_imdb = _safe_str(existing.get("imdbID"))
@@ -762,9 +758,14 @@ def get_movie_record(
         if unchanged_ids and unchanged_wiki and unchanged_ratings:
             return existing
 
-    for k in keys_to_write:
-        if k:
-            _wiki_cache[k] = record_out
+    if canon_key_final:
+        _wiki_cache[canon_key_final] = record_out
+        _set_alias(title_key, canon_key_final)
+        if imdb_key:
+            _set_alias(imdb_key, canon_key_final)
+    else:
+        _wiki_cache[title_key] = record_out
+
     _save_wiki_cache()
 
     wikidata_id_logged: str | None = None
@@ -774,10 +775,16 @@ def get_movie_record(
         if isinstance(wd_val, str):
             wikidata_id_logged = wd_val
 
+    keys_logged: list[str] = [title_key]
+    if canon_key_final:
+        keys_logged.append(canon_key_final)
+    if imdb_key:
+        keys_logged.append(imdb_key)
+
     _log_wiki(
         f"[WIKI] Registro maestro guardado. "
         f"imdbID={record_out.get('imdbID')}, wikidata_id={wikidata_id_logged}, "
-        f"keys={sorted(keys_to_write)}"
+        f"keys={sorted(set(keys_logged))}"
     )
 
     return record_out
