@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import unicodedata
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -65,9 +66,12 @@ class WikiCacheFile(TypedDict):
     fallback_language: str
     items: list[WikiCacheItem]
     entities: dict[str, WikidataEntity]
+    # NUEVO: cachea resoluciones/validaciones para reducir SPARQL
+    imdb_qid: dict[str, str]
+    is_film: dict[str, bool]
 
 
-_SCHEMA_VERSION: Final[int] = 3
+_SCHEMA_VERSION: Final[int] = 4  # <- bump por nuevos campos
 _CACHE_PATH: Final[Path] = DATA_DIR / "wiki_cache.json"
 
 _SESSION: requests.Session | None = None
@@ -78,6 +82,26 @@ _WIKI_DEBUG_ENV: Final[bool] = os.getenv("ANALIZA_WIKI_DEBUG", "").strip().lower
     "yes",
     "y",
     "on",
+}
+
+# -------------------------
+# SPARQL throttle
+# -------------------------
+_LAST_SPARQL_TS: float = 0.0
+_SPARQL_MIN_INTERVAL_S: Final[float] = float(os.getenv("ANALIZA_WIKI_SPARQL_INTERVAL", "0.20") or "0.20")
+
+# -------------------------
+# Film detection (no SPARQL)
+# -------------------------
+# P31 allowlist (instance of) para aceptar “es una película” sin SPARQL.
+# Puedes ampliarlo si detectas falsos negativos.
+_FILM_INSTANCE_ALLOWLIST: Final[set[str]] = {
+    "Q11424",  # film
+    "Q24862",  # feature film
+    "Q202866",  # animated film
+    "Q226730",  # short film
+    "Q506240",  # television film
+    "Q93204",  # documentary film (ojo: a veces)
 }
 
 
@@ -99,10 +123,11 @@ def _get_session() -> requests.Session:
 
     retries = Retry(
         total=3,
-        backoff_factor=0.5,
+        backoff_factor=0.8,
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=("GET",),
         raise_on_status=False,
+        respect_retry_after_header=True,
     )
     adapter = HTTPAdapter(max_retries=retries)
     session.mount("https://", adapter)
@@ -155,6 +180,8 @@ def _empty_cache() -> WikiCacheFile:
         "fallback_language": WIKI_FALLBACK_LANGUAGE,
         "items": [],
         "entities": {},
+        "imdb_qid": {},
+        "is_film": {},
     }
 
 
@@ -203,10 +230,33 @@ def _load_cache() -> WikiCacheFile:
 
     items_obj = raw.get("items")
     entities_obj = raw.get("entities")
-    if not isinstance(items_obj, list) or not isinstance(entities_obj, Mapping):
+    imdb_qid_obj = raw.get("imdb_qid")
+    is_film_obj = raw.get("is_film")
+
+    if (
+        not isinstance(items_obj, list)
+        or not isinstance(entities_obj, Mapping)
+        or not isinstance(imdb_qid_obj, Mapping)
+        or not isinstance(is_film_obj, Mapping)
+    ):
         cache = _empty_cache()
         _save_cache(cache)
         return cache
+
+    # normaliza tipos (por si vienen raros)
+    imdb_qid: dict[str, str] = {}
+    for k, v in imdb_qid_obj.items():
+        ks = _safe_str(k)
+        vs = _safe_str(v)
+        if ks and vs:
+            imdb_qid[ks] = vs
+
+    is_film: dict[str, bool] = {}
+    for k, v in is_film_obj.items():
+        ks = _safe_str(k)
+        if not ks:
+            continue
+        is_film[ks] = bool(v is True)
 
     return {
         "schema": _SCHEMA_VERSION,
@@ -214,6 +264,8 @@ def _load_cache() -> WikiCacheFile:
         "fallback_language": str(raw.get("fallback_language") or WIKI_FALLBACK_LANGUAGE),
         "items": list(items_obj),  # type: ignore[list-item]
         "entities": dict(entities_obj),  # type: ignore[dict-item]
+        "imdb_qid": imdb_qid,
+        "is_film": is_film,
     }
 
 
@@ -409,15 +461,11 @@ def _rank_wikipedia_candidates(*, lookup_title: str, year: int | None, language:
                 wanted_title=clean_title,
                 year=year,
             )
-            # quédate con el mejor score visto para ese título
             prev = scored.get(hit_title)
             if prev is None or s > prev:
                 scored[hit_title] = s
 
-    # ordena por score desc
     ranked = sorted(scored.items(), key=lambda kv: kv[1], reverse=True)
-
-    # umbral: evita basura
     out = [t for (t, s) in ranked if s >= 4.0]
     _dbg(f"[WIKI-DEBUG] ranked_candidates({language}) -> {out[:10]!r}")
     return out
@@ -599,16 +647,26 @@ def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: st
     return out
 
 
+def _sparql_throttle() -> None:
+    global _LAST_SPARQL_TS
+    now = time.time()
+    delta = now - _LAST_SPARQL_TS
+    if delta < _SPARQL_MIN_INTERVAL_S:
+        time.sleep(_SPARQL_MIN_INTERVAL_S - delta)
+    _LAST_SPARQL_TS = time.time()
+
+
 def _wikidata_sparql(query: str) -> Mapping[str, object] | None:
-    # endpoint SPARQL
     url = "https://query.wikidata.org/sparql"
     params = {"format": "json", "query": query}
 
+    _sparql_throttle()
     _dbg(f"[WIKI-DEBUG] wikidata.sparql -> GET query.wikidata.org (len={len(query)})")
 
     try:
         session = _get_session()
-        resp = session.get(url, params=params, timeout=15)
+        # timeout (connect, read) más tolerante para endpoint SPARQL
+        resp = session.get(url, params=params, timeout=(5, 45))
     except Exception as exc:
         _dbg(f"[WIKI-DEBUG] wikidata.sparql EXC: {exc}")
         return None
@@ -616,6 +674,9 @@ def _wikidata_sparql(query: str) -> Mapping[str, object] | None:
     _dbg(f"[WIKI-DEBUG] wikidata.sparql <- status={resp.status_code}")
 
     if resp.status_code != 200:
+        # si te están rate-limitando, esto ayuda a diagnosticar
+        if resp.status_code in (429, 503):
+            _dbg(f"[WIKI-DEBUG] wikidata.sparql body={resp.text[:300]!r}")
         return None
 
     try:
@@ -629,30 +690,54 @@ def _wikidata_sparql(query: str) -> Mapping[str, object] | None:
     return data
 
 
-def _wikidata_is_film(qid: str) -> bool:
-    # Valida: instance-of / subclass-of film
-    # wdt:P31/wdt:P279* wd:Q11424
-    query = f"""
-ASK {{
-  wd:{qid} wdt:P31/wdt:P279* wd:Q11424 .
-}}
-""".strip()
-
-    data = _wikidata_sparql(query)
-    if not data:
+def _looks_like_film_from_wikipedia(wiki_raw: Mapping[str, object]) -> bool:
+    desc = str(wiki_raw.get("description") or "").strip().lower()
+    if not desc:
         return False
+    hints = (
+        "película",
+        "film",
+        "animated film",
+        "feature film",
+        "television film",
+        "motion picture",
+    )
+    return any(h in desc for h in hints)
 
-    b = data.get("boolean")
-    ok = bool(b is True)
-    _dbg(f"[WIKI-DEBUG] wikidata.is_film({qid}) -> {ok}")
+
+def _is_film_without_sparql(*, qid: str, wd_entity: Mapping[str, object], wiki_raw: Mapping[str, object] | None) -> bool:
+    p31 = set(_extract_qids_from_claims(wd_entity, "P31"))
+    if p31 & _FILM_INSTANCE_ALLOWLIST:
+        _dbg(f"[WIKI-DEBUG] is_film_without_sparql({qid}) -> True (P31 allowlist hit)")
+        return True
+
+    # fallback soft: description wikipedia
+    if wiki_raw is not None and _looks_like_film_from_wikipedia(wiki_raw):
+        _dbg(f"[WIKI-DEBUG] is_film_without_sparql({qid}) -> True (wiki description fallback)")
+        return True
+
+    _dbg(f"[WIKI-DEBUG] is_film_without_sparql({qid}) -> False")
+    return False
+
+
+def _is_film_cached(*, cache: WikiCacheFile, qid: str, wd_entity: Mapping[str, object], wiki_raw: Mapping[str, object] | None) -> bool:
+    cached = cache["is_film"].get(qid)
+    if cached is not None:
+        return bool(cached is True)
+    ok = _is_film_without_sparql(qid=qid, wd_entity=wd_entity, wiki_raw=wiki_raw)
+    cache["is_film"][qid] = bool(ok)
     return ok
 
 
-def _fetch_qid_by_imdb_id(imdb_id: str) -> str | None:
-    # IMDb ID property: P345
+def _fetch_qid_by_imdb_id(cache: WikiCacheFile, imdb_id: str) -> str | None:
     imdb_id = imdb_id.strip()
     if not imdb_id:
         return None
+
+    cached = cache["imdb_qid"].get(imdb_id)
+    if cached:
+        _dbg(f"[WIKI-DEBUG] qid_by_imdb({imdb_id}) cache -> {cached!r}")
+        return cached
 
     query = f"""
 SELECT ?item WHERE {{
@@ -682,15 +767,15 @@ LIMIT 2
     if not val:
         return None
 
-    # value = https://www.wikidata.org/entity/Qxxxxx
     m = re.search(r"/entity/(Q\d+)$", val)
     qid = m.group(1) if m else None
-    _dbg(f"[WIKI-DEBUG] qid_by_imdb({imdb_id}) -> {qid!r}")
+    if qid:
+        cache["imdb_qid"][imdb_id] = qid
+        _dbg(f"[WIKI-DEBUG] qid_by_imdb({imdb_id}) -> {qid!r}")
     return qid
 
 
 def _extract_sitelink_title(entity: Mapping[str, object], language: str) -> str | None:
-    # Special:EntityData incluye "sitelinks"
     sitelinks = entity.get("sitelinks")
     if not isinstance(sitelinks, Mapping):
         return None
@@ -722,44 +807,50 @@ def get_wiki_entry(title: str, year: int | None, imdb_id: str | None) -> WikiCac
 
     # ------------------------------------------------------------
     # 0) Si tenemos imdb_id: intentar resolver TODO por Wikidata (P345)
+    #    SIN ASK SPARQL extra: validamos "film" con EntityData (P31 allowlist + fallback wikipedia)
     # ------------------------------------------------------------
     if imdb_id:
-        qid = _fetch_qid_by_imdb_id(imdb_id)
-        if qid and _wikidata_is_film(qid):
+        qid = _fetch_qid_by_imdb_id(cache, imdb_id)
+        if qid:
             wd_entity = _fetch_wikidata_entity_json(qid)
             if wd_entity is not None:
-                # escoger sitelink al idioma principal/fallback
-                sl_title = _extract_sitelink_title(wd_entity, WIKI_LANGUAGE) or (
+                # elegir sitelink al idioma principal/fallback (si existe)
+                sl_primary = _extract_sitelink_title(wd_entity, WIKI_LANGUAGE)
+                sl_fallback = (
                     _extract_sitelink_title(wd_entity, WIKI_FALLBACK_LANGUAGE)
                     if WIKI_FALLBACK_LANGUAGE
                     else None
                 )
-                sl_lang = WIKI_LANGUAGE if _extract_sitelink_title(wd_entity, WIKI_LANGUAGE) else (
-                    WIKI_FALLBACK_LANGUAGE if sl_title and WIKI_FALLBACK_LANGUAGE else WIKI_LANGUAGE
-                )
+                sl_title = sl_primary or sl_fallback
+                sl_lang = WIKI_LANGUAGE if sl_primary else (WIKI_FALLBACK_LANGUAGE or WIKI_LANGUAGE)
 
                 wiki_raw = None
                 if sl_title:
                     wiki_raw = _fetch_wikipedia_summary_by_title(sl_title, sl_lang)
 
-                # si no conseguimos summary, no abortamos: seguimos al método por título
-                if wiki_raw is not None:
-                    return _build_and_cache_item(
-                        cache=cache,
-                        norm_title=norm_title,
-                        norm_year=norm_year,
-                        imdb_id=imdb_id,
-                        wiki_raw=wiki_raw,
-                        source_language=sl_lang,
-                        wikibase_item=qid,
-                        wd_entity=wd_entity,
-                    )
+                # valida "film" sin SPARQL (cacheado)
+                if _is_film_cached(cache=cache, qid=qid, wd_entity=wd_entity, wiki_raw=wiki_raw):
+                    if wiki_raw is not None:
+                        item = _build_and_cache_item(
+                            cache=cache,
+                            norm_title=norm_title,
+                            norm_year=norm_year,
+                            imdb_id=imdb_id,
+                            wiki_raw=wiki_raw,
+                            source_language=sl_lang,
+                            wikibase_item=qid,
+                            wd_entity=wd_entity,
+                        )
+                        # guardamos caches nuevas
+                        _save_cache(cache)
+                        return item
+
         _dbg("[WIKI-DEBUG] imdb path failed -> fallback to title search")
 
     # ------------------------------------------------------------
     # 1) Buscar por Wikipedia (como antes), pero:
     #    - probando varios candidatos
-    #    - validando que el QID final sea “película”
+    #    - validando que el QID final sea “película” SIN SPARQL
     # ------------------------------------------------------------
     candidates = _choose_wikipedia_summary_candidates(lookup_title, year)
     _dbg(f"[WIKI-DEBUG] candidates total={len(candidates)}")
@@ -774,16 +865,15 @@ def get_wiki_entry(title: str, year: int | None, imdb_id: str | None) -> WikiCac
             _dbg(f"[WIKI-DEBUG] candidate {cand_title!r} ({cand_lang}) has no wikibase_item -> skip")
             continue
 
-        # (1) Validación: debe ser película (y no álbum, videojuego, etc.)
-        if not _wikidata_is_film(wikibase_item):
-            _dbg(f"[WIKI-DEBUG] candidate QID {wikibase_item} is NOT film -> try next")
-            continue
-
         wd_entity = _fetch_wikidata_entity_json(wikibase_item)
         if wd_entity is None:
             continue
 
-        return _build_and_cache_item(
+        if not _is_film_cached(cache=cache, qid=wikibase_item, wd_entity=wd_entity, wiki_raw=raw):
+            _dbg(f"[WIKI-DEBUG] candidate QID {wikibase_item} is NOT film -> try next")
+            continue
+
+        item = _build_and_cache_item(
             cache=cache,
             norm_title=norm_title,
             norm_year=norm_year,
@@ -793,6 +883,9 @@ def get_wiki_entry(title: str, year: int | None, imdb_id: str | None) -> WikiCac
             wikibase_item=wikibase_item,
             wd_entity=wd_entity,
         )
+        # guardamos caches nuevas
+        _save_cache(cache)
+        return item
 
     _dbg("[WIKI-DEBUG] get_wiki_entry: no valid film candidate found")
     return None
@@ -848,8 +941,7 @@ def _build_and_cache_item(
     if genres:
         wikidata_block["genres"] = genres
 
-    # (3) Opción A: NO duplicamos valores humanos en cada item.
-    #     Guardamos QIDs en wikidata.* y el “diccionario de labels” en cache["entities"].
+    # Opción A: QIDs en item + diccionario "entities" global
     qids_to_label = list({*directors, *countries, *genres})
     fetched = _fetch_wikidata_labels(qids_to_label, WIKI_LANGUAGE, WIKI_FALLBACK_LANGUAGE)
 
@@ -878,8 +970,6 @@ def _build_and_cache_item(
     cache["items"].append(item)
     for qid, ent in new_entities.items():
         cache["entities"][qid] = ent
-
-    _save_cache(cache)
 
     year_label = norm_year if norm_year else "?"
     _log(f"[WIKI] cached ({source_language}): {norm_title} ({year_label})")
