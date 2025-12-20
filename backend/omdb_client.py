@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Final, TypedDict
 
@@ -22,6 +22,31 @@ from backend.config import (
     OMDB_RETRY_EMPTY_CACHE,
     SILENT_MODE,
 )
+from backend.movie_input import normalize_title_for_lookup
+
+
+# ============================================================
+#                       CACHE v2 (BORRÓN)
+# ============================================================
+
+
+class OmdbCacheItem(TypedDict):
+    Title: str
+    Year: str
+    imdbID: str | None
+    omdb: dict[str, object]
+
+
+class OmdbCacheFile(TypedDict):
+    schema: int
+    items: list[OmdbCacheItem]
+
+
+_SCHEMA_VERSION: Final[int] = 1
+_CACHE_PATH: Final[Path] = DATA_DIR / "omdb_cache.json"
+
+_CACHE: OmdbCacheFile | None = None
+
 
 # ============================================================
 #                  LOGGING CONTROLADO POR SILENT_MODE
@@ -29,7 +54,6 @@ from backend.config import (
 
 
 def _log(msg: object) -> None:
-    """Logea vía logger central respetando SILENT_MODE."""
     try:
         _logger.info(str(msg))
     except Exception:
@@ -38,7 +62,6 @@ def _log(msg: object) -> None:
 
 
 def _log_always(msg: object) -> None:
-    """Log crítico que siempre se muestra (usa logger.warning with always)."""
     try:
         _logger.warning(str(msg), always=True)
     except Exception:
@@ -50,7 +73,6 @@ _SESSION: requests.Session | None = None
 
 
 def _get_session() -> requests.Session:
-    """Devuelve una sesión HTTP con reintentos configurados."""
     global _SESSION
     if _SESSION is not None:
         return _SESSION
@@ -67,7 +89,7 @@ def _get_session() -> requests.Session:
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     _SESSION = session
-    return _SESSION
+    return session
 
 
 # ============================================================
@@ -103,10 +125,6 @@ def _safe_imdb_id(value: object) -> str | None:
 
 
 def normalize_imdb_votes(votes: object) -> int | None:
-    """
-    Convierte el campo votes de OMDb (por ejemplo "123,456") en int.
-    Devuelve None si no se puede parsear.
-    """
     if not votes or votes == "N/A":
         return None
     if isinstance(votes, (int, float)):
@@ -117,9 +135,6 @@ def normalize_imdb_votes(votes: object) -> int | None:
 
 
 def parse_rt_score_from_omdb(omdb_data: Mapping[str, object]) -> int | None:
-    """
-    Busca el rating de Rotten Tomatoes en Ratings y lo devuelve 0-100.
-    """
     ratings_obj = omdb_data.get("Ratings") or []
     if not isinstance(ratings_obj, list):
         return None
@@ -159,212 +174,9 @@ def extract_year_from_omdb(omdb_data: Mapping[str, object]) -> int | None:
     return None
 
 
-# ============================================================
-#                      CACHE OMDb LOCAL (imdb único)
-# ============================================================
-
-CACHE_FILE: Final[str] = "omdb_cache.json"
-CACHE_PATH: Final[Path] = DATA_DIR / CACHE_FILE
-
-
-class _AliasRecord(TypedDict):
-    __alias: str
-
-
-def _is_alias_record(obj: object) -> bool:
-    return isinstance(obj, dict) and isinstance(obj.get("__alias"), str)
-
-
-def _resolve_cache_entry(
-    cache: dict[str, object],
-    key: str,
-    *,
-    max_depth: int = 10,
-) -> dict[str, object] | None:
-    """
-    Resuelve una clave en cache soportando alias:
-      - Canon: "tt123..." -> dict OMDb
-      - Alias: "title:..." -> {"__alias": "tt123..."}
-    """
-    current_key = key
-    seen: set[str] = set()
-
-    for _ in range(max_depth):
-        if current_key in seen:
-            return None
-        seen.add(current_key)
-
-        raw = cache.get(current_key)
-        if raw is None:
-            return None
-        if _is_alias_record(raw):
-            target = raw.get("__alias")
-            if not isinstance(target, str) or not target.strip():
-                return None
-            current_key = target.strip().lower()
-            continue
-
-        return dict(raw) if isinstance(raw, dict) else None
-
-    return None
-
-
-def _extract_imdb_id_from_omdb_record(data: Mapping[str, object] | None) -> str | None:
-    if not isinstance(data, Mapping):
-        return None
-    if data.get("Response") != "True":
-        return None
-    return _safe_imdb_id(data.get("imdbID"))
-
-
-def load_cache() -> dict[str, object]:
-    """
-    Carga la caché OMDb desde disco.
-
-    Modelo:
-      - Canon: imdbID en minúsculas ("tt...") -> dict OMDb completo
-      - Alias: "title:..." -> {"__alias": "tt..."}
-      - Para Response=False se guarda bajo la clave de consulta (title:*), sin alias.
-    """
-    if not CACHE_PATH.exists():
-        return {}
-
-    try:
-        with CACHE_PATH.open("r", encoding="utf-8") as f:
-            raw_cache = json.load(f)
-    except Exception as exc:
-        _log(f"WARNING: error cargando {CACHE_PATH}: {exc}")
-        try:
-            broken = CACHE_PATH.with_suffix(".broken.json")
-            CACHE_PATH.replace(broken)
-            _log(f"INFO: archivo de cache corrupto renombrado a {broken}")
-        except Exception:
-            pass
-        return {}
-
-    if not isinstance(raw_cache, dict):
-        return {}
-
-    # Normalización mínima (claves string)
-    normalized: dict[str, object] = {}
-    for k, v in raw_cache.items():
-        if not isinstance(k, str):
-            continue
-        normalized[k.strip()] = v
-
-    # Compatibilidad parcial con claves antiguas JSON-serializadas (si existieran aún)
-    for key, value in list(normalized.items()):
-        stripped = key.strip()
-        if not (stripped.startswith("{") and stripped.endswith("}")):
-            continue
-
-        try:
-            params = json.loads(stripped)
-        except Exception:
-            continue
-        if not isinstance(params, dict):
-            continue
-
-        imdb_id = params.get("i") if isinstance(params.get("i"), str) else None
-        title = params.get("t") if isinstance(params.get("t"), str) else None
-        year = params.get("y") if isinstance(params.get("y"), str) else None
-
-        canon_key: str | None
-        if imdb_id:
-            canon_key = imdb_id.strip().lower()
-        elif title:
-            title_low = title.lower()
-            canon_key = f"title:{year}:{title_low}" if year else f"title::{title_low}"
-        else:
-            canon_key = None
-
-        if canon_key and canon_key not in normalized:
-            normalized[canon_key] = value
-
-    # Migración/normalización a imdb único + alias
-    upgraded: dict[str, object] = {}
-    changed = False
-
-    for key, value in list(normalized.items()):
-        if not isinstance(key, str):
-            continue
-
-        if _is_alias_record(value):
-            target = value.get("__alias")
-            if isinstance(target, str) and target.strip():
-                upgraded[key] = _AliasRecord(__alias=target.strip().lower())
-            else:
-                # alias inválido -> ignorar
-                changed = True
-            continue
-
-        if not isinstance(value, dict):
-            upgraded[key] = value
-            continue
-
-        imdb_id = _extract_imdb_id_from_omdb_record(value)
-        if imdb_id is None:
-            upgraded[key] = dict(value)
-            continue
-
-        # Canon por imdbID
-        canon_existing = upgraded.get(imdb_id)
-        if canon_existing is None or _is_alias_record(canon_existing):
-            upgraded[imdb_id] = dict(value)
-            changed = True
-
-        # Alias si la clave no es el canon
-        key_norm = key.strip().lower()
-        if key_norm != imdb_id:
-            upgraded[key] = _AliasRecord(__alias=imdb_id)
-            changed = True
-        else:
-            upgraded[key_norm] = dict(value)
-
-    if changed:
-        save_cache(upgraded)
-        _log("INFO: omdb_cache migrada/normalizada a formato alias (imdb único).")
-
-    return upgraded
-
-
-def save_cache(cache: Mapping[str, object]) -> None:
-    """Escribe la cache de forma atómica en CACHE_PATH."""
-    dirpath = CACHE_PATH.parent
-    dirpath.mkdir(parents=True, exist_ok=True)
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            delete=False,
-            dir=str(dirpath),
-        ) as tf:
-            json.dump(dict(cache), tf, indent=2, ensure_ascii=False)
-            temp_name = tf.name
-        os.replace(temp_name, str(CACHE_PATH))
-    except Exception as exc:
-        _log(f"ERROR guardando cache OMDb en {CACHE_PATH}: {exc}")
-
-
-omdb_cache: dict[str, object] = load_cache()
-
-# Flags globales
-OMDB_DISABLED: bool = False
-OMDB_DISABLED_NOTICE_SHOWN: bool = False
-OMDB_RATE_LIMIT_NOTICE_SHOWN: bool = False  # para el aviso de límite gratuito
-
-
-# ============================================================
-#                  EXTRACCIÓN DE RATINGS
-# ============================================================
-
-
 def extract_ratings_from_omdb(
     data: Mapping[str, object] | None,
 ) -> tuple[float | None, int | None, int | None]:
-    """
-    Extrae imdb_rating, imdb_votes y rt_score de un dict OMDb.
-    """
     if not data:
         return None, None, None
 
@@ -376,10 +188,6 @@ def extract_ratings_from_omdb(
 
 
 def is_omdb_data_empty_for_ratings(data: Mapping[str, object] | None) -> bool:
-    """
-    Devuelve True si el dict OMDb no tiene rating IMDb, ni votos,
-    ni puntuación de Rotten Tomatoes.
-    """
     if not data:
         return True
 
@@ -390,16 +198,143 @@ def is_omdb_data_empty_for_ratings(data: Mapping[str, object] | None) -> bool:
     return imdb_rating is None and imdb_votes is None and rt_score is None
 
 
-def _persist_alias(cache_key: str, imdb_id: str) -> None:
-    """
-    Guarda alias title:* -> tt... (imdb único). No escribe si coincide.
-    """
-    ck = cache_key.strip()
-    if not ck:
-        return
-    if ck.lower() == imdb_id:
-        return
-    omdb_cache[ck] = _AliasRecord(__alias=imdb_id)
+def _extract_imdb_id_from_omdb_record(data: Mapping[str, object] | None) -> str | None:
+    if not isinstance(data, Mapping):
+        return None
+    if data.get("Response") != "True":
+        return None
+    return _safe_imdb_id(data.get("imdbID"))
+
+
+def _norm_year_str(year: int | None) -> str:
+    return str(year) if year is not None else ""
+
+
+def _is_movie_not_found(data: Mapping[str, object]) -> bool:
+    return data.get("Response") == "False" and data.get("Error") == "Movie not found!"
+
+
+# ============================================================
+#                  LOAD/SAVE CACHE (ATÓMICO)
+# ============================================================
+
+
+def _empty_cache() -> OmdbCacheFile:
+    return {"schema": _SCHEMA_VERSION, "items": []}
+
+
+def _load_cache() -> OmdbCacheFile:
+    global _CACHE
+    if _CACHE is not None:
+        return _CACHE
+
+    if not _CACHE_PATH.exists():
+        _CACHE = _empty_cache()
+        return _CACHE
+
+    try:
+        raw = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        _CACHE = _empty_cache()
+        return _CACHE
+
+    if not isinstance(raw, Mapping):
+        _CACHE = _empty_cache()
+        return _CACHE
+
+    if raw.get("schema") != _SCHEMA_VERSION:
+        _CACHE = _empty_cache()
+        return _CACHE
+
+    items_obj = raw.get("items")
+    if not isinstance(items_obj, list):
+        _CACHE = _empty_cache()
+        return _CACHE
+
+    items: list[OmdbCacheItem] = []
+    for it in items_obj:
+        if not isinstance(it, Mapping):
+            continue
+        title = it.get("Title")
+        year = it.get("Year")
+        imdb_id = it.get("imdbID")
+        omdb = it.get("omdb")
+
+        if not isinstance(title, str):
+            continue
+        if not isinstance(year, str):
+            continue
+        if imdb_id is not None and not isinstance(imdb_id, str):
+            continue
+        if not isinstance(omdb, Mapping):
+            continue
+
+        items.append(
+            {
+                "Title": title,
+                "Year": year,
+                "imdbID": imdb_id,
+                "omdb": dict(omdb),
+            }
+        )
+
+    _CACHE = {"schema": _SCHEMA_VERSION, "items": items}
+    return _CACHE
+
+
+def _save_cache(cache: OmdbCacheFile) -> None:
+    global _CACHE
+    dirpath = _CACHE_PATH.parent
+    dirpath.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        delete=False,
+        dir=str(dirpath),
+    ) as tf:
+        json.dump(cache, tf, ensure_ascii=False, indent=2)
+        temp_name = tf.name
+
+    os.replace(temp_name, str(_CACHE_PATH))
+    _CACHE = cache
+
+
+def _find_existing(
+    items: list[OmdbCacheItem],
+    norm_title: str,
+    norm_year: str,
+    imdb_id: str | None,
+) -> OmdbCacheItem | None:
+    if imdb_id:
+        for it in items:
+            if it.get("imdbID") == imdb_id:
+                return it
+
+    for it in items:
+        if (
+            it.get("imdbID") is None
+            and it.get("Title") == norm_title
+            and it.get("Year") == norm_year
+        ):
+            return it
+
+    return None
+
+
+def iter_cached_omdb_records() -> Iterable[dict[str, object]]:
+    cache = _load_cache()
+    for it in cache["items"]:
+        yield dict(it["omdb"])
+
+
+# ============================================================
+#                      FLAGS GLOBAL
+# ============================================================
+
+OMDB_DISABLED: bool = False
+OMDB_DISABLED_NOTICE_SHOWN: bool = False
+OMDB_RATE_LIMIT_NOTICE_SHOWN: bool = False
 
 
 # ============================================================
@@ -408,9 +343,6 @@ def _persist_alias(cache_key: str, imdb_id: str) -> None:
 
 
 def omdb_request(params: Mapping[str, object]) -> dict[str, object] | None:
-    """
-    Petición directa sin cache.
-    """
     if OMDB_API_KEY is None:
         _log("ERROR: OMDB_API_KEY no configurada.")
         return None
@@ -445,165 +377,75 @@ def omdb_request(params: Mapping[str, object]) -> dict[str, object] | None:
     return None
 
 
-def omdb_query_with_cache(
-    cache_key: str,
-    params: Mapping[str, object],
-) -> dict[str, object] | None:
-    """
-    Gestiona:
-    - Cache OMDb (con alias).
-    - OMDB_RETRY_EMPTY_CACHE.
-    - Reintentos por rate limit.
-    - Desactivación global de OMDb.
-    """
-    global OMDB_DISABLED, OMDB_DISABLED_NOTICE_SHOWN, OMDB_RATE_LIMIT_NOTICE_SHOWN
+def _get_cached_item(
+    *,
+    norm_title: str,
+    norm_year: str,
+    imdb_id_hint: str | None,
+) -> OmdbCacheItem | None:
+    cache = _load_cache()
+    return _find_existing(cache["items"], norm_title, norm_year, imdb_id_hint)
 
-    cache_key_norm = cache_key.strip().lower()
 
-    # Si OMDb está desactivado → solo cache (resolviendo alias)
-    if OMDB_DISABLED:
-        return _resolve_cache_entry(omdb_cache, cache_key_norm)
+def _cache_store_item(
+    *,
+    norm_title: str,
+    norm_year: str,
+    imdb_id: str | None,
+    omdb_data: dict[str, object],
+) -> OmdbCacheItem:
+    cache = _load_cache()
 
-    # Cache hit (normal, sin reintento)
-    if cache_key_norm in omdb_cache and not OMDB_RETRY_EMPTY_CACHE:
-        return _resolve_cache_entry(omdb_cache, cache_key_norm)
-
-    # Cache hit pero se quiere reintentar porque estaba "vacía" de ratings
-    if cache_key_norm in omdb_cache and OMDB_RETRY_EMPTY_CACHE:
-        old = _resolve_cache_entry(omdb_cache, cache_key_norm)
-        if old is not None and not is_omdb_data_empty_for_ratings(old):
-            return old
-        _log(f"INFO: reintentando OMDb para {cache_key_norm} (cache sin ratings).")
-
-    retries = 0
-    had_failure = False
-
-    while retries <= OMDB_RATE_LIMIT_MAX_RETRIES:
-        data = omdb_request(params)
-
-        if data is None:
-            had_failure = True
-        else:
-            error_msg = data.get("Error")
-
-            if error_msg == "Request limit reached!":
-                had_failure = True
-
-                if not OMDB_RATE_LIMIT_NOTICE_SHOWN:
-                    _log_always(
-                        "AVISO: límite de llamadas gratuitas de OMDb alcanzado. "
-                        f"Esperando {OMDB_RATE_LIMIT_WAIT_SECONDS} segundos antes de continuar..."
-                    )
-                    OMDB_RATE_LIMIT_NOTICE_SHOWN = True
-                    time.sleep(OMDB_RATE_LIMIT_WAIT_SECONDS)
-
-                retries += 1
+    if imdb_id is not None:
+        kept: list[OmdbCacheItem] = []
+        for it in cache["items"]:
+            if it.get("imdbID") == imdb_id:
                 continue
+            kept.append(it)
+        cache["items"] = kept
 
-            if data.get("Response") == "True":
-                imdb_id = _extract_imdb_id_from_omdb_record(data)
-                if imdb_id:
-                    omdb_cache[imdb_id] = dict(data)
-                    _persist_alias(cache_key_norm, imdb_id)
-                else:
-                    # Caso raro: Response=True pero sin imdbID
-                    omdb_cache[cache_key_norm] = dict(data)
+    if imdb_id is None:
+        kept2: list[OmdbCacheItem] = []
+        for it in cache["items"]:
+            if (
+                it.get("imdbID") is None
+                and it.get("Title") == norm_title
+                and it.get("Year") == norm_year
+            ):
+                continue
+            kept2.append(it)
+        cache["items"] = kept2
 
-                save_cache(omdb_cache)
-                return dict(data)
-
-            # Response=False (Movie not found, etc.)
-            omdb_cache[cache_key_norm] = dict(data)
-            save_cache(omdb_cache)
-            return dict(data)
-
-        retries += 1
-
-    if had_failure:
-        OMDB_DISABLED = True
-        if not OMDB_DISABLED_NOTICE_SHOWN:
-            _log_always(
-                "ERROR: OMDb desactivado para esta ejecución tras fallos consecutivos. "
-                "A partir de ahora se usará únicamente la caché local."
-            )
-            OMDB_DISABLED_NOTICE_SHOWN = True
-
-    return _resolve_cache_entry(omdb_cache, cache_key_norm)
+    item: OmdbCacheItem = {
+        "Title": norm_title,
+        "Year": norm_year,
+        "imdbID": imdb_id,
+        "omdb": dict(omdb_data),
+    }
+    cache["items"].append(item)
+    _save_cache(cache)
+    return item
 
 
-# ============================================================
-#                      FUNCIONES PÚBLICAS
-# ============================================================
-
-
-def search_omdb_by_imdb_id(imdb_id: str) -> dict[str, object] | None:
-    imdb_norm = _safe_imdb_id(imdb_id)
-    if not imdb_norm:
-        return None
-
-    cache_key = imdb_norm
-    params: dict[str, object] = {"i": imdb_norm, "type": "movie", "plot": "short"}
-    return omdb_query_with_cache(cache_key, params)
-
-
-def search_omdb_by_title_and_year(
-    title: str,
+def _search_candidates_imdb_id(
+    *,
+    title_for_search: str,
     year: int | None,
-) -> dict[str, object] | None:
-    if not title:
-        return None
-
-    title_low = title.lower()
-    cache_key = f"title:{year}:{title_low}" if year else f"title::{title_low}"
-    params: dict[str, object] = {"t": title, "type": "movie", "plot": "short"}
-    if year is not None:
-        params["y"] = str(year)
-
-    data = omdb_query_with_cache(cache_key, params)
-
-    # Reintento sin año si OMDb dice "Movie not found!"
-    if (
-        data
-        and data.get("Response") == "False"
-        and data.get("Error") == "Movie not found!"
-    ):
-        cache_key_no_year = f"title::{title_low}"
-        params_no_year = dict(params)
-        params_no_year.pop("y", None)
-        data = omdb_query_with_cache(cache_key_no_year, params_no_year)
-
-    return data
-
-
-def search_omdb_with_candidates(
-    plex_title: str,
-    plex_year: int | None,
-) -> dict[str, object] | None:
+) -> str | None:
     """
-    Último recurso cuando:
-      - No se obtuvo IMDb ID
-      - No se encuentra título exacto
-
-    Estrategia:
-      1) Buscar por título+year.
-      2) Si falla, usar 's=' de OMDb y elegir el mejor candidato por heurística.
+    Búsqueda fuzzy: usa 's=' y elige el mejor candidato por heurística.
+    Devuelve imdbID (normalizado) o None.
     """
-    title = plex_title.strip()
-    if not title:
-        return None
-
-    data = search_omdb_by_title_and_year(title, plex_year)
-    if data and data.get("Response") == "True":
-        return data
-
     if OMDB_API_KEY is None:
-        _log("ERROR: OMDB_API_KEY no configurada para búsqueda de candidatos.")
+        return None
+
+    if not title_for_search:
         return None
 
     base_url = "https://www.omdbapi.com/"
     params_s: dict[str, str] = {
         "apikey": OMDB_API_KEY,
-        "s": title,
+        "s": title_for_search,
         "type": "movie",
     }
 
@@ -621,17 +463,18 @@ def search_omdb_with_candidates(
     if not isinstance(results_obj, list):
         return None
 
+    ptit = normalize_title_for_lookup(title_for_search)
+
     def score_candidate(cand: Mapping[str, object]) -> float:
         score = 0.0
 
-        title_obj = cand.get("Title")
-        ctit = title_obj.lower() if isinstance(title_obj, str) else ""
-        ptit = title.lower()
-
-        if ptit == ctit:
-            score += 2.0
-        elif ctit in ptit or ptit in ctit:
-            score += 1.0
+        ct_raw = cand.get("Title")
+        ct = normalize_title_for_lookup(ct_raw) if isinstance(ct_raw, str) else ""
+        if ptit and ct:
+            if ptit == ct:
+                score += 2.0
+            elif ct in ptit or ptit in ct:
+                score += 1.0
 
         cand_year: int | None = None
         cy = cand.get("Year")
@@ -641,33 +484,218 @@ def search_omdb_with_candidates(
             except Exception:
                 cand_year = None
 
-        if plex_year is not None and cand_year is not None:
-            if plex_year == cand_year:
+        if year is not None and cand_year is not None:
+            if year == cand_year:
                 score += 2.0
-            elif abs(plex_year - cand_year) <= 1:
+            elif abs(year - cand_year) <= 1:
                 score += 1.0
-
-        common = sum(1 for w in ptit.split() if w and w in ctit)
-        score += common * 0.1
 
         return score
 
-    best_dict: dict[str, object] | None = None
+    best_imdb: str | None = None
     best_score = float("-inf")
 
     for item in results_obj:
         if not isinstance(item, Mapping):
             continue
-        cand_score = score_candidate(item)
-        if cand_score > best_score:
-            best_score = cand_score
-            best_dict = dict(item)
+        s = score_candidate(item)
+        if s > best_score:
+            imdb_raw = _safe_imdb_id(item.get("imdbID"))
+            if imdb_raw:
+                best_score = s
+                best_imdb = imdb_raw
 
-    if not best_dict:
+    return best_imdb
+
+
+def _fetch_full_by_imdb_id(imdb_id: str) -> dict[str, object] | None:
+    params: dict[str, object] = {"i": imdb_id, "type": "movie", "plot": "short"}
+    data = omdb_request(params)
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def omdb_query_with_cache(
+    *,
+    title: str | None,
+    year: int | None,
+    imdb_id: str | None,
+) -> dict[str, object] | None:
+    """
+    Cache v2:
+      - Un item por imdbID (si existe).
+      - Si no existe imdbID, un item por (Title, Year) para imdbID=null.
+
+    Normalización de título: centralizada en movie_input.normalize_title_for_lookup().
+
+    Fallback integrado:
+      - si (t=title,y=year) => Movie not found
+        -> reintento sin año
+        -> si sigue: s= (candidatos) -> i= (ficha completa)
+    """
+    global OMDB_DISABLED, OMDB_DISABLED_NOTICE_SHOWN, OMDB_RATE_LIMIT_NOTICE_SHOWN
+
+    imdb_norm = _safe_imdb_id(imdb_id) if imdb_id else None
+    year_str = _norm_year_str(year)
+
+    norm_title = normalize_title_for_lookup(title or "")
+    if not norm_title and imdb_norm is None:
         return None
 
-    imdb_id = _safe_imdb_id(best_dict.get("imdbID"))
-    if not imdb_id:
+    cached = _get_cached_item(norm_title=norm_title, norm_year=year_str, imdb_id_hint=imdb_norm)
+    if cached is not None and not OMDB_RETRY_EMPTY_CACHE:
+        return dict(cached["omdb"])
+
+    if cached is not None and OMDB_RETRY_EMPTY_CACHE:
+        old = dict(cached["omdb"])
+        if not is_omdb_data_empty_for_ratings(old):
+            return old
+        _log(f"INFO: reintentando OMDb para {norm_title} ({year_str or '?'}) (cache sin ratings).")
+
+    if OMDB_DISABLED:
+        return dict(cached["omdb"]) if cached is not None else None
+
+    # --- Helper para ejecutar request con rate-limit handling (sin recursión) ---
+    def _request_with_rate_limit(params: Mapping[str, object]) -> dict[str, object] | None:
+        global OMDB_RATE_LIMIT_NOTICE_SHOWN
+
+        retries_local = 0
+        while retries_local <= OMDB_RATE_LIMIT_MAX_RETRIES:
+            data = omdb_request(params)
+            if data is None:
+                return None
+
+            if data.get("Error") == "Request limit reached!":
+                if not OMDB_RATE_LIMIT_NOTICE_SHOWN:
+                    _log_always(
+                        "AVISO: límite de llamadas gratuitas de OMDb alcanzado. "
+                        f"Esperando {OMDB_RATE_LIMIT_WAIT_SECONDS} segundos antes de continuar..."
+                    )
+                    OMDB_RATE_LIMIT_NOTICE_SHOWN = True
+                    time.sleep(OMDB_RATE_LIMIT_WAIT_SECONDS)
+                retries_local += 1
+                continue
+
+            return data
+
         return None
 
-    return search_omdb_by_imdb_id(imdb_id)
+    had_failure = False
+
+    # --- 1) Búsqueda principal ---
+    if imdb_norm is not None:
+        params_main: dict[str, object] = {"i": imdb_norm, "type": "movie", "plot": "short"}
+        data_main = _request_with_rate_limit(params_main)
+        if data_main is None:
+            had_failure = True
+        else:
+            imdb_from_resp = _extract_imdb_id_from_omdb_record(data_main)
+            imdb_final = imdb_from_resp or imdb_norm
+            _cache_store_item(
+                norm_title=norm_title,
+                norm_year=year_str,
+                imdb_id=imdb_final,
+                omdb_data=dict(data_main),
+            )
+            return dict(data_main)
+    else:
+        params_t: dict[str, object] = {"t": norm_title, "type": "movie", "plot": "short"}
+        if year is not None:
+            params_t["y"] = str(year)
+
+        data_t = _request_with_rate_limit(params_t)
+        if data_t is None:
+            had_failure = True
+        else:
+            # --- 2) Fallback: sin año ---
+            if year is not None and _is_movie_not_found(data_t):
+                params_no_year = dict(params_t)
+                params_no_year.pop("y", None)
+                data_no_year = _request_with_rate_limit(params_no_year)
+                if data_no_year is not None:
+                    data_t = data_no_year
+
+            # --- 3) Fallback: candidatos (s=) + ficha completa (i=) ---
+            if _is_movie_not_found(data_t):
+                imdb_best = _search_candidates_imdb_id(title_for_search=norm_title, year=year)
+                if imdb_best:
+                    data_full = _request_with_rate_limit(
+                        {"i": imdb_best, "type": "movie", "plot": "short"}
+                    )
+                    if isinstance(data_full, dict):
+                        imdb_from_full = _extract_imdb_id_from_omdb_record(data_full)
+                        imdb_final2 = imdb_from_full or imdb_best
+                        _cache_store_item(
+                            norm_title=norm_title,
+                            norm_year=year_str,
+                            imdb_id=imdb_final2,
+                            omdb_data=dict(data_full),
+                        )
+                        return dict(data_full)
+
+            imdb_from_resp2 = _extract_imdb_id_from_omdb_record(data_t)
+            imdb_final3 = imdb_from_resp2
+
+            _cache_store_item(
+                norm_title=norm_title,
+                norm_year=year_str,
+                imdb_id=imdb_final3,
+                omdb_data=dict(data_t),
+            )
+            return dict(data_t)
+
+    if had_failure:
+        OMDB_DISABLED = True
+        if not OMDB_DISABLED_NOTICE_SHOWN:
+            _log_always(
+                "ERROR: OMDb desactivado para esta ejecución tras fallos consecutivos. "
+                "A partir de ahora se usará únicamente la caché local."
+            )
+            OMDB_DISABLED_NOTICE_SHOWN = True
+
+    cached2 = _get_cached_item(norm_title=norm_title, norm_year=year_str, imdb_id_hint=imdb_norm)
+    return dict(cached2["omdb"]) if cached2 is not None else None
+
+
+# ============================================================
+#                      FUNCIONES PÚBLICAS
+# ============================================================
+
+
+def search_omdb_by_imdb_id(imdb_id: str) -> dict[str, object] | None:
+    imdb_norm = _safe_imdb_id(imdb_id)
+    if not imdb_norm:
+        return None
+    return omdb_query_with_cache(title=None, year=None, imdb_id=imdb_norm)
+
+
+def search_omdb_by_title_and_year(
+    title: str,
+    year: int | None,
+) -> dict[str, object] | None:
+    if not title.strip():
+        return None
+
+    return omdb_query_with_cache(title=title, year=year, imdb_id=None)
+
+
+def search_omdb_with_candidates(
+    plex_title: str,
+    plex_year: int | None,
+) -> dict[str, object] | None:
+    # Se mantiene por compatibilidad interna, pero el fallback principal ya está integrado.
+    title_raw = plex_title.strip()
+    if not title_raw:
+        return None
+
+    data = search_omdb_by_title_and_year(title_raw, plex_year)
+    if data and data.get("Response") == "True":
+        return data
+
+    title_for_search = normalize_title_for_lookup(title_raw)
+    imdb_best = _search_candidates_imdb_id(title_for_search=title_for_search, year=plex_year)
+    if not imdb_best:
+        return None
+
+    return search_omdb_by_imdb_id(imdb_best)

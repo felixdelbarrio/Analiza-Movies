@@ -4,21 +4,21 @@ from typing import Final
 
 import pandas as pd
 
+from backend import logger as _logger
 from backend.config import (
+    AUTO_DELETE_RATING_PERCENTILE,
+    AUTO_KEEP_RATING_PERCENTILE,
     BAYES_GLOBAL_MEAN_DEFAULT,
     BAYES_MIN_TITLES_FOR_GLOBAL_MEAN,
-    AUTO_KEEP_RATING_PERCENTILE,
-    AUTO_DELETE_RATING_PERCENTILE,
-    RATING_MIN_TITLES_FOR_AUTO,
-    IMDB_KEEP_MIN_RATING,
     IMDB_DELETE_MAX_RATING,
+    IMDB_KEEP_MIN_RATING,
+    RATING_MIN_TITLES_FOR_AUTO,
 )
 from backend.omdb_client import (
-    omdb_cache,
+    iter_cached_omdb_records,
     parse_imdb_rating_from_omdb,
     parse_rt_score_from_omdb,
 )
-from backend import logger as _logger
 
 # -------------------------------------------------------------------
 # Logging controlado por SILENT_MODE
@@ -30,7 +30,6 @@ def _log_stats(msg: object) -> None:
     try:
         _logger.info(str(msg))
     except Exception:
-        # Fallback ligero
         print(msg)
 
 
@@ -61,19 +60,17 @@ _AUTO_DELETE_RATING_THRESHOLD_NO_RT: float | None = None
 
 
 # -------------------------------------------------------------------
-# Media global desde omdb_cache (para bayes)
+# Media global desde cache v2 (para bayes)
 # -------------------------------------------------------------------
+
+
 def _compute_global_imdb_mean_from_cache_raw() -> tuple[float | None, int]:
     """
-    Recorre omdb_cache y calcula la media de imdbRating para todas las
+    Recorre el cache OMDb v2 y calcula la media de imdbRating para todas las
     entradas que tengan un rating válido. Devuelve (media, n_validos).
     """
-    if not isinstance(omdb_cache, dict) or not omdb_cache:
-        _log_stats("INFO [stats] omdb_cache vacío o no dict; sin ratings IMDb.")
-        return None, 0
-
     ratings: list[float] = []
-    for data in omdb_cache.values():
+    for data in iter_cached_omdb_records():
         if not isinstance(data, dict):
             continue
         r = parse_imdb_rating_from_omdb(data)
@@ -135,6 +132,8 @@ def get_global_imdb_mean_info() -> tuple[float, str, int]:
 # -------------------------------------------------------------------
 # Media IMDb a partir del DataFrame (para el dashboard/resumen)
 # -------------------------------------------------------------------
+
+
 def compute_global_imdb_mean_from_df(df_all: pd.DataFrame) -> float | None:
     """
     Calcula la media IMDb sobre el DataFrame completo (columna imdb_rating).
@@ -156,6 +155,8 @@ def compute_global_imdb_mean_from_df(df_all: pd.DataFrame) -> float | None:
 # -------------------------------------------------------------------
 # Ratings list (ordenada) para percentiles (TODOS los títulos)
 # -------------------------------------------------------------------
+
+
 def _load_imdb_ratings_list_from_cache() -> tuple[list[float], int]:
     global _RATINGS_LIST, _RATINGS_COUNT
 
@@ -163,13 +164,12 @@ def _load_imdb_ratings_list_from_cache() -> tuple[list[float], int]:
         return _RATINGS_LIST, _RATINGS_COUNT
 
     ratings: list[float] = []
-    if isinstance(omdb_cache, dict):
-        for data in omdb_cache.values():
-            if not isinstance(data, dict):
-                continue
-            r = parse_imdb_rating_from_omdb(data)
-            if r is not None:
-                ratings.append(float(r))
+    for data in iter_cached_omdb_records():
+        if not isinstance(data, dict):
+            continue
+        r = parse_imdb_rating_from_omdb(data)
+        if r is not None:
+            ratings.append(float(r))
 
     ratings.sort()
     _RATINGS_LIST = ratings
@@ -184,6 +184,8 @@ def _load_imdb_ratings_list_from_cache() -> tuple[list[float], int]:
 # -------------------------------------------------------------------
 # Ratings list SOLO de títulos SIN RT
 # -------------------------------------------------------------------
+
+
 def _load_imdb_ratings_list_no_rt_from_cache() -> tuple[list[float], int]:
     """
     Igual que _load_imdb_ratings_list_from_cache, pero SOLO para
@@ -195,27 +197,23 @@ def _load_imdb_ratings_list_no_rt_from_cache() -> tuple[list[float], int]:
         return _RATINGS_NO_RT_LIST, _RATINGS_NO_RT_COUNT
 
     ratings: list[float] = []
-    if isinstance(omdb_cache, dict):
-        for data in omdb_cache.values():
-            if not isinstance(data, dict):
-                continue
-            r = parse_imdb_rating_from_omdb(data)
-            if r is None:
-                continue
-            rt = parse_rt_score_from_omdb(data)
-            if rt is not None:
-                # Solo queremos las que NO tienen RT
-                continue
-            ratings.append(float(r))
+    for data in iter_cached_omdb_records():
+        if not isinstance(data, dict):
+            continue
+        r = parse_imdb_rating_from_omdb(data)
+        if r is None:
+            continue
+        rt = parse_rt_score_from_omdb(data)
+        if rt is not None:
+            continue
+        ratings.append(float(r))
 
     ratings.sort()
     _RATINGS_NO_RT_LIST = ratings
     _RATINGS_NO_RT_COUNT = len(ratings)
 
     if _RATINGS_NO_RT_COUNT == 0:
-        _log_stats(
-            "INFO [stats] omdb_cache sin títulos válidos para auto-umbrales NO_RT."
-        )
+        _log_stats("INFO [stats] omdb_cache sin títulos válidos para auto-umbrales NO_RT.")
 
     return _RATINGS_NO_RT_LIST, _RATINGS_NO_RT_COUNT
 
@@ -242,6 +240,8 @@ def _percentile(sorted_vals: list[float], p: float) -> float | None:
 # -------------------------------------------------------------------
 # Auto-umbral KEEP (todos los títulos)
 # -------------------------------------------------------------------
+
+
 def get_auto_keep_rating_threshold() -> float:
     """
     Devuelve el umbral de rating para KEEP (auto-ajustado o fallback fijo).
@@ -263,7 +263,6 @@ def get_auto_keep_rating_threshold() -> float:
             )
             return _AUTO_KEEP_RATING_THRESHOLD
 
-    # Fallback
     _AUTO_KEEP_RATING_THRESHOLD = IMDB_KEEP_MIN_RATING
     _log_stats(
         f"INFO [stats] Fallback IMDB_KEEP_MIN_RATING={IMDB_KEEP_MIN_RATING} "
@@ -275,6 +274,8 @@ def get_auto_keep_rating_threshold() -> float:
 # -------------------------------------------------------------------
 # Auto-umbral DELETE (todos los títulos)
 # -------------------------------------------------------------------
+
+
 def get_auto_delete_rating_threshold() -> float:
     """
     Devuelve el umbral de rating para DELETE (auto-ajustado o fallback fijo).
@@ -296,7 +297,6 @@ def get_auto_delete_rating_threshold() -> float:
             )
             return _AUTO_DELETE_RATING_THRESHOLD
 
-    # Fallback
     _AUTO_DELETE_RATING_THRESHOLD = IMDB_DELETE_MAX_RATING
     _log_stats(
         f"INFO [stats] Fallback IMDB_DELETE_MAX_RATING={IMDB_DELETE_MAX_RATING} "
@@ -308,6 +308,8 @@ def get_auto_delete_rating_threshold() -> float:
 # -------------------------------------------------------------------
 # Auto-umbral KEEP para pelis SIN RT
 # -------------------------------------------------------------------
+
+
 def get_auto_keep_rating_threshold_no_rt() -> float:
     """
     Umbral KEEP específico para películas que NO tienen Rotten Tomatoes.
@@ -330,7 +332,6 @@ def get_auto_keep_rating_threshold_no_rt() -> float:
             )
             return _AUTO_KEEP_RATING_THRESHOLD_NO_RT
 
-    # Fallback → reutilizamos el umbral global
     _AUTO_KEEP_RATING_THRESHOLD_NO_RT = get_auto_keep_rating_threshold()
     _log_stats(
         "INFO [stats] Fallback IMDB_KEEP_MIN_RATING_NO_RT usando umbral global "
@@ -342,6 +343,8 @@ def get_auto_keep_rating_threshold_no_rt() -> float:
 # -------------------------------------------------------------------
 # Auto-umbral DELETE para pelis SIN RT
 # -------------------------------------------------------------------
+
+
 def get_auto_delete_rating_threshold_no_rt() -> float:
     """
     Umbral DELETE específico para películas que NO tienen Rotten Tomatoes.
@@ -364,7 +367,6 @@ def get_auto_delete_rating_threshold_no_rt() -> float:
             )
             return _AUTO_DELETE_RATING_THRESHOLD_NO_RT
 
-    # Fallback → reutilizamos el umbral global
     _AUTO_DELETE_RATING_THRESHOLD_NO_RT = get_auto_delete_rating_threshold()
     _log_stats(
         "INFO [stats] Fallback IMDB_DELETE_MAX_RATING_NO_RT usando umbral global "
