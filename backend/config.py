@@ -108,11 +108,6 @@ EXCLUDE_PLEX_LIBRARIES: list[str] = [
     x.strip() for x in _raw_exclude_plex.split(",") if x.strip()
 ]
 
-_raw_exclude_dlna: str = os.getenv("EXCLUDE_DLNA_LIBRARIES", "")
-EXCLUDE_DLNA_LIBRARIES: list[str] = [
-    x.strip() for x in _raw_exclude_dlna.split(",") if x.strip()
-]
-
 # ----------------------------------------------------
 # Umbrales de decisión para KEEP/DELETE
 # ----------------------------------------------------
@@ -227,7 +222,6 @@ _log_config_debug("DEBUG PLEX_PORT", PLEX_PORT)
 _log_config_debug("DEBUG dlna_PORT", dlna_PORT)
 _log_config_debug("DEBUG TOKEN", "****" if PLEX_TOKEN else None)
 _log_config_debug("DEBUG EXCLUDE_PLEX_LIBRARIES", EXCLUDE_PLEX_LIBRARIES)
-_log_config_debug("DEBUG EXCLUDE_DLNA_LIBRARIES", EXCLUDE_DLNA_LIBRARIES)
 _log_config_debug("DEBUG REPORTS_DIR", REPORTS_DIR)
 _log_config_debug("DEBUG REPORT_ALL_PATH", REPORT_ALL_PATH)
 _log_config_debug("DEBUG REPORT_FILTERED_PATH", REPORT_FILTERED_PATH)

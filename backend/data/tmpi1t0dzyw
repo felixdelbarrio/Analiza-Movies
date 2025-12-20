@@ -1,0 +1,2728 @@
+{
+  "schema": 3,
+  "language": "es",
+  "fallback_language": "en",
+  "items": [
+    {
+      "Title": "one hundred and one dalmatians",
+      "Year": "1961",
+      "imdbID": "tt0055254",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "101 dálmatas",
+        "wikipedia_pageid": 939743,
+        "wikibase_item": "Q165512",
+        "summary": "101 dálmatas es una película de animación estadounidense. Dirigida por Clyde Geronimi, Hamilton Luske y Wolfgang Reitherman, producida por Walt Disney y basada en la historia The Hundred and One Dalmatians de la escritora británica Dodie Smith, la película fue estrenada en los Estados Unidos el 25 de enero de 1961.",
+        "description": "película animada de 1961 dirigida por Hamilton Luske, Clyde Geronimi, y Wolfgang Reitherman",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/101_d%C3%A1lmatas",
+            "revisions": "https://es.wikipedia.org/wiki/101_d%C3%A1lmatas?action=history",
+            "edit": "https://es.wikipedia.org/wiki/101_d%C3%A1lmatas?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:101_d%C3%A1lmatas"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/101_d%C3%A1lmatas",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/101_d%C3%A1lmatas",
+            "edit": "https://es.wikipedia.org/wiki/101_d%C3%A1lmatas?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:101_d%C3%A1lmatas"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9d/101_Dalmatians_Logo.svg/langes-120px-101_Dalmatians_Logo.svg.png",
+            "width": 98,
+            "height": 54
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9d/101_Dalmatians_Logo.svg/langes-330px-101_Dalmatians_Logo.svg.png",
+            "width": 320,
+            "height": 176
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q165512",
+        "directors": [
+          "Q579241",
+          "Q926614",
+          "Q703588"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q842256",
+          "Q157443",
+          "Q319221",
+          "Q959790",
+          "Q130232",
+          "Q52162262",
+          "Q157394"
+        ]
+      }
+    },
+    {
+      "Title": "aladdin",
+      "Year": "1992",
+      "imdbID": "tt0103639",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Aladdín",
+        "wikipedia_pageid": 373047,
+        "wikibase_item": "Q215518",
+        "summary": "Aladdín es una película animada producida por Walt Disney Feature Animation y distribuida por Walt Disney Pictures. Es la trigésima primera película en el canon de Walt Disney Animation y se realizó en un período conocido como el Renacimiento de Disney. La película se montó bajo la dirección y producción de John Musker y Ron Clements, los guiones de Musker, Clements, Ted Elliot y Terry Rossio, y con Alan Menken como responsable de la banda sonora. Además, cuenta con un amplio reparto coral en el que participaron principalmente Scott Weinger, Robin Williams, Jonathan Freeman y Linda Larkin. El argumento de Aladdín está inspirado en la historia árabe Aladino, de la colección de cuentos populares Las mil y una noches, y en la película El ladrón de Bagdad (1940). Cuenta la historia de Aladdín, un joven de la calle que un día encuentra una lámpara mágica con un genio en su interior. Este último es capaz de concederle tres deseos, uno de los cuales es usado por el protagonista para disfrazarse como un príncipe adinerado con tal de impresionar a la princesa Jasmín, de quien se enamora.",
+        "description": "película animada estadounidense de 1992",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Aladd%C3%ADn",
+            "revisions": "https://es.wikipedia.org/wiki/Aladd%C3%ADn?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Aladd%C3%ADn?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Aladd%C3%ADn"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Aladd%C3%ADn",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Aladd%C3%ADn",
+            "edit": "https://es.wikipedia.org/wiki/Aladd%C3%ADn?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Aladd%C3%ADn"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/Aladdin-logo-2.svg/langes-960px-Aladdin-logo-2.svg.png",
+            "width": 512,
+            "height": 167
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/Aladdin-logo-2.svg/langes-330px-Aladdin-logo-2.svg.png",
+            "width": 320,
+            "height": 104
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q215518",
+        "directors": [
+          "Q735440",
+          "Q930209"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q842256",
+          "Q1637212",
+          "Q1957385"
+        ]
+      }
+    },
+    {
+      "Title": "alice in wonderland",
+      "Year": "1951",
+      "imdbID": "tt0043274",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Alicia en el país de las maravillas (película de 1951)",
+        "wikipedia_pageid": 503193,
+        "wikibase_item": "Q189875",
+        "summary": "Alicia en el país de las maravillas es el decimotercer título del canon de largometrajes animados de Disney. Basado en las célebres obras de Lewis Carroll Las aventuras de Alicia en el país de las maravillas y A través del espejo y lo que Alicia encontró allí, fue producido por Walt Disney para Walt Disney Productions, y se estrenó el 28 de julio de 1951, distribuido por RKO Pictures. En México se estrenó el 17 de enero de 1952 en el Cine Alameda. En España se estrenaría el 17 de abril de 1954 en los cines Palace y Pompeya de Madrid.",
+        "description": "película animada estadounidense de 1951",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Alicia_en_el_pa%C3%ADs_de_las_maravillas_(pel%C3%ADcula_de_1951)",
+            "revisions": "https://es.wikipedia.org/wiki/Alicia_en_el_pa%C3%ADs_de_las_maravillas_(pel%C3%ADcula_de_1951)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Alicia_en_el_pa%C3%ADs_de_las_maravillas_(pel%C3%ADcula_de_1951)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Alicia_en_el_pa%C3%ADs_de_las_maravillas_(pel%C3%ADcula_de_1951)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Alicia_en_el_pa%C3%ADs_de_las_maravillas_(pel%C3%ADcula_de_1951)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Alicia_en_el_pa%C3%ADs_de_las_maravillas_(pel%C3%ADcula_de_1951)",
+            "edit": "https://es.wikipedia.org/wiki/Alicia_en_el_pa%C3%ADs_de_las_maravillas_(pel%C3%ADcula_de_1951)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Alicia_en_el_pa%C3%ADs_de_las_maravillas_(pel%C3%ADcula_de_1951)"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/6/6d/Alice_in_wonderland_1951.jpg",
+            "width": 2892,
+            "height": 2160
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6d/Alice_in_wonderland_1951.jpg/330px-Alice_in_wonderland_1951.jpg",
+            "width": 320,
+            "height": 239
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q189875",
+        "directors": [
+          "Q579241",
+          "Q1385379",
+          "Q926614"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q157394",
+          "Q842256",
+          "Q319221",
+          "Q2143665",
+          "Q102429885"
+        ]
+      }
+    },
+    {
+      "Title": "anastasia",
+      "Year": "1997",
+      "imdbID": "tt0118617",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Anastasia (película de 1997)",
+        "wikipedia_pageid": 995905,
+        "wikibase_item": "Q486609",
+        "summary": "Anastasia es una película de animación estadounidense de 1997, producida por 20th Century Fox, la primera película producida por Fox Animation Studios, y dirigida por Don Bluth y Gary Goldman, exdirectores de animación de Disney, y con las voces de Meg Ryan, John Cusack, Kelsey Grammer, Christopher Lloyd, Hank Azaria y Angela Lansbury. La película es una adaptación de la leyenda de la Gran Duquesa Anastasia Nikoláyevna de Rusia, según la cual, ella logró escapar de la ejecución de su familia. El argumento, que gira en torno a una joven huérfana y amnésica de 18 años llamada Anya que, intentando encontrar a su familia, se une a dos timadores que pretenden aprovecharse de su parecido con la Gran Duquesa, es el mismo que el de la película homónima dirigida por Anatole Litvak en 1956, a su vez basada en una obra de teatro escrita por Marcelle Mauriette, inspirada en la historia de Anna Anderson, la más famosa de las impostoras que afirmaron ser la verdadera Anastasia.",
+        "description": "película de animación de 1997 dirigida por Don Bluth y Gary Goldman",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Anastasia_(pel%C3%ADcula_de_1997)",
+            "revisions": "https://es.wikipedia.org/wiki/Anastasia_(pel%C3%ADcula_de_1997)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Anastasia_(pel%C3%ADcula_de_1997)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Anastasia_(pel%C3%ADcula_de_1997)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Anastasia_(pel%C3%ADcula_de_1997)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Anastasia_(pel%C3%ADcula_de_1997)",
+            "edit": "https://es.wikipedia.org/wiki/Anastasia_(pel%C3%ADcula_de_1997)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Anastasia_(pel%C3%ADcula_de_1997)"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q486609",
+        "directors": [
+          "Q448957",
+          "Q667959"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q859369",
+          "Q842256",
+          "Q1361932",
+          "Q202866",
+          "Q130232",
+          "Q157394"
+        ]
+      }
+    },
+    {
+      "Title": "asterix le domaine des dieux",
+      "Year": "2014",
+      "imdbID": "tt3759416",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "en",
+        "wikipedia_title": "Asterix: The Mansions of the Gods",
+        "wikipedia_pageid": 44191736,
+        "wikibase_item": "Q17154837",
+        "summary": "Asterix: The Mansions of the Gods, also titled Asterix and Obelix: Mansion of the Gods, is a 2014 animated adventure family comedy film directed by Louis Clichy with a story written and co-directed by Alexandre Astier. The film features the voices of Roger Carel, Guillaume Briat, Lionnel Astier, Serge Papagalli, and Florence Foresti. The film was Carel's last film before his retirement in 2014 and later death in 2020. It was the first Asterix film animated in 3D.",
+        "description": "2014 French animated film",
+        "urls": {
+          "desktop": {
+            "page": "https://en.wikipedia.org/wiki/Asterix%3A_The_Mansions_of_the_Gods",
+            "revisions": "https://en.wikipedia.org/wiki/Asterix%3A_The_Mansions_of_the_Gods?action=history",
+            "edit": "https://en.wikipedia.org/wiki/Asterix%3A_The_Mansions_of_the_Gods?action=edit",
+            "talk": "https://en.wikipedia.org/wiki/Talk:Asterix%3A_The_Mansions_of_the_Gods"
+          },
+          "mobile": {
+            "page": "https://en.wikipedia.org/wiki/Asterix%3A_The_Mansions_of_the_Gods",
+            "revisions": "https://en.wikipedia.org/wiki/Special:History/Asterix%3A_The_Mansions_of_the_Gods",
+            "edit": "https://en.wikipedia.org/wiki/Asterix%3A_The_Mansions_of_the_Gods?action=edit",
+            "talk": "https://en.wikipedia.org/wiki/Talk:Asterix%3A_The_Mansions_of_the_Gods"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/en/2/23/Ast%C3%A9rix_-_Le_Domaine_des_dieux_poster.jpg",
+            "width": 273,
+            "height": 364
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/en/2/23/Ast%C3%A9rix_-_Le_Domaine_des_dieux_poster.jpg",
+            "width": 273,
+            "height": 364
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q17154837",
+        "directors": [
+          "Q2833411",
+          "Q61875074"
+        ],
+        "countries": [
+          "Q142",
+          "Q31"
+        ],
+        "genres": [
+          "Q319221",
+          "Q157443",
+          "Q2143665"
+        ]
+      }
+    },
+    {
+      "Title": "atlantis the lost empire",
+      "Year": "2001",
+      "imdbID": "tt0230011",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Atlantis: El imperio perdido",
+        "wikipedia_pageid": 396901,
+        "wikibase_item": "Q318975",
+        "summary": "Atlantis: El imperio perdido es una película animada estadounidense de 2001, perteneciente a los géneros de ciencia ficción fantástica, acción y aventura y creada por Walt Disney Animation Studios. Fue la primera película de ciencia ficción dentro del canon de Walt Disney Animation y la número 41 en total. Escrita por Tab Murphy, dirigida por Gary Trousdale y Kirk Wise, y producida por Don Hahn, el largometraje contó con las voces de Michael J. Fox, Cree Summer, James Garner, Leonard Nimoy, Don Novello, Phil Morris, Claudia Christian, Jacqueline Obradors, Jim Varney, Florence Stanley, John Mahoney, David Ogden Stiers y Corey Burton. Ambientada en 1914, cuenta la historia de un joven que obtiene un libro sagrado con el que guía a un grupo de mercenarios a la ciudad perdida de Atlántida.",
+        "description": "película animada de 2001 dirigida por Gary Trousdale y Kirk Wise",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Atlantis%3A_El_imperio_perdido",
+            "revisions": "https://es.wikipedia.org/wiki/Atlantis%3A_El_imperio_perdido?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Atlantis%3A_El_imperio_perdido?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Atlantis%3A_El_imperio_perdido"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Atlantis%3A_El_imperio_perdido",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Atlantis%3A_El_imperio_perdido",
+            "edit": "https://es.wikipedia.org/wiki/Atlantis%3A_El_imperio_perdido?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Atlantis%3A_El_imperio_perdido"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q318975",
+        "directors": [
+          "Q1152051",
+          "Q1073959"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q471839",
+          "Q157394",
+          "Q319221",
+          "Q102429885",
+          "Q130232",
+          "Q188473"
+        ]
+      }
+    },
+    {
+      "Title": "bambi",
+      "Year": "1942",
+      "imdbID": "tt0034492",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Bambi",
+        "wikipedia_pageid": 181797,
+        "wikibase_item": "Q43051",
+        "summary": "Bambi es una película de animación en color dirigida por David Hand, producida por Walt Disney Productions, distribuida por la compañía RKO Radio Pictures y estrenada en Estados Unidos el 21 de agosto de 1942. La película relata la historia, desde el nacimiento hasta la etapa adulta, de un ciervo de Virginia llamado Bambi. El ciervo de Virginia es una especie norteamericana, relativamente bien conocida por el público al que se dirigía Disney en 1942, pero en la obra literaria en la que se basa la película, Bambi es un Corzo, una especie de ciervo común en Europa central.",
+        "description": "película animada estadounidense de 1942",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Bambi",
+            "revisions": "https://es.wikipedia.org/wiki/Bambi?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Bambi?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Bambi"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Bambi",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Bambi",
+            "edit": "https://es.wikipedia.org/wiki/Bambi?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Bambi"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/7/76/TheBambilogo.png",
+            "width": 1920,
+            "height": 1080
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/76/TheBambilogo.png/330px-TheBambilogo.png",
+            "width": 320,
+            "height": 180
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q43051",
+        "directors": [
+          "Q928976",
+          "Q715807",
+          "Q2903332",
+          "Q6247507",
+          "Q3471034",
+          "Q28439679",
+          "Q3113248"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q842256",
+          "Q102429885",
+          "Q2143665",
+          "Q157394",
+          "Q130232"
+        ]
+      }
+    },
+    {
+      "Title": "the great mouse detective",
+      "Year": "1986",
+      "imdbID": "tt0091149",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "The Great Mouse Detective",
+        "wikipedia_pageid": 1423824,
+        "wikibase_item": "Q334132",
+        "summary": "The Great Mouse Detective es un largometraje animado de Walt Disney Pictures, vigésimo sexto título del canon de Walt Disney Animation. Basado en el libro infantil Basil of Baker Street, escrito por Eve Titus, se estrenó en cines el 2 de julio de 1986.",
+        "description": "película animada de 1986 dirigida por John Musker, David Michener, Ron Clements y Burny Mattinson",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/The_Great_Mouse_Detective",
+            "revisions": "https://es.wikipedia.org/wiki/The_Great_Mouse_Detective?action=history",
+            "edit": "https://es.wikipedia.org/wiki/The_Great_Mouse_Detective?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Great_Mouse_Detective"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/The_Great_Mouse_Detective",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/The_Great_Mouse_Detective",
+            "edit": "https://es.wikipedia.org/wiki/The_Great_Mouse_Detective?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Great_Mouse_Detective"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q334132",
+        "directors": [
+          "Q930209",
+          "Q2928589",
+          "Q735440",
+          "Q16546380"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q842256",
+          "Q1200678",
+          "Q319221",
+          "Q1361932",
+          "Q25533274",
+          "Q157443"
+        ]
+      }
+    },
+    {
+      "Title": "snow white and the seven dwarfs",
+      "Year": "1937",
+      "imdbID": "tt0029583",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Snow White and the Seven Dwarfs",
+        "wikipedia_pageid": 5710,
+        "wikibase_item": "Q134430",
+        "summary": "Snow White and the Seven Dwarfs es el primer largometraje de animación producido por Walt Disney y el primero incluido en el canon de Clásicos de Walt Disney. Se estrenó el 21 de diciembre de 1937 en el Carthay Circle Theatre de Hollywood. La película es una adaptación del cuento de hadas homónimo que publicaron los hermanos Grimm en 1812, una historia profundamente arraigada en las tradiciones europeas.",
+        "description": "película animada estadounidense de 1937",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Snow_White_and_the_Seven_Dwarfs",
+            "revisions": "https://es.wikipedia.org/wiki/Snow_White_and_the_Seven_Dwarfs?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Snow_White_and_the_Seven_Dwarfs?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Snow_White_and_the_Seven_Dwarfs"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Snow_White_and_the_Seven_Dwarfs",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Snow_White_and_the_Seven_Dwarfs",
+            "edit": "https://es.wikipedia.org/wiki/Snow_White_and_the_Seven_Dwarfs?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Snow_White_and_the_Seven_Dwarfs"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/b/b0/Snow_white_1937_trailer_screenshot.jpg",
+            "width": 720,
+            "height": 576
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b0/Snow_white_1937_trailer_screenshot.jpg/330px-Snow_white_1937_trailer_screenshot.jpg",
+            "width": 320,
+            "height": 256
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q134430",
+        "directors": [
+          "Q928976",
+          "Q1758110",
+          "Q1385379",
+          "Q3218086",
+          "Q3375098",
+          "Q2549739"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q1054574",
+          "Q157394",
+          "Q842256",
+          "Q1957385"
+        ]
+      }
+    },
+    {
+      "Title": "dumbo",
+      "Year": "1941",
+      "imdbID": "tt0033563",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Dumbo (película de 1941)",
+        "wikipedia_pageid": 422281,
+        "wikibase_item": "Q40895",
+        "summary": "Dumbo es un largometraje animado de Walt Disney Pictures. Basado en el libro para niños homónimo de Helen Aberson e ilustrado por Harold Pearl, Dumbo fue producido por Walt Disney. Es el Cuarto largometraje animado de Disney y estrenado el 23 de octubre de 1941 por RKO Radio Pictures.",
+        "description": "película animada estadounidense de 1941 dirigida por Ben Sharpsteen",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Dumbo_(pel%C3%ADcula_de_1941)",
+            "revisions": "https://es.wikipedia.org/wiki/Dumbo_(pel%C3%ADcula_de_1941)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Dumbo_(pel%C3%ADcula_de_1941)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Dumbo_(pel%C3%ADcula_de_1941)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Dumbo_(pel%C3%ADcula_de_1941)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Dumbo_(pel%C3%ADcula_de_1941)",
+            "edit": "https://es.wikipedia.org/wiki/Dumbo_(pel%C3%ADcula_de_1941)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Dumbo_(pel%C3%ADcula_de_1941)"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/2/2d/Dumbo_1.jpg",
+            "width": 480,
+            "height": 360
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2d/Dumbo_1.jpg/330px-Dumbo_1.jpg",
+            "width": 320,
+            "height": 240
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q40895",
+        "directors": [
+          "Q2549739",
+          "Q280187",
+          "Q1385379",
+          "Q2903332",
+          "Q3157236",
+          "Q3471034"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q663106",
+          "Q842256",
+          "Q52162262",
+          "Q157394",
+          "Q1361932",
+          "Q2743",
+          "Q191489"
+        ]
+      }
+    },
+    {
+      "Title": "the reluctant dragon",
+      "Year": "1941",
+      "imdbID": "tt0034091",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "El dragón chiflado",
+        "wikipedia_pageid": 3240048,
+        "wikibase_item": "Q175607",
+        "summary": "El dragón chiflado es una película que combina secuencias animadas con secuencias rodadas en imagen real. Producida por Walt Disney Productions, El dragón chiflado fue dirigida por Alfred Werker y distribuida por primera vez en salas por RKO Radio Pictures el 20 de junio de 1941. Esencialmente, se trata de una vuelta por las entonces nuevas instalaciones de Walt Disney Studios en Burbank, California. El reparto incluyó al comediante radiofónico Robert Benchley, así como a muchos otros empleados de Disney tales como Ward Kimball, Fred Moore, Norman Ferguson, Clarence Nash, e incluso Walt Disney, todos ellos interpretándose a sí mismos.",
+        "description": "película de 1941 dirigida por Alfred L. Werker y Hamilton Luske",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/El_drag%C3%B3n_chiflado",
+            "revisions": "https://es.wikipedia.org/wiki/El_drag%C3%B3n_chiflado?action=history",
+            "edit": "https://es.wikipedia.org/wiki/El_drag%C3%B3n_chiflado?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_drag%C3%B3n_chiflado"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/El_drag%C3%B3n_chiflado",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/El_drag%C3%B3n_chiflado",
+            "edit": "https://es.wikipedia.org/wiki/El_drag%C3%B3n_chiflado?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_drag%C3%B3n_chiflado"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q175607",
+        "directors": [
+          "Q926614",
+          "Q1994999",
+          "Q28109065",
+          "Q28109058",
+          "Q3057569",
+          "Q3163024"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q336144"
+        ]
+      }
+    },
+    {
+      "Title": "the iron giant",
+      "Year": "1999",
+      "imdbID": "tt0129167",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "El gigante de hierro",
+        "wikipedia_pageid": 1069483,
+        "wikibase_item": "Q867283",
+        "summary": "El gigante de hierro es una película de animación de ciencia ficción, dirigida por Brad Bird para la división de animación de Warner Bros. Se basa en la novela El hombre de hierro del escritor británico Ted Hughes y su guion fue redactado por Tim McCanlies a partir de un tratamiento de la historia del propio Bird. Los personajes principales tienen las voces de Eli Marienthal, Christopher McDonald, Jennifer Aniston, Harry Connick, Jr., John Mahoney y Vin Diesel. Ambientada en 1957, en plena Guerra Fría, la película trata sobre un niño llamado Hogarth Hughes que descubre y entabla amistad con un robot gigante que ha caído del espacio. Con la ayuda del artista Dean McCoppin, intentan evitar que el Ejército de los Estados Unidos y Kent Mansley, un paranoico agente del FBI, encuentren y destruyan al gigante.",
+        "description": "película de 1999 dirigida por Brad Bird",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/El_gigante_de_hierro",
+            "revisions": "https://es.wikipedia.org/wiki/El_gigante_de_hierro?action=history",
+            "edit": "https://es.wikipedia.org/wiki/El_gigante_de_hierro?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_gigante_de_hierro"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/El_gigante_de_hierro",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/El_gigante_de_hierro",
+            "edit": "https://es.wikipedia.org/wiki/El_gigante_de_hierro?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_gigante_de_hierro"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/2/29/Iron_Giant_MultiVersus.png",
+            "width": 744,
+            "height": 657
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/29/Iron_Giant_MultiVersus.png/330px-Iron_Giant_MultiVersus.png",
+            "width": 320,
+            "height": 283
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q867283",
+        "directors": [
+          "Q310960"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q188473",
+          "Q471839",
+          "Q859369",
+          "Q157394",
+          "Q2143665",
+          "Q52207399",
+          "Q130232",
+          "Q319221"
+        ]
+      }
+    },
+    {
+      "Title": "the hunchback of notre dame",
+      "Year": "1996",
+      "imdbID": "tt0116583",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "El jorobado de Notre Dame (película de 1996)",
+        "wikipedia_pageid": 382690,
+        "wikibase_item": "Q213787",
+        "summary": "El jorobado de Notre Dame conocida como una película de animación dirigida por Gary Trousdale y Kirk Wise, producida por Walt Disney Pictures y Walt Disney Feature Animation, y estrenada el 21 de junio de 1996. La película es una adaptación de la obra literaria francesa Nuestra Señora de París, escrita por Victor Hugo. Es la 34.ª película en el canon de Walt Disney Animation y se realizó en un período conocido como el Renacimiento de Disney.",
+        "description": "película animada de 1996 dirigida por Gary Trousdale y Kirk Wise",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/El_jorobado_de_Notre_Dame_(pel%C3%ADcula_de_1996)",
+            "revisions": "https://es.wikipedia.org/wiki/El_jorobado_de_Notre_Dame_(pel%C3%ADcula_de_1996)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/El_jorobado_de_Notre_Dame_(pel%C3%ADcula_de_1996)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_jorobado_de_Notre_Dame_(pel%C3%ADcula_de_1996)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/El_jorobado_de_Notre_Dame_(pel%C3%ADcula_de_1996)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/El_jorobado_de_Notre_Dame_(pel%C3%ADcula_de_1996)",
+            "edit": "https://es.wikipedia.org/wiki/El_jorobado_de_Notre_Dame_(pel%C3%ADcula_de_1996)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_jorobado_de_Notre_Dame_(pel%C3%ADcula_de_1996)"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/d/d5/Disney%27s_The_Hunchback_of_Notre_Dame_logo.png",
+            "width": 800,
+            "height": 310
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d5/Disney%27s_The_Hunchback_of_Notre_Dame_logo.png/330px-Disney%27s_The_Hunchback_of_Notre_Dame_logo.png",
+            "width": 320,
+            "height": 124
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q213787",
+        "directors": [
+          "Q1152051",
+          "Q1073959"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q663106",
+          "Q842256",
+          "Q859369",
+          "Q52162262",
+          "Q157394",
+          "Q130232"
+        ]
+      }
+    },
+    {
+      "Title": "treasure planet",
+      "Year": "2002",
+      "imdbID": "tt0133240",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "El planeta del tesoro",
+        "wikipedia_pageid": 393045,
+        "wikibase_item": "Q392530",
+        "summary": "El planeta del tesoro es una película animada de acción y aventuras de ciencia ficción estadounidense de 2002 producida por Walt Disney Feature Animation y distribuida por Walt Disney Pictures. Es una adaptación de ciencia ficción de la novela de aventuras La isla del tesoro (1883) de Robert Louis Stevenson, y es la tercera versión de la historia en un entorno espacial, después de la película búlgara Treasure Planet (1982) y la miniserie italiana Treasure Island in Outer Space (1987). Es la tercera adaptación de Disney de la novela, después de Treasure Island (1950) y Muppet Treasure Island (1996). En el escenario de la película, las naves espaciales funcionan con velas solares y se parecen a los veleros del siglo XVIII de La isla del tesoro original.",
+        "description": "película animada estadounidense de ciencia ficción fantástica de 2002",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/El_planeta_del_tesoro",
+            "revisions": "https://es.wikipedia.org/wiki/El_planeta_del_tesoro?action=history",
+            "edit": "https://es.wikipedia.org/wiki/El_planeta_del_tesoro?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_planeta_del_tesoro"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/El_planeta_del_tesoro",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/El_planeta_del_tesoro",
+            "edit": "https://es.wikipedia.org/wiki/El_planeta_del_tesoro?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_planeta_del_tesoro"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q392530",
+        "directors": [
+          "Q735440",
+          "Q930209"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q471839",
+          "Q21401869",
+          "Q22981906",
+          "Q52162262",
+          "Q2143665",
+          "Q28968511",
+          "Q468478",
+          "Q2096633",
+          "Q188473",
+          "Q319221"
+        ]
+      }
+    },
+    {
+      "Title": "the prince of egypt",
+      "Year": "1998",
+      "imdbID": "tt0120794",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "El príncipe de Egipto",
+        "wikipedia_pageid": 369922,
+        "wikibase_item": "Q245227",
+        "summary": "El príncipe de Egipto es una película musical de animación de 1998, siendo la primera de 5 películas de animación tradicional producida por DreamWorks Animation, siendo su segunda película en general después de Antz, y la segunda película animada distribuida por DreamWorks Pictures. La película es una adaptación del Libro del Éxodo y sigue la vida de Moisés desde que era un príncipe de Egipto hasta su destino final dirigiendo la salida de los esclavos hebreos de Egipto. La película fue dirigida por Brenda Chapman, Simon Wells y Steve Hickner. Hans Zimmer compuso la banda sonora y Stephen Schwartz escribió las canciones de la película. El reparto de voces incluyó una serie de importantes actores de Hollywood en los papeles hablados, mientras que cantantes profesionales los sustituyeron en las canciones. Las excepciones fueron Michelle Pfeiffer, Ralph Fiennes, Ofra Haza, Steve Martin, y Martin Short, quienes cantaron sus propias partes.",
+        "description": "película animada de 1998",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/El_pr%C3%ADncipe_de_Egipto",
+            "revisions": "https://es.wikipedia.org/wiki/El_pr%C3%ADncipe_de_Egipto?action=history",
+            "edit": "https://es.wikipedia.org/wiki/El_pr%C3%ADncipe_de_Egipto?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_pr%C3%ADncipe_de_Egipto"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/El_pr%C3%ADncipe_de_Egipto",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/El_pr%C3%ADncipe_de_Egipto",
+            "edit": "https://es.wikipedia.org/wiki/El_pr%C3%ADncipe_de_Egipto?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_pr%C3%ADncipe_de_Egipto"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q245227",
+        "directors": [
+          "Q27419",
+          "Q429715",
+          "Q3498952"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q842256",
+          "Q102429885",
+          "Q130232",
+          "Q1054574",
+          "Q319221",
+          "Q1433443"
+        ]
+      }
+    },
+    {
+      "Title": "the lion king",
+      "Year": "1994",
+      "imdbID": "tt0110357",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "El rey león",
+        "wikipedia_pageid": 320492,
+        "wikibase_item": "Q36479",
+        "summary": "El rey león es una película animada producida por Walt Disney Studios y distribuida por Walt Disney Pictures. Es la trigésima segunda película en el canon de Walt Disney Animation y se realizó en un período conocido como el Renacimiento de Disney. La película se realizó bajo la dirección de Rob Minkoff y Roger Allers, el productor Don Hahn, los guiones de Irene Mecchi, Jonathan Roberts y Linda Woolverton, y con Hans Zimmer, Elton John y Tim Rice como encargados de la banda sonora.",
+        "description": "película animada de 1994 dirigida por Roger Allers y Rob Minkoff",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/El_rey_le%C3%B3n",
+            "revisions": "https://es.wikipedia.org/wiki/El_rey_le%C3%B3n?action=history",
+            "edit": "https://es.wikipedia.org/wiki/El_rey_le%C3%B3n?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_rey_le%C3%B3n"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/El_rey_le%C3%B3n",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/El_rey_le%C3%B3n",
+            "edit": "https://es.wikipedia.org/wiki/El_rey_le%C3%B3n?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_rey_le%C3%B3n"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q36479",
+        "directors": [
+          "Q847468",
+          "Q1151111"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q842256",
+          "Q130232",
+          "Q319221",
+          "Q1361932"
+        ]
+      }
+    },
+    {
+      "Title": "the lion king ii simba s pride",
+      "Year": "1998",
+      "imdbID": "tt0120131",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "The Lion King II: Simba's Pride",
+        "wikipedia_pageid": 251395,
+        "wikibase_item": "Q191803",
+        "summary": "The Lion King II: Simba's Pride es un largometraje de animación de 1998 dirigido por Darrell Rooney y escrito por Flip Kobler y Cindy Marcus. Es la secuela de El rey león (1994) y la segunda entrega de la trilogía animada de El rey león. Su trama está influenciada en Romeo y Julieta, la famosa obra de teatro clásica de William Shakespeare según el propio Rooney, el borrador final se convirtió en una variación de la obra del propio Shakespeare.",
+        "description": "película animada de 1998 dirigida por Darrell Rooney",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/The_Lion_King_II%3A_Simba's_Pride",
+            "revisions": "https://es.wikipedia.org/wiki/The_Lion_King_II%3A_Simba's_Pride?action=history",
+            "edit": "https://es.wikipedia.org/wiki/The_Lion_King_II%3A_Simba's_Pride?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Lion_King_II%3A_Simba's_Pride"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/The_Lion_King_II%3A_Simba's_Pride",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/The_Lion_King_II%3A_Simba's_Pride",
+            "edit": "https://es.wikipedia.org/wiki/The_Lion_King_II%3A_Simba's_Pride?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Lion_King_II%3A_Simba's_Pride"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/78/The_Lion_King_2_Simba%27s_Pride_logo.svg/langes-330px-The_Lion_King_2_Simba%27s_Pride_logo.svg.png",
+            "width": 300,
+            "height": 132
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/78/The_Lion_King_2_Simba%27s_Pride_logo.svg/langes-330px-The_Lion_King_2_Simba%27s_Pride_logo.svg.png",
+            "width": 320,
+            "height": 141
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q191803",
+        "directors": [
+          "Q3016482"
+        ],
+        "countries": [
+          "Q30",
+          "Q408"
+        ],
+        "genres": [
+          "Q102429885",
+          "Q1054574",
+          "Q842256"
+        ]
+      }
+    },
+    {
+      "Title": "the lion king 11 2",
+      "Year": "2004",
+      "imdbID": "tt0318403",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "El rey león 3: Hakuna Matata",
+        "wikipedia_pageid": 828995,
+        "wikibase_item": "Q223217",
+        "summary": "El rey león 3: Hakuna Matata es un largometraje de animación producido por DisneyToon Studios y lanzado directamente para vídeo en 2004. La película está dirigida por Bradley Raymond, producida por George A. Mendoza y Jason Van Borssum, con un guion de Tom Rogers y música a cargo de Don Harper. Las voces de la versión original están interpretadas, entre otros, por Nathan Lane, Ernie Sabella y Matthew Broderick. Es una paracuela de El rey león (1994), desde el punto de vista de Timón y Pumba, quienes siempre estuvieron presentes en todos los hechos que ocurrieron, durante la misma.",
+        "description": "película animada de 2004 dirigida por Bradley Raymond",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/El_rey_le%C3%B3n_3%3A_Hakuna_Matata",
+            "revisions": "https://es.wikipedia.org/wiki/El_rey_le%C3%B3n_3%3A_Hakuna_Matata?action=history",
+            "edit": "https://es.wikipedia.org/wiki/El_rey_le%C3%B3n_3%3A_Hakuna_Matata?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_rey_le%C3%B3n_3%3A_Hakuna_Matata"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/El_rey_le%C3%B3n_3%3A_Hakuna_Matata",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/El_rey_le%C3%B3n_3%3A_Hakuna_Matata",
+            "edit": "https://es.wikipedia.org/wiki/El_rey_le%C3%B3n_3%3A_Hakuna_Matata?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_rey_le%C3%B3n_3%3A_Hakuna_Matata"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d4/The_Lion_King_1%C2%BD_logo.svg/langes-330px-The_Lion_King_1%C2%BD_logo.svg.png",
+            "width": 300,
+            "height": 107
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d4/The_Lion_King_1%C2%BD_logo.svg/langes-330px-The_Lion_King_1%C2%BD_logo.svg.png",
+            "width": 320,
+            "height": 114
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q223217",
+        "directors": [
+          "Q3174628"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q663106",
+          "Q842256",
+          "Q157443"
+        ]
+      }
+    },
+    {
+      "Title": "the secret of kells",
+      "Year": "2009",
+      "imdbID": "tt0485601",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "El secreto del libro de Kells",
+        "wikipedia_pageid": 4142591,
+        "wikibase_item": "Q908816",
+        "summary": "El secreto del libro de Kells es una película animada de coproducción irlandesa, francesa y belga, realizada por la empresa de animación irlandesa Cartoon Saloon, dirigida por Tomm Moore y Nora Twomey y estrenada el 8 de febrero de 2009 en el Festival Internacional de Cine de Berlín. El 2 de febrero de 2010, fue nominada a los Premios Óscar dentro de la categoría de mejor película de animación del año 2009.",
+        "description": "película de animación de 2009",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/El_secreto_del_libro_de_Kells",
+            "revisions": "https://es.wikipedia.org/wiki/El_secreto_del_libro_de_Kells?action=history",
+            "edit": "https://es.wikipedia.org/wiki/El_secreto_del_libro_de_Kells?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_secreto_del_libro_de_Kells"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/El_secreto_del_libro_de_Kells",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/El_secreto_del_libro_de_Kells",
+            "edit": "https://es.wikipedia.org/wiki/El_secreto_del_libro_de_Kells?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_secreto_del_libro_de_Kells"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q908816",
+        "directors": [
+          "Q981857",
+          "Q15438228"
+        ],
+        "countries": [
+          "Q142",
+          "Q31",
+          "Q27"
+        ],
+        "genres": [
+          "Q157394",
+          "Q319221",
+          "Q2143665",
+          "Q130232"
+        ]
+      }
+    },
+    {
+      "Title": "the land before time",
+      "Year": "1988",
+      "imdbID": "tt0095489",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "The Land Before Time",
+        "wikipedia_pageid": 2797016,
+        "wikibase_item": "Q192403",
+        "summary": "The Land Before Time es una película estadounidense de animación estrenada en Estados Unidos el 18 de noviembre de 1988, dirigida por Don Bluth, producida por Universal Studios, Amblin Entertainment y Lucasfilm, contando con Steven Spielberg, George Lucas, Kathleen Kennedy y Frank Marshall como productores ejecutivos. Es destacable la banda sonora compuesta por James Horner, así como la interpretación del tema \"If We Hold On Together\", tema final de la película, por Diana Ross.",
+        "description": "película de 1988 dirigida por Don Bluth",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/The_Land_Before_Time",
+            "revisions": "https://es.wikipedia.org/wiki/The_Land_Before_Time?action=history",
+            "edit": "https://es.wikipedia.org/wiki/The_Land_Before_Time?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Land_Before_Time"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/The_Land_Before_Time",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/The_Land_Before_Time",
+            "edit": "https://es.wikipedia.org/wiki/The_Land_Before_Time?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Land_Before_Time"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q192403",
+        "directors": [
+          "Q448957"
+        ],
+        "countries": [
+          "Q30",
+          "Q27"
+        ],
+        "genres": [
+          "Q1361932",
+          "Q102429885",
+          "Q319221",
+          "Q663106",
+          "Q130232"
+        ]
+      }
+    },
+    {
+      "Title": "lauras stern",
+      "Year": "2004",
+      "imdbID": "tt0416908",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "La estrella de Laura",
+        "wikipedia_pageid": 1512547,
+        "wikibase_item": "Q329603",
+        "summary": "La estrella de Laura es un largometraje animado realizado y producido por Thilo Rothkirch y Piet De Rycker. Fue lanzado originalmente a los cines en septiembre de 2004 en Alemania, por Warner Bros. Se basa en el libro para niños Lauras Stern, de Klaus Baumgart.",
+        "description": "película de 2004",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/La_estrella_de_Laura",
+            "revisions": "https://es.wikipedia.org/wiki/La_estrella_de_Laura?action=history",
+            "edit": "https://es.wikipedia.org/wiki/La_estrella_de_Laura?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_estrella_de_Laura"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/La_estrella_de_Laura",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/La_estrella_de_Laura",
+            "edit": "https://es.wikipedia.org/wiki/La_estrella_de_Laura?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_estrella_de_Laura"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q329603",
+        "directors": [
+          "Q17338737",
+          "Q57581079",
+          "Q95778420",
+          "Q95778554"
+        ],
+        "countries": [
+          "Q183"
+        ],
+        "genres": [
+          "Q1361932"
+        ]
+      }
+    },
+    {
+      "Title": "fantasia",
+      "Year": "1940",
+      "imdbID": "tt0032455",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Fantasía (película)",
+        "wikipedia_pageid": 60827,
+        "wikibase_item": "Q943192",
+        "summary": "Fantasía es una película de antología musical animada estadounidense de 1940 producida y estrenada por Walt Disney Animation Studios, con la dirección de la historia a cargo de Joe Grant y Dick Huemer y la supervisión de producción de Walt Disney y Ben Sharpsteen. Es el tercer largometraje animado de Disney y consta de ocho segmentos animados con piezas de música clásica dirigidas por Leopold Stokowski, siete de los cuales son interpretados por la Orquesta de Filadelfia. El crítico musical y compositor Deems Taylor actúa como maestro de ceremonias, quien presenta cada segmento en acción en vivo.",
+        "description": "película animada estadounidense de 1940",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Fantas%C3%ADa_(pel%C3%ADcula)",
+            "revisions": "https://es.wikipedia.org/wiki/Fantas%C3%ADa_(pel%C3%ADcula)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Fantas%C3%ADa_(pel%C3%ADcula)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Fantas%C3%ADa_(pel%C3%ADcula)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Fantas%C3%ADa_(pel%C3%ADcula)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Fantas%C3%ADa_(pel%C3%ADcula)",
+            "edit": "https://es.wikipedia.org/wiki/Fantas%C3%ADa_(pel%C3%ADcula)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Fantas%C3%ADa_(pel%C3%ADcula)"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/0/09/Fantasia_theatrical_trailer.png",
+            "width": 629,
+            "height": 480
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/Fantasia_theatrical_trailer.png/330px-Fantasia_theatrical_trailer.png",
+            "width": 320,
+            "height": 244
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q943192",
+        "directors": [
+          "Q715807",
+          "Q3471034",
+          "Q28109058",
+          "Q280187",
+          "Q28109065",
+          "Q3525855",
+          "Q1385379",
+          "Q926614",
+          "Q2903332",
+          "Q28439679",
+          "Q3077064",
+          "Q2549739"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q842256",
+          "Q157394",
+          "Q25110269",
+          "Q2118696",
+          "Q870889"
+        ]
+      }
+    },
+    {
+      "Title": "hercules",
+      "Year": "1997",
+      "imdbID": "tt0119282",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Hércules (película de 1997)",
+        "wikipedia_pageid": 327567,
+        "wikibase_item": "Q271189",
+        "summary": "Hércules es una película animada dirigida por John Musker y Ron Clements, producida por Walt Disney Feature Animation y estrenada en 1997 durante el denominado «Renacimiento de Disney». Su trama sigue las andanzas mitológicas de Heracles, un semidiós con superfuerza e hijo de Zeus, que debe aprender a convertirse en un verdadero héroe para recuperar su divinidad y un lugar en el Olimpo, mientras que su tío, Hades, planea su apoderarse de este.",
+        "description": "película animada de 1997 dirigida por Ron Clements y John Musker",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/H%C3%A9rcules_(pel%C3%ADcula_de_1997)",
+            "revisions": "https://es.wikipedia.org/wiki/H%C3%A9rcules_(pel%C3%ADcula_de_1997)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/H%C3%A9rcules_(pel%C3%ADcula_de_1997)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:H%C3%A9rcules_(pel%C3%ADcula_de_1997)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/H%C3%A9rcules_(pel%C3%ADcula_de_1997)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/H%C3%A9rcules_(pel%C3%ADcula_de_1997)",
+            "edit": "https://es.wikipedia.org/wiki/H%C3%A9rcules_(pel%C3%ADcula_de_1997)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:H%C3%A9rcules_(pel%C3%ADcula_de_1997)"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q271189",
+        "directors": [
+          "Q735440",
+          "Q930209"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q1637212",
+          "Q842256",
+          "Q2143665",
+          "Q1433443"
+        ]
+      }
+    },
+    {
+      "Title": "brother bear",
+      "Year": "2003",
+      "imdbID": "tt0328880",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Brother Bear",
+        "wikipedia_pageid": 353161,
+        "wikibase_item": "Q215365",
+        "summary": "Brother Bear es una película animada de Walt Disney Feature Animation dirigida por Aaron Blaise y Robert Walker. Fue estrenada el 7 de noviembre de 2003. Es la 44.ª película dentro del canon de Walt Disney Animation.",
+        "description": "película animada de 2003 dirigida por Robert Walker y Aaron Blaise",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Brother_Bear",
+            "revisions": "https://es.wikipedia.org/wiki/Brother_Bear?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Brother_Bear?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Brother_Bear"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Brother_Bear",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Brother_Bear",
+            "edit": "https://es.wikipedia.org/wiki/Brother_Bear?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Brother_Bear"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/be/Brother_Bear_logo.svg/langes-330px-Brother_Bear_logo.svg.png",
+            "width": 300,
+            "height": 240
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/be/Brother_Bear_logo.svg/langes-330px-Brother_Bear_logo.svg.png",
+            "width": 320,
+            "height": 256
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q215365",
+        "directors": [
+          "Q19822599",
+          "Q22115062"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q157394",
+          "Q663106",
+          "Q2143665",
+          "Q102429885",
+          "Q157443",
+          "Q130232",
+          "Q1361932",
+          "Q859369",
+          "Q842256"
+        ]
+      }
+    },
+    {
+      "Title": "curious george",
+      "Year": "2006",
+      "imdbID": "tt0381971",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Jorge el curioso (película)",
+        "wikipedia_pageid": 4637895,
+        "wikibase_item": "Q1753443",
+        "summary": "Jorge el curioso es una película animada del 2006 basada en la serie de libros infantiles del mismo nombre de H.A. y Margret Rey. Will Ferrell realiza la voz de Ted, el hombre del sombrero amarillo. La película fue dirigida por Matthew O'Callaghan. Este proyecto estuvo en desarrollo en Imagine Entertainment durante mucho tiempo, por lo menos desde 1992. Además estuvo nominada a un Oscar",
+        "description": "película de 2006 dirigida por Matthew O'Callaghan",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Jorge_el_curioso_(pel%C3%ADcula)",
+            "revisions": "https://es.wikipedia.org/wiki/Jorge_el_curioso_(pel%C3%ADcula)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Jorge_el_curioso_(pel%C3%ADcula)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Jorge_el_curioso_(pel%C3%ADcula)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Jorge_el_curioso_(pel%C3%ADcula)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Jorge_el_curioso_(pel%C3%ADcula)",
+            "edit": "https://es.wikipedia.org/wiki/Jorge_el_curioso_(pel%C3%ADcula)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Jorge_el_curioso_(pel%C3%ADcula)"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q1753443",
+        "directors": [
+          "Q12326435"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q157443",
+          "Q2143665",
+          "Q319221"
+        ]
+      }
+    },
+    {
+      "Title": "curious george 3 back to the jungle",
+      "Year": "2015",
+      "imdbID": "tt4622340",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "en",
+        "wikipedia_title": "Curious George 2: Follow That Monkey!",
+        "wikipedia_pageid": 23736886,
+        "wikibase_item": "Q3230419",
+        "summary": "Curious George 2: Follow That Monkey! is a 2009 American animated adventure comedy film based on the Curious George children's stories by H.A. Rey and Margret Rey. The sequel to the 2006 film Curious George, it was originally subtitled Monkey on the Run. It was released straight to DVD in the United States and theatrically in Denmark, Sweden, and Iceland.",
+        "description": "2009 American film",
+        "urls": {
+          "desktop": {
+            "page": "https://en.wikipedia.org/wiki/Curious_George_2%3A_Follow_That_Monkey!",
+            "revisions": "https://en.wikipedia.org/wiki/Curious_George_2%3A_Follow_That_Monkey!?action=history",
+            "edit": "https://en.wikipedia.org/wiki/Curious_George_2%3A_Follow_That_Monkey!?action=edit",
+            "talk": "https://en.wikipedia.org/wiki/Talk:Curious_George_2%3A_Follow_That_Monkey!"
+          },
+          "mobile": {
+            "page": "https://en.wikipedia.org/wiki/Curious_George_2%3A_Follow_That_Monkey!",
+            "revisions": "https://en.wikipedia.org/wiki/Special:History/Curious_George_2%3A_Follow_That_Monkey!",
+            "edit": "https://en.wikipedia.org/wiki/Curious_George_2%3A_Follow_That_Monkey!?action=edit",
+            "talk": "https://en.wikipedia.org/wiki/Talk:Curious_George_2%3A_Follow_That_Monkey!"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/en/5/54/CuriousGeorge2-FollowThatMonkey.PNG",
+            "width": 264,
+            "height": 377
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/en/5/54/CuriousGeorge2-FollowThatMonkey.PNG",
+            "width": 264,
+            "height": 377
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q3230419",
+        "directors": [
+          "Q22692716"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q2143665",
+          "Q319221",
+          "Q157443"
+        ]
+      }
+    },
+    {
+      "Title": "curious george a very monkey christmas",
+      "Year": "2009",
+      "imdbID": "tt1570964",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "en",
+        "wikipedia_title": "List of Curious George episodes",
+        "wikipedia_pageid": 16922138,
+        "wikibase_item": "Q18795282",
+        "summary": "\n\nThis is a list of episodes from the children's animated television series, Curious George. Most episodes are set either in the city or in the country. In the city, George lives in an apartment building with The Man in the Yellow Hat and in the country they share a small house near Lake Wanasinklake. This allows George to mirror the experiences of kids who live in an urban environment and those who live in a rural environment. There are exceptions to this; some episodes take place in alternative settings such as an airport or a train station.",
+        "description": "",
+        "urls": {
+          "desktop": {
+            "page": "https://en.wikipedia.org/wiki/List_of_Curious_George_episodes",
+            "revisions": "https://en.wikipedia.org/wiki/List_of_Curious_George_episodes?action=history",
+            "edit": "https://en.wikipedia.org/wiki/List_of_Curious_George_episodes?action=edit",
+            "talk": "https://en.wikipedia.org/wiki/Talk:List_of_Curious_George_episodes"
+          },
+          "mobile": {
+            "page": "https://en.wikipedia.org/wiki/List_of_Curious_George_episodes",
+            "revisions": "https://en.wikipedia.org/wiki/Special:History/List_of_Curious_George_episodes",
+            "edit": "https://en.wikipedia.org/wiki/List_of_Curious_George_episodes?action=edit",
+            "talk": "https://en.wikipedia.org/wiki/Talk:List_of_Curious_George_episodes"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q18795282",
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q28026639"
+        ]
+      }
+    },
+    {
+      "Title": "kirikou et la sorciere",
+      "Year": "1998",
+      "imdbID": "tt0181627",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Kirikou et la sorcière",
+        "wikipedia_pageid": 2825256,
+        "wikibase_item": "Q605620",
+        "summary": "Kirikou et la sorcière es un largometraje de dibujos animados de 74 minutos dirigido por Michel Ocelot en 1998. Es una coproducción entre Francia, Bélgica y Luxemburgo.",
+        "description": "película francesa animada del año 1998",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Kirikou_et_la_sorci%C3%A8re",
+            "revisions": "https://es.wikipedia.org/wiki/Kirikou_et_la_sorci%C3%A8re?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Kirikou_et_la_sorci%C3%A8re?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Kirikou_et_la_sorci%C3%A8re"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Kirikou_et_la_sorci%C3%A8re",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Kirikou_et_la_sorci%C3%A8re",
+            "edit": "https://es.wikipedia.org/wiki/Kirikou_et_la_sorci%C3%A8re?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Kirikou_et_la_sorci%C3%A8re"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q605620",
+        "directors": [
+          "Q1364283"
+        ],
+        "countries": [
+          "Q142",
+          "Q31",
+          "Q32"
+        ],
+        "genres": [
+          "Q157394",
+          "Q319221",
+          "Q2143665"
+        ]
+      }
+    },
+    {
+      "Title": "sleeping beauty",
+      "Year": "1959",
+      "imdbID": "tt0053285",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "La bella durmiente (película de 1959)",
+        "wikipedia_pageid": 502062,
+        "wikibase_item": "Q215617",
+        "summary": "La bella durmiente es el decimosexto largometraje animado del canon de largometrajes de Disney. Fue producido por Walt Disney Productions, y se estrenó el 29 de enero de 1959, distribuido por Buena Vista. Esta película popularizó el término \"Eres Tú El Príncipe Azul\". La película se acerca más a la versión de el cuento de hadas homónimo de Jacob y Wihelm Grimm, a pesar de que también existen las de Charles Perrault y Giambattista Basile.",
+        "description": "película animada estadounidense de 1959",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/La_bella_durmiente_(pel%C3%ADcula_de_1959)",
+            "revisions": "https://es.wikipedia.org/wiki/La_bella_durmiente_(pel%C3%ADcula_de_1959)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/La_bella_durmiente_(pel%C3%ADcula_de_1959)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_bella_durmiente_(pel%C3%ADcula_de_1959)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/La_bella_durmiente_(pel%C3%ADcula_de_1959)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/La_bella_durmiente_(pel%C3%ADcula_de_1959)",
+            "edit": "https://es.wikipedia.org/wiki/La_bella_durmiente_(pel%C3%ADcula_de_1959)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_bella_durmiente_(pel%C3%ADcula_de_1959)"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/9/93/Skyview_Drive-in_Ad_-_23_June_1959%2C_Santa_Cruz%2C_CA.jpg",
+            "width": 1271,
+            "height": 2083
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/93/Skyview_Drive-in_Ad_-_23_June_1959%2C_Santa_Cruz%2C_CA.jpg/330px-Skyview_Drive-in_Ad_-_23_June_1959%2C_Santa_Cruz%2C_CA.jpg",
+            "width": 320,
+            "height": 524
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q215617",
+        "directors": [
+          "Q579241",
+          "Q1368756",
+          "Q2437296",
+          "Q703588"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q157394",
+          "Q842256",
+          "Q1361932",
+          "Q1957385"
+        ]
+      }
+    },
+    {
+      "Title": "beauty and the beast",
+      "Year": "1991",
+      "imdbID": "tt0101414",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "La bella y la bestia (película de 1991)",
+        "wikipedia_pageid": 327286,
+        "wikibase_item": "Q179673",
+        "summary": "La bella y la bestia es una película de animación estadounidense es la trigésima película en el canon de Walt Disney Animation. El estreno fue en El Capitán Theatre el 13 de noviembre de 1991 producida por Walt Disney Feature Animation y dirigida por Gary Trousdale y Kirk Wise. Está basada en la versión revisada y abreviada que Jeanne-Marie Leprince de Beaumont escribió a partir de la historia original, mucho más larga, de Gabrielle-Suzanne Barbot de Villeneuve. Es la primera película animada nominada al Óscar a la mejor película, puesto que en esa época aún no existía la categoría de Óscar a la mejor película de animación.",
+        "description": "película animada de 1991 dirigida por Gary Trousdale y Kirk Wise",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/La_bella_y_la_bestia_(pel%C3%ADcula_de_1991)",
+            "revisions": "https://es.wikipedia.org/wiki/La_bella_y_la_bestia_(pel%C3%ADcula_de_1991)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/La_bella_y_la_bestia_(pel%C3%ADcula_de_1991)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_bella_y_la_bestia_(pel%C3%ADcula_de_1991)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/La_bella_y_la_bestia_(pel%C3%ADcula_de_1991)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/La_bella_y_la_bestia_(pel%C3%ADcula_de_1991)",
+            "edit": "https://es.wikipedia.org/wiki/La_bella_y_la_bestia_(pel%C3%ADcula_de_1991)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_bella_y_la_bestia_(pel%C3%ADcula_de_1991)"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/d/d9/Beauty_And_The_Beast_-_Official_Logo.jpg",
+            "width": 1280,
+            "height": 684
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d9/Beauty_And_The_Beast_-_Official_Logo.jpg/330px-Beauty_And_The_Beast_-_Official_Logo.jpg",
+            "width": 320,
+            "height": 171
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q179673",
+        "directors": [
+          "Q1152051",
+          "Q1073959"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q1054574",
+          "Q842256",
+          "Q859369",
+          "Q1957385",
+          "Q930383"
+        ]
+      }
+    },
+    {
+      "Title": "song of the sea",
+      "Year": "2014",
+      "imdbID": "tt1865505",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "La canción del mar",
+        "wikipedia_pageid": 7033387,
+        "wikibase_item": "Q17125101",
+        "summary": "La canción del mar es una película animada irlandesa de fantasía estrenada en 2014, producida por Cartoon Saloon y dirigida por Tomm Moore. La película, hecha con el sistema tradicional de animación, empezó su producción antes del lanzamiento de El secreto del libro de Kells (2009), estrenada en el Festival Internacional de Cine de Toronto el 6 de septiembre de 2014. La película fue nominada para el Premio de Academia a la mejor película de animación en la edición 87 de los Premios Óscar (2015).",
+        "description": "película de animación irlandesa dirigida por Tomm Moore de 2014",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/La_canci%C3%B3n_del_mar",
+            "revisions": "https://es.wikipedia.org/wiki/La_canci%C3%B3n_del_mar?action=history",
+            "edit": "https://es.wikipedia.org/wiki/La_canci%C3%B3n_del_mar?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_canci%C3%B3n_del_mar"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/La_canci%C3%B3n_del_mar",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/La_canci%C3%B3n_del_mar",
+            "edit": "https://es.wikipedia.org/wiki/La_canci%C3%B3n_del_mar?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_canci%C3%B3n_del_mar"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/0/0f/Le_Chant_de_la_mer_logo.png",
+            "width": 220,
+            "height": 279
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/0/0f/Le_Chant_de_la_mer_logo.png",
+            "width": 220,
+            "height": 279
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q17125101",
+        "directors": [
+          "Q981857"
+        ],
+        "countries": [
+          "Q32",
+          "Q142",
+          "Q27",
+          "Q31",
+          "Q35"
+        ],
+        "genres": [
+          "Q157394",
+          "Q2143665",
+          "Q202866",
+          "Q1361932"
+        ]
+      }
+    },
+    {
+      "Title": "cinderella",
+      "Year": "1950",
+      "imdbID": "tt0042332",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "La Cenicienta (película de 1950)",
+        "wikipedia_pageid": 399859,
+        "wikibase_item": "Q191753",
+        "summary": "La Cenicienta es una película animada de 1950 basada en el cuento popular del mismo nombre de Charles Perrault. La película fue producida por Walt Disney y dirigida por Clyde Geronimi, Wilfred Jackson y Hamilton Luske.",
+        "description": "película animada estadounidense de 1950",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/La_Cenicienta_(pel%C3%ADcula_de_1950)",
+            "revisions": "https://es.wikipedia.org/wiki/La_Cenicienta_(pel%C3%ADcula_de_1950)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/La_Cenicienta_(pel%C3%ADcula_de_1950)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_Cenicienta_(pel%C3%ADcula_de_1950)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/La_Cenicienta_(pel%C3%ADcula_de_1950)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/La_Cenicienta_(pel%C3%ADcula_de_1950)",
+            "edit": "https://es.wikipedia.org/wiki/La_Cenicienta_(pel%C3%ADcula_de_1950)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_Cenicienta_(pel%C3%ADcula_de_1950)"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/1/1d/1950_is_the_Cinderella_year.jpg",
+            "width": 1315,
+            "height": 1802
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1d/1950_is_the_Cinderella_year.jpg/330px-1950_is_the_Cinderella_year.jpg",
+            "width": 320,
+            "height": 439
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q191753",
+        "directors": [
+          "Q1385379",
+          "Q926614",
+          "Q579241"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q1054574",
+          "Q157394",
+          "Q842256",
+          "Q1361932",
+          "Q1957385",
+          "Q2743",
+          "Q191489"
+        ]
+      }
+    },
+    {
+      "Title": "lady and the tramp",
+      "Year": "1955",
+      "imdbID": "tt0048280",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "La dama y el vagabundo",
+        "wikipedia_pageid": 301881,
+        "wikibase_item": "Q172284",
+        "summary": "La dama y el vagabundo es el decimoquinto título del canon de largometrajes animados de Walt Disney. Producida por Walt Disney Productions, se estrenó por primera vez en cines en Estados Unidos el 16 de junio de 1955, siendo distribuida por Buena Vista Distribution, en aquella época una nueva división de Disney que asumió los derechos de distribución de las producciones del estudio en lugar de los antes poseedores de los derechos, RKO Radio Pictures.",
+        "description": "película animada estadounidense de 1955",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/La_dama_y_el_vagabundo",
+            "revisions": "https://es.wikipedia.org/wiki/La_dama_y_el_vagabundo?action=history",
+            "edit": "https://es.wikipedia.org/wiki/La_dama_y_el_vagabundo?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_dama_y_el_vagabundo"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/La_dama_y_el_vagabundo",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/La_dama_y_el_vagabundo",
+            "edit": "https://es.wikipedia.org/wiki/La_dama_y_el_vagabundo?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_dama_y_el_vagabundo"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/21/Lady_and_the_Tramp_Logo.svg/langes-250px-Lady_and_the_Tramp_Logo.svg.png",
+            "width": 129,
+            "height": 59
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/21/Lady_and_the_Tramp_Logo.svg/langes-330px-Lady_and_the_Tramp_Logo.svg.png",
+            "width": 320,
+            "height": 146
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q172284",
+        "directors": [
+          "Q579241",
+          "Q1385379",
+          "Q926614"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q860626",
+          "Q842256",
+          "Q157394",
+          "Q28968511"
+        ]
+      }
+    },
+    {
+      "Title": "quest for camelot",
+      "Year": "1998",
+      "imdbID": "tt0120800",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Quest for Camelot",
+        "wikipedia_pageid": 2748264,
+        "wikibase_item": "Q1764174",
+        "summary": "Quest for Camelot es una película animada estadounidense de 1998 producida por Warner Bros., dirigida por Frederik Du Chau y basada en la novela de Vera Chapman.",
+        "description": "película animada estadounidense",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Quest_for_Camelot",
+            "revisions": "https://es.wikipedia.org/wiki/Quest_for_Camelot?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Quest_for_Camelot?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Quest_for_Camelot"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Quest_for_Camelot",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Quest_for_Camelot",
+            "edit": "https://es.wikipedia.org/wiki/Quest_for_Camelot?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Quest_for_Camelot"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q1764174",
+        "directors": [
+          "Q2071900"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q157394",
+          "Q842256",
+          "Q2143665",
+          "Q319221",
+          "Q21401869",
+          "Q52207399"
+        ]
+      }
+    },
+    {
+      "Title": "pooh s grand adventure the search for christopher robin",
+      "Year": "1997",
+      "imdbID": "tt0119918",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "en",
+        "wikipedia_title": "Pooh's Grand Adventure: The Search for Christopher Robin",
+        "wikipedia_pageid": 3104876,
+        "wikibase_item": "Q919563",
+        "summary": "Pooh's Grand Adventure: The Search for Christopher Robin is a 1997 American direct-to-video animated musical adventure comedy-drama film co-written, co-produced, and directed by Karl Geurs. The film follows Winnie the Pooh and his friends on a journey to find and rescue their friend Christopher Robin from the \"Skull\". Along the way, the group confront their own insecurities throughout the search, facing and conquering them in a series of events where they are forced to act beyond their own known limits, thus discovering their true potential. Unlike the film's predecessors, this film is an entirely original story, not based on any of A. A. Milne's classic stories.",
+        "description": "1997 American film",
+        "urls": {
+          "desktop": {
+            "page": "https://en.wikipedia.org/wiki/Pooh's_Grand_Adventure%3A_The_Search_for_Christopher_Robin",
+            "revisions": "https://en.wikipedia.org/wiki/Pooh's_Grand_Adventure%3A_The_Search_for_Christopher_Robin?action=history",
+            "edit": "https://en.wikipedia.org/wiki/Pooh's_Grand_Adventure%3A_The_Search_for_Christopher_Robin?action=edit",
+            "talk": "https://en.wikipedia.org/wiki/Talk:Pooh's_Grand_Adventure%3A_The_Search_for_Christopher_Robin"
+          },
+          "mobile": {
+            "page": "https://en.wikipedia.org/wiki/Pooh's_Grand_Adventure%3A_The_Search_for_Christopher_Robin",
+            "revisions": "https://en.wikipedia.org/wiki/Special:History/Pooh's_Grand_Adventure%3A_The_Search_for_Christopher_Robin",
+            "edit": "https://en.wikipedia.org/wiki/Pooh's_Grand_Adventure%3A_The_Search_for_Christopher_Robin?action=edit",
+            "talk": "https://en.wikipedia.org/wiki/Talk:Pooh's_Grand_Adventure%3A_The_Search_for_Christopher_Robin"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/en/f/fa/PGATSFCR.jpg",
+            "width": 250,
+            "height": 352
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/en/f/fa/PGATSFCR.jpg",
+            "width": 250,
+            "height": 352
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q919563",
+        "directors": [
+          "Q3193391"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q157394",
+          "Q2143665",
+          "Q319221"
+        ]
+      }
+    },
+    {
+      "Title": "the tigger movie",
+      "Year": "2000",
+      "imdbID": "tt0220099",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "La película de Tigger",
+        "wikipedia_pageid": 2823289,
+        "wikibase_item": "Q374431",
+        "summary": "The Tigger Movie es una película estadounidense de animación estrenada en el año 2000, producida por Walt Disney Television Animation y Walt Disney Pictures, distribuida por Buena Vista International, y dirigida por Jun Falkenstein. Está protagonizada por el amigo de Winnie the Pooh, el tigre saltarín Tigger y cuenta la historia de la búsqueda que realiza Tigger para encontrar a su familia.",
+        "description": "",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/La_pel%C3%ADcula_de_Tigger",
+            "revisions": "https://es.wikipedia.org/wiki/La_pel%C3%ADcula_de_Tigger?action=history",
+            "edit": "https://es.wikipedia.org/wiki/La_pel%C3%ADcula_de_Tigger?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_pel%C3%ADcula_de_Tigger"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/La_pel%C3%ADcula_de_Tigger",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/La_pel%C3%ADcula_de_Tigger",
+            "edit": "https://es.wikipedia.org/wiki/La_pel%C3%ADcula_de_Tigger?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_pel%C3%ADcula_de_Tigger"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q374431",
+        "directors": [
+          "Q15500033"
+        ],
+        "countries": [
+          "Q30",
+          "Q17"
+        ],
+        "genres": [
+          "Q663106",
+          "Q842256",
+          "Q859369",
+          "Q1361932"
+        ]
+      }
+    },
+    {
+      "Title": "the little mermaid ariel s beginning",
+      "Year": "2008",
+      "imdbID": "tt0969647",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "The Little Mermaid: Ariel's Beginning",
+        "wikipedia_pageid": 597363,
+        "wikibase_item": "Q659725",
+        "summary": "The Little Mermaid: Ariel's Beginning es una película de dibujos animados producida por DisneyToon Studios lanzada directamente para vídeo el 26 de agosto de 2008. La película fue concebida como una precuela de la película animada La sirenita de 1989.",
+        "description": "película animada de 2008 dirigida por Peggy Holmes",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/The_Little_Mermaid%3A_Ariel's_Beginning",
+            "revisions": "https://es.wikipedia.org/wiki/The_Little_Mermaid%3A_Ariel's_Beginning?action=history",
+            "edit": "https://es.wikipedia.org/wiki/The_Little_Mermaid%3A_Ariel's_Beginning?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Little_Mermaid%3A_Ariel's_Beginning"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/The_Little_Mermaid%3A_Ariel's_Beginning",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/The_Little_Mermaid%3A_Ariel's_Beginning",
+            "edit": "https://es.wikipedia.org/wiki/The_Little_Mermaid%3A_Ariel's_Beginning?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Little_Mermaid%3A_Ariel's_Beginning"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q659725",
+        "directors": [
+          "Q7160666"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q842256"
+        ]
+      }
+    },
+    {
+      "Title": "the little mermaid",
+      "Year": "1989",
+      "imdbID": "tt0097757",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "La sirenita (película de 1989)",
+        "wikipedia_pageid": 2856969,
+        "wikibase_item": "Q190135",
+        "summary": "La sirenita es una película de animación de 1989, basada en el cuento homónimo de Hans Christian Andersen, producida por Walt Disney Pictures bajo su división Walt Disney Feature Animation, y dirigida por Ron Clements y John Musker.",
+        "description": "película animada de 1989 dirigida por Ron Clements y John Musker",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/La_sirenita_(pel%C3%ADcula_de_1989)",
+            "revisions": "https://es.wikipedia.org/wiki/La_sirenita_(pel%C3%ADcula_de_1989)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/La_sirenita_(pel%C3%ADcula_de_1989)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_sirenita_(pel%C3%ADcula_de_1989)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/La_sirenita_(pel%C3%ADcula_de_1989)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/La_sirenita_(pel%C3%ADcula_de_1989)",
+            "edit": "https://es.wikipedia.org/wiki/La_sirenita_(pel%C3%ADcula_de_1989)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_sirenita_(pel%C3%ADcula_de_1989)"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/The_Little_Mermaid_logo.svg/langes-330px-The_Little_Mermaid_logo.svg.png",
+            "width": 300,
+            "height": 141
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/The_Little_Mermaid_logo.svg/langes-330px-The_Little_Mermaid_logo.svg.png",
+            "width": 320,
+            "height": 150
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q190135",
+        "directors": [
+          "Q735440",
+          "Q930209"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q1054574",
+          "Q842256",
+          "Q157394",
+          "Q2143665",
+          "Q191489",
+          "Q1957385"
+        ]
+      }
+    },
+    {
+      "Title": "the little mermaid ii return to the sea",
+      "Year": "2000",
+      "imdbID": "tt0240684",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "La sirenita 2: regreso al mar",
+        "wikipedia_pageid": 591887,
+        "wikibase_item": "Q467678",
+        "summary": "La sirenita II: regreso al mar es la secuela de La sirenita, película de Walt Disney Pictures, basada en el cuento homónimo de Hans Christian Andersen. En términos cronológicos de continuidad esta película es la última parte de la serie de películas de La sirenita, ya que The Little Mermaid: Ariel's Beginning, lanzada posteriormente, es una precuela de la primera película.",
+        "description": "",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/La_sirenita_2%3A_regreso_al_mar",
+            "revisions": "https://es.wikipedia.org/wiki/La_sirenita_2%3A_regreso_al_mar?action=history",
+            "edit": "https://es.wikipedia.org/wiki/La_sirenita_2%3A_regreso_al_mar?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_sirenita_2%3A_regreso_al_mar"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/La_sirenita_2%3A_regreso_al_mar",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/La_sirenita_2%3A_regreso_al_mar",
+            "edit": "https://es.wikipedia.org/wiki/La_sirenita_2%3A_regreso_al_mar?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:La_sirenita_2%3A_regreso_al_mar"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q467678",
+        "directors": [
+          "Q6195995"
+        ],
+        "countries": [
+          "Q30",
+          "Q408"
+        ],
+        "genres": [
+          "Q842256",
+          "Q157394",
+          "Q319221"
+        ]
+      }
+    },
+    {
+      "Title": "leroy stitch",
+      "Year": "2006",
+      "imdbID": "tt0486761",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Leroy & Stitch",
+        "wikipedia_pageid": 1567657,
+        "wikibase_item": "Q1069050",
+        "summary": "Leroy y Stitch es una película de dibujos animados creada por Walt Disney Television Animation. Se trata de un spin-off de la película de animación Lilo & Stitch (2002) y la conclusión a la serie de televisión Lilo & Stitch: La serie. La película debutó en Disney Channel el 23 de junio de 2006 y también fue presentada en Toon Disney el 26 de junio de 2006. Fue lanzada en DVD en Estados Unidos el 27 de junio de 2006, pocos días después del final de la serie de televisión.",
+        "description": "película de animación de 2006 de la franquicia Lilo & Stitch",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Leroy_%26_Stitch",
+            "revisions": "https://es.wikipedia.org/wiki/Leroy_%26_Stitch?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Leroy_%26_Stitch?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Leroy_%26_Stitch"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Leroy_%26_Stitch",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Leroy_%26_Stitch",
+            "edit": "https://es.wikipedia.org/wiki/Leroy_%26_Stitch?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Leroy_%26_Stitch"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q1069050",
+        "directors": [
+          "Q3435192",
+          "Q76510769"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q663106",
+          "Q2143665",
+          "Q471839"
+        ]
+      }
+    },
+    {
+      "Title": "the adventures of ichabod and mr toad",
+      "Year": "1949",
+      "imdbID": "tt0041094",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "The Adventures of Ichabod and Mr. Toad",
+        "wikipedia_pageid": 4407314,
+        "wikibase_item": "Q863963",
+        "summary": "The Adventures of Ichabod and Mr. Toad es un largometraje animado de 1949, producido por Walt Disney y distribuido por RKO Radio Pictures. Es la undécima película en el canon de Walt Disney Animation. Es considerado como una \"película-paquete\", como Fantasía, Saludos amigos, Los tres caballeros, Música maestro, Fun and Fancy Free y Melody Time, que los estudios Disney realizaron durante la década de 1940 como resultado de la difícil situación que atravesaron tras la Segunda Guerra Mundial. Está compuesto por dos cortos, El Señor Sapo y La leyenda de Sleepy Hollow. Es el último proyecto de este tipo, antes del estreno de La Cenicienta en 1950. Fue estrenada en Estados Unidos el 5 de octubre de 1949. En España no se estrenó como largometraje, sino que los cortos fueron lanzados de forma independiente, ambos manteniendo el doblaje de Hispanoamérica, distribuyéndose de dicha forma hasta 2017, cuando comenzó a distribuirse en plataformas de streaming el largometraje completo con doblaje propio del país. En 1950, ganó el Globo de Oro en la categoría de Mejor fotografía en color.",
+        "description": "película animada estadounidense de 1949",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/The_Adventures_of_Ichabod_and_Mr._Toad",
+            "revisions": "https://es.wikipedia.org/wiki/The_Adventures_of_Ichabod_and_Mr._Toad?action=history",
+            "edit": "https://es.wikipedia.org/wiki/The_Adventures_of_Ichabod_and_Mr._Toad?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Adventures_of_Ichabod_and_Mr._Toad"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/The_Adventures_of_Ichabod_and_Mr._Toad",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/The_Adventures_of_Ichabod_and_Mr._Toad",
+            "edit": "https://es.wikipedia.org/wiki/The_Adventures_of_Ichabod_and_Mr._Toad?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Adventures_of_Ichabod_and_Mr._Toad"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/7/78/Ichabod_and_Mr._Toad_trailer_screenshot.png",
+            "width": 1441,
+            "height": 1109
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/78/Ichabod_and_Mr._Toad_trailer_screenshot.png/330px-Ichabod_and_Mr._Toad_trailer_screenshot.png",
+            "width": 320,
+            "height": 246
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q863963",
+        "directors": [
+          "Q3157236",
+          "Q579241",
+          "Q715807"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q842256",
+          "Q336144",
+          "Q52162262",
+          "Q157394",
+          "Q31888058"
+        ]
+      }
+    },
+    {
+      "Title": "the jungle book",
+      "Year": "1967",
+      "imdbID": "tt0061852",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "El libro de la selva (película de 1967)",
+        "wikipedia_pageid": 1584005,
+        "wikibase_item": "Q199839",
+        "summary": "El libro de la selva es una película de animación estadounidense estrenada en 1967, producida por Walt Disney Productions. Esta película se basa en Los relatos de Mowgli, escritos por Rudyard Kipling.",
+        "description": "película animada de 1967 dirigida por Wolfgang Reitherman",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/El_libro_de_la_selva_(pel%C3%ADcula_de_1967)",
+            "revisions": "https://es.wikipedia.org/wiki/El_libro_de_la_selva_(pel%C3%ADcula_de_1967)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/El_libro_de_la_selva_(pel%C3%ADcula_de_1967)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_libro_de_la_selva_(pel%C3%ADcula_de_1967)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/El_libro_de_la_selva_(pel%C3%ADcula_de_1967)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/El_libro_de_la_selva_(pel%C3%ADcula_de_1967)",
+            "edit": "https://es.wikipedia.org/wiki/El_libro_de_la_selva_(pel%C3%ADcula_de_1967)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:El_libro_de_la_selva_(pel%C3%ADcula_de_1967)"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/2/20/Mogli_und_Balu_-_panoramio.jpg",
+            "width": 1259,
+            "height": 1147
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/20/Mogli_und_Balu_-_panoramio.jpg/330px-Mogli_und_Balu_-_panoramio.jpg",
+            "width": 320,
+            "height": 292
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q199839",
+        "directors": [
+          "Q703588"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q842256",
+          "Q157443"
+        ]
+      }
+    },
+    {
+      "Title": "lilo stitch",
+      "Year": "2002",
+      "imdbID": "tt0275847",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Lilo & Stitch",
+        "wikipedia_pageid": 640950,
+        "wikibase_item": "Q36092",
+        "summary": "Lilo & Stitch es una película animada de comedia dramática y ciencia ficción estrenada el 21 de junio de 2002. Pertenece al canon de producciones de Walt Disney Feature Animation y es la segunda de tres cintas realizadas en la extinta unidad del parque Disney-MGM Studios en Orlando (Florida), después de Mulan y antes de Brother Bear. Su guion fue escrito por Chris Sanders y Dean DeBlois, quienes la dirigieron como debutantes, y está basada en una historia que Sanders pensó en publicar como libro infantil alrededor de 1985.",
+        "description": "película animada de 2002 dirigida por Chris Sanders y Dean DeBlois",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Lilo_%26_Stitch",
+            "revisions": "https://es.wikipedia.org/wiki/Lilo_%26_Stitch?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Lilo_%26_Stitch?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Lilo_%26_Stitch"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Lilo_%26_Stitch",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Lilo_%26_Stitch",
+            "edit": "https://es.wikipedia.org/wiki/Lilo_%26_Stitch?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Lilo_%26_Stitch"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q36092",
+        "directors": [
+          "Q201641",
+          "Q1181049"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q663106",
+          "Q859369",
+          "Q471839",
+          "Q157443"
+        ]
+      }
+    },
+    {
+      "Title": "the rescuers",
+      "Year": "1977",
+      "imdbID": "tt0076618",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "The Rescuers (película)",
+        "wikipedia_pageid": 774246,
+        "wikibase_item": "Q39722",
+        "summary": "The Rescuers es una película de Walt Disney Productions estrenado el 22 de junio de 1977 en Estados Unidos. La película fue inspirada por una serie de libros escritos por la inglesa Margery Sharp (1905-1991), en particular The Rescuers (1959) y Miss Bianca (1962), que tratan sobre una intrépida ratoncita llamada Miss Bianca, su fiel compañero Bernard y sus aventuras rescatando a personas y animales cautivos.",
+        "description": "película animada de 1977 dirigida por Wolfgang Reitherman, John Lounsbery y Art Stevens",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/The_Rescuers_(pel%C3%ADcula)",
+            "revisions": "https://es.wikipedia.org/wiki/The_Rescuers_(pel%C3%ADcula)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/The_Rescuers_(pel%C3%ADcula)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Rescuers_(pel%C3%ADcula)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/The_Rescuers_(pel%C3%ADcula)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/The_Rescuers_(pel%C3%ADcula)",
+            "edit": "https://es.wikipedia.org/wiki/The_Rescuers_(pel%C3%ADcula)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Rescuers_(pel%C3%ADcula)"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q39722",
+        "directors": [
+          "Q703588",
+          "Q1773633",
+          "Q2864567"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q663106",
+          "Q842256",
+          "Q859369",
+          "Q102429885",
+          "Q157394",
+          "Q319221"
+        ]
+      }
+    },
+    {
+      "Title": "the rescuers down under",
+      "Year": "1990",
+      "imdbID": "tt0100477",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "The Rescuers Down Under",
+        "wikipedia_pageid": 1577617,
+        "wikibase_item": "Q202371",
+        "summary": "The Rescuers Down Under es una película animada producida por Walt Disney Pictures bajo su división de animación Walt Disney Feature Animation y distribuida por Buena Vista en 1990. Es la vigésimo novena película en el canon de Walt Disney Animation y se realizó en el período conocido como el Renacimiento de Disney. La película, que se desarrolla en el árido interior de Australia, es la secuela de The Rescuers de 1977, inspirados en las novelas de Margery Sharp.",
+        "description": "película animada de 1990 dirigida por Hendel Butoy y Mike Gabriel",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/The_Rescuers_Down_Under",
+            "revisions": "https://es.wikipedia.org/wiki/The_Rescuers_Down_Under?action=history",
+            "edit": "https://es.wikipedia.org/wiki/The_Rescuers_Down_Under?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Rescuers_Down_Under"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/The_Rescuers_Down_Under",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/The_Rescuers_Down_Under",
+            "edit": "https://es.wikipedia.org/wiki/The_Rescuers_Down_Under?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Rescuers_Down_Under"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q202371",
+        "directors": [
+          "Q19953081",
+          "Q14565302"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q959790",
+          "Q859369",
+          "Q157394",
+          "Q319221"
+        ]
+      }
+    },
+    {
+      "Title": "the sword in the stone",
+      "Year": "1963",
+      "imdbID": "tt0057546",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "The Sword in the Stone",
+        "wikipedia_pageid": 766376,
+        "wikibase_item": "Q204662",
+        "summary": "The Sword in the Stone es una película estadounidense de animación de 1963 dirigida por Wolfgang Reitherman y producida por Walt Disney Productions. Es el decimoctavo largometraje animado en la serie de Disney, y la última animación estrenada en vida de Walt Disney.",
+        "description": "película animada de 1963 dirigida por Wolfgang Reitherman",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/The_Sword_in_the_Stone",
+            "revisions": "https://es.wikipedia.org/wiki/The_Sword_in_the_Stone?action=history",
+            "edit": "https://es.wikipedia.org/wiki/The_Sword_in_the_Stone?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Sword_in_the_Stone"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/The_Sword_in_the_Stone",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/The_Sword_in_the_Stone",
+            "edit": "https://es.wikipedia.org/wiki/The_Sword_in_the_Stone?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Sword_in_the_Stone"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/a/ae/Disneyland_Sword_in_the_Stone_by_Dave_Q.jpg",
+            "width": 768,
+            "height": 1024
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ae/Disneyland_Sword_in_the_Stone_by_Dave_Q.jpg/330px-Disneyland_Sword_in_the_Stone_by_Dave_Q.jpg",
+            "width": 320,
+            "height": 427
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q204662",
+        "directors": [
+          "Q703588"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q157394",
+          "Q842256",
+          "Q102429885",
+          "Q663106"
+        ]
+      }
+    },
+    {
+      "Title": "mulan",
+      "Year": "1998",
+      "imdbID": "tt0120762",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Mulan",
+        "wikipedia_pageid": 771544,
+        "wikibase_item": "Q537407",
+        "summary": "Mulan o Mulán es una película de animación y aventuras estadounidense dirigida por Tony Bancroft y Barry Cook, producida por Walt Disney Feature Animation, y estrenada en 1998. El argumento está inspirado en el poema chino Balada de Fa Mu Lan y gira en torno a las hazañas de la joven Mulan que, para evitar el alistamiento de su anciano y enfermo padre, se viste como un hombre y decide enrolarse en el ejército imperial para hacer frente a la invasión de los hunos, labor en la cual es apoyada por Mushu, un dragón parlante escogido por sus ancestros familiares, y Cri-Kee, un grillo que supuestamente da suerte.",
+        "description": "película animada de 1998 dirigida por Barry Cook y Tony Bancroft",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Mulan",
+            "revisions": "https://es.wikipedia.org/wiki/Mulan?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Mulan?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Mulan"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Mulan",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Mulan",
+            "edit": "https://es.wikipedia.org/wiki/Mulan?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Mulan"
+          }
+        },
+        "images": {
+          "original": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Mulan_Logo_Black.svg/langes-330px-Mulan_Logo_Black.svg.png",
+            "width": 261,
+            "height": 93
+          },
+          "thumbnail": {
+            "source": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Mulan_Logo_Black.svg/langes-330px-Mulan_Logo_Black.svg.png",
+            "width": 320,
+            "height": 114
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q537407",
+        "directors": [
+          "Q11853913",
+          "Q3531686"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q842256",
+          "Q157394",
+          "Q319221",
+          "Q1033891",
+          "Q859369",
+          "Q1361932"
+        ]
+      }
+    },
+    {
+      "Title": "the secret of nimh",
+      "Year": "1982",
+      "imdbID": "tt0084649",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "The Secret of NIMH",
+        "wikipedia_pageid": 266067,
+        "wikibase_item": "Q174374",
+        "summary": "The Secret of NIMH es una película de animación de 1982, producida por Aurora Productions y Don Bluth Productions, distribuida por United Artists y dirigida por Don Bluth. Está basada en la novela Mrs. Frisby and the Rats of NIMH, de Robert C. O'Brien. Fue el primer largometraje de animación dirigido por Bluth, famoso técnico de animación y director de películas animadas que más tarde continuaría dirigiendo largometrajes de animación como Fievel y el nuevo mundo (1986), En busca del valle encantado (1988), Todos los perros van al cielo (1989) o Anastasia (1997), entre otras.",
+        "description": "",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/The_Secret_of_NIMH",
+            "revisions": "https://es.wikipedia.org/wiki/The_Secret_of_NIMH?action=history",
+            "edit": "https://es.wikipedia.org/wiki/The_Secret_of_NIMH?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Secret_of_NIMH"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/The_Secret_of_NIMH",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/The_Secret_of_NIMH",
+            "edit": "https://es.wikipedia.org/wiki/The_Secret_of_NIMH?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:The_Secret_of_NIMH"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q174374",
+        "directors": [
+          "Q448957"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q157394",
+          "Q319221",
+          "Q52162262",
+          "Q794912"
+        ]
+      }
+    },
+    {
+      "Title": "nocturna",
+      "Year": "2007",
+      "imdbID": "tt0836682",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Nocturna (película)",
+        "wikipedia_pageid": 6482883,
+        "wikibase_item": "Q3342613",
+        "summary": "Nocturna, una aventura mágica es una película española de 2007 dirigida por Adrià García y Víctor Maldonado.",
+        "description": "película",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Nocturna_(pel%C3%ADcula)",
+            "revisions": "https://es.wikipedia.org/wiki/Nocturna_(pel%C3%ADcula)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Nocturna_(pel%C3%ADcula)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Nocturna_(pel%C3%ADcula)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Nocturna_(pel%C3%ADcula)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Nocturna_(pel%C3%ADcula)",
+            "edit": "https://es.wikipedia.org/wiki/Nocturna_(pel%C3%ADcula)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Nocturna_(pel%C3%ADcula)"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q3342613",
+        "directors": [
+          "Q113155404",
+          "Q68631923"
+        ],
+        "countries": [
+          "Q142",
+          "Q29",
+          "Q145"
+        ],
+        "genres": [
+          "Q157394",
+          "Q2143665"
+        ]
+      }
+    },
+    {
+      "Title": "oliver company",
+      "Year": "1988",
+      "imdbID": "tt0095776",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Oliver y su pandilla",
+        "wikipedia_pageid": 299793,
+        "wikibase_item": "Q216929",
+        "summary": "Oliver y su pandilla es una película animada estadounidense producida por Walt Disney Feature Animation y estrenada en los Estados Unidos el 18 de noviembre de 1988 por Walt Disney Pictures. La vigésima séptima película animada de Disney Animation, la película está inspirada en la clásica novela Oliver Twist, de Charles Dickens. En la película, Oliver es un gatito huérfano que se une a Fagin y a su banda de perros callejeros para sobrevivir en las calles de Nueva York. La banda está conformada por Dodger, un maestro moviéndose por la ciudad, y sus amigos Tito, Rita, Einstein y Francis, quienes también son perros. Un día, el pequeño Oliver deja las calles al ser adoptado por Jenny, una niña rica que se lo lleva a su casa, donde vivirá con todas las comodidades. Pero cuando Jenny es secuestrada por el malvado Jefe de Fagin y sus aterroríficos perros malvados, Oliver comprobará el valor de la verdadera amistad al ver cómo toda la banda se pone en marcha para rescatarla. La primera de Buena Vista Pictures Distribution",
+        "description": "película animada de 1988 dirigida por George Scribner",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Oliver_y_su_pandilla",
+            "revisions": "https://es.wikipedia.org/wiki/Oliver_y_su_pandilla?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Oliver_y_su_pandilla?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Oliver_y_su_pandilla"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Oliver_y_su_pandilla",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Oliver_y_su_pandilla",
+            "edit": "https://es.wikipedia.org/wiki/Oliver_y_su_pandilla?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Oliver_y_su_pandilla"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q216929",
+        "directors": [
+          "Q5544380"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q663106",
+          "Q842256",
+          "Q2143665",
+          "Q859369",
+          "Q52162262",
+          "Q1361932",
+          "Q319221"
+        ]
+      }
+    },
+    {
+      "Title": "ducktales the movie treasure of the lost lamp",
+      "Year": "1990",
+      "imdbID": "tt0099472",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Patoaventuras: La película - El tesoro de la lámpara perdida",
+        "wikipedia_pageid": 4199950,
+        "wikibase_item": "Q1263501",
+        "summary": "Patoaventuras: La película - El tesoro de la lámpara perdida es una película animada de aventura y fantasía de 1990, basada en la serie animada de televisión Patoaventuras.",
+        "description": "",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Patoaventuras%3A_La_pel%C3%ADcula_-_El_tesoro_de_la_l%C3%A1mpara_perdida",
+            "revisions": "https://es.wikipedia.org/wiki/Patoaventuras%3A_La_pel%C3%ADcula_-_El_tesoro_de_la_l%C3%A1mpara_perdida?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Patoaventuras%3A_La_pel%C3%ADcula_-_El_tesoro_de_la_l%C3%A1mpara_perdida?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Patoaventuras%3A_La_pel%C3%ADcula_-_El_tesoro_de_la_l%C3%A1mpara_perdida"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Patoaventuras%3A_La_pel%C3%ADcula_-_El_tesoro_de_la_l%C3%A1mpara_perdida",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Patoaventuras%3A_La_pel%C3%ADcula_-_El_tesoro_de_la_l%C3%A1mpara_perdida",
+            "edit": "https://es.wikipedia.org/wiki/Patoaventuras%3A_La_pel%C3%ADcula_-_El_tesoro_de_la_l%C3%A1mpara_perdida?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Patoaventuras%3A_La_pel%C3%ADcula_-_El_tesoro_de_la_l%C3%A1mpara_perdida"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q1263501",
+        "directors": [
+          "Q21822507"
+        ],
+        "countries": [
+          "Q142",
+          "Q30"
+        ],
+        "genres": [
+          "Q157394",
+          "Q319221",
+          "Q1361932"
+        ]
+      }
+    },
+    {
+      "Title": "peter pan",
+      "Year": "1953",
+      "imdbID": "tt0046183",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Peter Pan (película de 1953)",
+        "wikipedia_pageid": 374059,
+        "wikibase_item": "Q270470",
+        "summary": "Peter Pan es una película de animación dirigida por Clyde Geronimi, Wilfred Jackson y Hamilton Luske y producida por la compañía Walt Disney. Está basada en la obra teatral Peter Pan y Wendy de J.M. Barrie. Fue estrenada el 5 de febrero de 1953. Fue la primera película animada sobre Peter Pan y popularizó enormemente la historia del niño que no quería crecer. Es el decimocuarto título del canon de largometrajes animados de Walt Disney.",
+        "description": "película animada estadounidense de 1953",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Peter_Pan_(pel%C3%ADcula_de_1953)",
+            "revisions": "https://es.wikipedia.org/wiki/Peter_Pan_(pel%C3%ADcula_de_1953)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Peter_Pan_(pel%C3%ADcula_de_1953)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Peter_Pan_(pel%C3%ADcula_de_1953)"
+          },
+          "mobile": {
+            "page": "https://es.wikipedia.org/wiki/Peter_Pan_(pel%C3%ADcula_de_1953)",
+            "revisions": "https://es.wikipedia.org/wiki/Special:History/Peter_Pan_(pel%C3%ADcula_de_1953)",
+            "edit": "https://es.wikipedia.org/wiki/Peter_Pan_(pel%C3%ADcula_de_1953)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Peter_Pan_(pel%C3%ADcula_de_1953)"
+          }
+        }
+      },
+      "wikidata": {
+        "qid": "Q270470",
+        "directors": [
+          "Q579241",
+          "Q1385379",
+          "Q926614"
+        ],
+        "countries": [
+          "Q30"
+        ],
+        "genres": [
+          "Q157394",
+          "Q842256",
+          "Q28968511",
+          "Q52162262",
+          "Q2096633",
+          "Q2143665",
+          "Q1957385"
+        ]
+      }
+    },
+    {
+      "Title": "pinocchio",
+      "Year": "1940",
+      "imdbID": "tt0032910",
+      "wiki": {
+        "language": "es",
+        "fallback_language": "en",
+        "source_language": "es",
+        "wikipedia_title": "Pinocho (película de 1940)",
+        "wikipedia_pageid": 326835,
+        "wikibase_item": "Q4341553",
+        "summary": "Pinocho es una película animada estadounidense producida por Walt Disney Productions, basada en la novela Las aventuras de Pinocho del escritor italiano Carlo Collodi. Es el segundo largometraje animado de Disney después de Blancanieves y los siete enanitos y fue estrenada originalmente por RKO Radio Pictures el 23 de febrero de 1940. Esta fue la primera cinta de la factoría estrenada durante la Segunda Guerra Mundial.",
+        "description": "película animada estadounidense de 1940",
+        "urls": {
+          "desktop": {
+            "page": "https://es.wikipedia.org/wiki/Pinocho_(pel%C3%ADcula_de_1940)",
+            "revisions": "https://es.wikipedia.org/wiki/Pinocho_(pel%C3%ADcula_de_1940)?action=history",
+            "edit": "https://es.wikipedia.org/wiki/Pinocho_(pel%C3%ADcula_de_1940)?action=edit",
+            "talk": "https://es.wikipedia.org/wiki/Discusi%C3%B3n:Pinocho_(pel%C3%ADcula_de_1940)"
+          },
+          
