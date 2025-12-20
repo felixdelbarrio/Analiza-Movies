@@ -18,6 +18,10 @@ from typing import Final, Literal
 SourceType = Literal["plex", "dlna", "local", "other"]
 
 
+# ----------------------------------------------------------------------
+# Tokens de ruido típicos (release/file)
+# ----------------------------------------------------------------------
+
 _NOISE_TOKEN_RE: Final[re.Pattern[str]] = re.compile(
     r"""
     (?:
@@ -36,9 +40,42 @@ _NOISE_TOKEN_RE: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
-_YEAR_IN_TITLE_RE: Final[re.Pattern[str]] = re.compile(r"(?:^|[\s\(\[\-])((?:19|20)\d{2})(?:$|[\s\)\]\-])")
-_NON_ALNUM_RE: Final[re.Pattern[str]] = re.compile(r"[^0-9a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]+", re.UNICODE)
+_YEAR_IN_TITLE_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?:^|[\s\(\[\-])((?:19|20)\d{2})(?:$|[\s\)\]\-])"
+)
+_NON_ALNUM_RE: Final[re.Pattern[str]] = re.compile(
+    r"[^0-9a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]+", re.UNICODE
+)
 _MULTI_SPACE_RE: Final[re.Pattern[str]] = re.compile(r"\s{2,}")
+
+
+# ----------------------------------------------------------------------
+# Heurística de idioma (para DLNA/UPnP/local) y soporte Plex (library_language)
+# ----------------------------------------------------------------------
+
+# Palabras "muy españolas" o pistas claras
+_ES_HINT_RE: Final[re.Pattern[str]] = re.compile(
+    r"""
+    (?:
+        \bespa[nñ]ol\b|
+        \bcastellano\b|
+        \blatino\b|
+        \bsubtitulado\b|
+        \bdoblada\b|
+        \bvose\b|\bvos\b
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Caracteres/patrones que suelen indicar español (ñ, tildes, etc.)
+_ES_CHAR_RE: Final[re.Pattern[str]] = re.compile(r"[ñÑáéíóúÁÉÍÓÚüÜ]")
+
+# Artículos/preposiciones muy frecuentes en títulos ES
+_ES_FUNCTION_WORD_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(el|la|los|las|un|una|unos|unas|de|del|y|en|para|con|sin|al)\b",
+    re.IGNORECASE,
+)
 
 
 def _strip_accents(text: str) -> str:
@@ -69,7 +106,6 @@ def _remove_bracketed_noise(text: str) -> str:
             if _NOISE_TOKEN_RE.search(chunk):
                 out = out[: m.start()] + " " + out[m.end() :]
             else:
-                # Si el chunk es solo numérico/año o casi vacío, también lo eliminamos
                 inner = chunk[1:-1].strip()
                 if not inner or inner.isdigit() or _YEAR_IN_TITLE_RE.search(inner):
                     out = out[: m.start()] + " " + out[m.end() :]
@@ -80,7 +116,6 @@ def _remove_bracketed_noise(text: str) -> str:
 
 
 def _remove_trailing_dash_group(text: str) -> str:
-    # Casos típicos: "Titulo - 1080p x264 ..." / "Titulo - YIFY"
     parts = [p.strip() for p in text.split(" - ")]
     if len(parts) <= 1:
         return text
@@ -98,7 +133,6 @@ def _remove_noise_tokens(text: str) -> str:
     for tok in tokens:
         if _NOISE_TOKEN_RE.fullmatch(tok):
             continue
-        # tokens con puntos (x264, h.264) etc.
         if _NOISE_TOKEN_RE.fullmatch(tok.replace(".", "")):
             continue
         kept.append(tok)
@@ -121,12 +155,10 @@ def normalize_title_for_lookup(title: str) -> str:
     t = _remove_trailing_dash_group(t)
     t = _remove_bracketed_noise(t)
 
-    # Convertimos acentos -> base para mejorar búsquedas cuando el origen no coincide
+    # Para búsquedas externas, quitamos acentos para robustez
     t = _strip_accents(t)
 
-    # Sustituimos puntuación por espacios, pero preservamos letras/números
     t = _NON_ALNUM_RE.sub(" ", t)
-
     t = _remove_noise_tokens(t)
 
     t = t.lower().strip()
@@ -134,24 +166,59 @@ def normalize_title_for_lookup(title: str) -> str:
     return t
 
 
+def guess_spanish_from_title_or_path(title: str, file_path: str) -> bool:
+    """
+    Heurística (DLNA/UPnP/local):
+    - True si el título o el path contienen pistas claras de español.
+    - Conservadora: busca caracteres (ñ/tildes) y palabras funcionales típicas.
+    """
+    haystack = f"{title} {file_path}".strip()
+    if not haystack:
+        return False
+
+    if _ES_HINT_RE.search(haystack):
+        return True
+
+    # Caracteres típicos en español
+    if _ES_CHAR_RE.search(haystack):
+        return True
+
+    # Palabras funcionales comunes en ES: si aparecen varias, suma confianza
+    # (evitamos que un "de" aislado dispare)
+    words = _cleanup_separators(haystack.lower())
+    hits = len(_ES_FUNCTION_WORD_RE.findall(words))
+    return hits >= 2
+
+
+def is_probably_english_title(title: str) -> bool:
+    """
+    Heurística ligera para detectar si un título "parece inglés".
+    No es perfecta, pero sirve para evitar sugerencias obvias.
+    """
+    t = title.strip()
+    if not t:
+        return False
+
+    # Si tiene ñ/tildes -> NO es "inglés puro"
+    if _ES_CHAR_RE.search(t):
+        return False
+
+    # Palabras frecuentes en títulos EN
+    en_markers = re.compile(
+        r"\b(the|a|an|and|of|to|in|for|with|without|part|chapter|episode)\b",
+        re.IGNORECASE,
+    )
+    return bool(en_markers.search(t))
+
+
 @dataclass(slots=True)
 class MovieInput:
     """
     Representación normalizada de una película antes del análisis.
 
-    - `source`: origen ("plex", "dlna", "local", "other").
-    - `library`: nombre de la biblioteca o categoría.
-    - `title`: título a analizar / consultar.
-    - `year`: año de lanzamiento (si disponible).
-    - `file_path`: ruta del fichero físico (si existe). Obligatoria aunque sea "".
-    - `file_size_bytes`: tamaño en bytes si se conoce.
-    - `imdb_id_hint`: posible ID de IMDb detectado (puede venir de Plex).
-    - `plex_guid`: GUID propio de Plex si existe (None para DLNA/local).
-    - `rating_key`: clave interna de Plex para reproducir o identificar elementos.
-    - `thumb_url`: miniatura cuando la plataforma la proporciona.
-    - `extra`: diccionario extensible para datos específicos del origen.
-
-    Este objeto es estable, ligero y seguro para ser manipulado y analizado.
+    - `extra` puede incluir:
+        - "library_language": str (Plex) -> ej "es", "es-ES", "spa", "en"
+        - otros campos específicos de origen
     """
 
     source: SourceType
@@ -169,27 +236,44 @@ class MovieInput:
 
     extra: dict[str, object] = field(default_factory=dict)
 
-    # ----------------------------------------------------------------------
-    # Métodos auxiliares (opcionales pero útiles)
-    # ----------------------------------------------------------------------
-
     def has_physical_file(self) -> bool:
-        """Devuelve True si existe una ruta de fichero válida."""
         return bool(self.file_path)
 
     def normalized_title(self) -> str:
-        """Devuelve un título en minúsculas para búsquedas insensibles."""
         return self.title.lower().strip()
 
     def normalized_title_for_lookup(self) -> str:
-        """Devuelve el título depurado centralmente para búsquedas externas."""
         return normalize_title_for_lookup(self.title)
 
+    # -------------------------
+    # Idioma (Plex y heurística)
+    # -------------------------
+
+    def plex_library_language(self) -> str | None:
+        """
+        Idioma configurado en la librería Plex (si el pipeline Plex lo ha metido en extra).
+        Ejemplos: "es", "es-ES", "spa", "en", ...
+        """
+        val = self.extra.get("library_language")
+        return val if isinstance(val, str) and val.strip() else None
+
+    def is_spanish_context(self) -> bool:
+        """
+        True si:
+          - Plex: library_language indica español
+          - DLNA/local: heurística por título/path
+        """
+        lang = self.plex_library_language()
+        if lang:
+            l = lang.lower().strip()
+            if l.startswith("es") or l.startswith("spa"):
+                return True
+            return False
+
+        # DLNA/UPnP/local: heurística
+        return guess_spanish_from_title_or_path(self.title, self.file_path)
+
     def describe(self) -> str:
-        """
-        Devuelve una cadena útil para logs.
-        Ejemplo: "[plex] Matrix (1999) / Movies / file.mkv"
-        """
         year_str = str(self.year) if self.year is not None else "?"
         base = f"[{self.source}] {self.title} ({year_str}) / {self.library}"
         if self.file_path:

@@ -1,4 +1,5 @@
-"""Lógica de heurística para detectar posibles películas mal identificadas.
+"""
+Lógica de heurística para detectar posibles películas mal identificadas.
 
 Funciones públicas:
 - detect_misidentified(...): devuelve una cadena con pistas ('' si no hay).
@@ -32,9 +33,17 @@ def _normalize_title(s: str | None) -> str:
     return s2
 
 
+def _safe_imdb_id(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    return v or None
+
+
 def detect_misidentified(
     plex_title: str | None,
     plex_year: int | None,
+    plex_imdb_id: str | None,
     omdb_data: Mapping[str, object] | None,
     imdb_rating: float | None,
     imdb_votes: int | None,
@@ -44,10 +53,14 @@ def detect_misidentified(
     Devuelve un texto con pistas de posible identificación errónea,
     o cadena vacía si no hay sospechas.
 
-    Criterios:
+    REGLA DE ORO:
+      - Si Plex IMDb ID coincide con OMDb imdbID -> NO es misidentified (return "").
+
+    Heurísticas (solo si no aplica la regla de oro):
+      - IMDb ID mismatch (si ambos existen y difieren).
       - Título Plex vs Título OMDb muy distintos.
       - Año Plex vs Año OMDb separados > 1 año.
-      - IMDb muy baja con bastantes votos (posible "otra" peli").
+      - IMDb muy baja con bastantes votos (posible "otra" peli).
       - Rotten Tomatoes muy bajo con bastantes votos.
     """
     if not omdb_data:
@@ -55,46 +68,54 @@ def detect_misidentified(
 
     hints: list[str] = []
 
+    plex_imdb = _safe_imdb_id(plex_imdb_id)
+
+    omdb_imdb = _safe_imdb_id(omdb_data.get("imdbID"))
+    if omdb_data.get("Response") != "True":
+        # Si OMDb no trae ficha válida, no forzamos misidentified aquí.
+        return ""
+
     # -----------------------------
-    # 0) Datos básicos de OMDb
+    # 0) REGLA DE ORO: si coincide imdb -> NO misidentified
+    # -----------------------------
+    if plex_imdb and omdb_imdb and plex_imdb == omdb_imdb:
+        return ""
+
+    # -----------------------------
+    # 1) IMDb ID mismatch (señal fuerte)
+    # -----------------------------
+    if plex_imdb and omdb_imdb and plex_imdb != omdb_imdb:
+        hints.append(f"IMDb mismatch: Plex={plex_imdb} vs OMDb={omdb_imdb}")
+
+    # -----------------------------
+    # 2) Datos básicos de OMDb
     # -----------------------------
     omdb_title_raw = omdb_data.get("Title")
     omdb_title = omdb_title_raw if isinstance(omdb_title_raw, str) else ""
-
-    # Usaremos el campo Year crudo para cumplir con tests que esperan
-    # que los errores de parseo se capturen y logueen.
     omdb_year_raw = omdb_data.get("Year")
 
     pt = _normalize_title(plex_title)
     ot = _normalize_title(omdb_title)
 
     # -----------------------------
-    # 1) Títulos claramente distintos
+    # 3) Títulos claramente distintos
     # -----------------------------
     if pt and ot:
-        # Si uno contiene al otro, probablemente están relacionados
         if pt != ot and pt not in ot and ot not in pt:
             sim = difflib.SequenceMatcher(a=pt, b=ot).ratio()
+            _logger.debug(f"Title similarity for '{plex_title}' vs '{omdb_title}': {sim:.2f}")
             if sim < TITLE_SIMILARITY_THRESHOLD:
                 hints.append(
-                    f"Title mismatch: Plex='{plex_title}' vs OMDb='{omdb_title}' "
-                    f"(sim={sim:.2f})"
-                )
-                # Nuestro logger no soporta formato posicional, así que formateamos aquí
-                _logger.debug(
-                    f"Title similarity for '{plex_title}' vs '{omdb_title}': {sim:.2f}"
+                    f"Title mismatch: Plex='{plex_title}' vs OMDb='{omdb_title}' (sim={sim:.2f})"
                 )
 
     # -----------------------------
-    # 2) Años muy diferentes (> 1)
-    #    Importante: si el año de OMDb no es parseable, se captura y se loguea.
+    # 4) Años muy diferentes (> 1)
     # -----------------------------
     try:
         if plex_year is not None and omdb_year_raw is not None:
             plex_year_int = int(plex_year)
-            # Tomamos los 4 primeros caracteres del Year de OMDb, como "1994–1998"
-            omdb_year_int = int(str(omdb_year_raw)[:4])
-
+            omdb_year_int = int(str(omdb_year_raw)[:4])  # "1994–1998"
             if abs(plex_year_int - omdb_year_int) > 1:
                 hints.append(f"Year mismatch: Plex={plex_year_int}, OMDb={omdb_year_int}")
     except Exception:
@@ -103,7 +124,7 @@ def detect_misidentified(
         )
 
     # -----------------------------
-    # 3) IMDb muy baja con suficientes votos
+    # 5) IMDb muy baja con suficientes votos
     # -----------------------------
     votes: int = imdb_votes if isinstance(imdb_votes, int) else 0
     if (
@@ -120,7 +141,7 @@ def detect_misidentified(
         )
 
     # -----------------------------
-    # 4) RT muy bajo con suficientes votos
+    # 6) RT muy bajo con suficientes votos
     # -----------------------------
     if (
         rt_score is not None
@@ -137,9 +158,7 @@ def detect_misidentified(
     return " | ".join(hints)
 
 
-def sort_filtered_rows(
-    rows: list[dict[str, object]],
-) -> list[dict[str, object]]:
+def sort_filtered_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     """
     Ordena las filas filtradas para el CSV final, priorizando:
       1) DELETE primero, luego MAYBE, luego KEEP, luego UNKNOWN.
@@ -156,20 +175,12 @@ def sort_filtered_rows(
         imdb_votes = imdb_votes_raw if isinstance(imdb_votes_raw, int) else 0
 
         imdb_rating_raw = r.get("imdb_rating")
-        imdb_rating = (
-            float(imdb_rating_raw)
-            if isinstance(imdb_rating_raw, (int, float))
-            else 0.0
-        )
+        imdb_rating = float(imdb_rating_raw) if isinstance(imdb_rating_raw, (int, float)) else 0.0
 
         file_size_raw = r.get("file_size")
         file_size = file_size_raw if isinstance(file_size_raw, int) else 0
 
-        decision_rank = {"DELETE": 0, "MAYBE": 1, "KEEP": 2, "UNKNOWN": 3}.get(
-            decision,
-            3,
-        )
-        # Negativos para ordenar de mayor a menor en votes/rating/size
+        decision_rank = {"DELETE": 0, "MAYBE": 1, "KEEP": 2, "UNKNOWN": 3}.get(decision, 3)
         return decision_rank, -imdb_votes, -imdb_rating, -file_size
 
     return sorted(rows, key=key_func)
