@@ -8,7 +8,8 @@ from backend import logger as _logger
 from backend.analyze_input_core import AnalysisRow, analyze_input_movie
 from backend.metadata_fix import generate_metadata_suggestions_row
 from backend.movie_input import MovieInput
-from backend.wiki_client import get_movie_record
+from backend.omdb_client import omdb_query_with_cache
+from backend.wiki_client import get_wiki_client
 
 
 _OmdbCacheKey: TypeAlias = tuple[str, int | None, str | None]
@@ -50,21 +51,6 @@ def analyze_movie(
     *,
     source_movie: object | None = None,
 ) -> tuple[dict[str, object] | None, dict[str, object] | None, list[str]]:
-    """Pipeline único de análisis para una película.
-
-    Devuelve: (row_dict, metadata_suggestion_row_or_None, logs)
-
-    - Homogeneiza el flujo para Plex y DLNA.
-    - Precedencia de datos:
-        1) Datos nativos de Plex (si existen) prevalecen en título/año, ids y rating.
-        2) OMDb (Metascore, Poster, Website, imdbID).
-        3) Wiki/Wikidata (fallback de metacritic_score y ids).
-
-    Importante:
-    - `misidentified_hint` se calcula UNA sola vez en `analyze_input_movie`,
-      usando `plex_title/plex_year` (precedencia Plex cuando aplica).
-      Aquí no se recalcula ni se sobrescribe.
-    """
     logs: list[str] = []
 
     # ------------------------------------------------------------------
@@ -86,7 +72,7 @@ def analyze_movie(
         display_year = movie_input.year
 
     # ------------------------------------------------------------------
-    # 1) Fetch OMDb/Wiki (unificado) + caché local por iteración
+    # 1) Fetch OMDb + Wiki (separados) + caché local por iteración
     # ------------------------------------------------------------------
     omdb_data: Mapping[str, object] | None = None
     wiki_meta: dict[str, object] = {}
@@ -113,13 +99,14 @@ def analyze_movie(
             wiki_meta = wiki_cache.get(key, {})
             return cached
 
-        record = get_movie_record(
+        # --- OMDb (cache v2) ---
+        omdb_record = omdb_query_with_cache(
             title=title_for_fetch,
             year=year_for_fetch,
-            imdb_id_hint=imdb_hint,
+            imdb_id=imdb_hint,
         )
 
-        if record is None:
+        if omdb_record is None:
             empty: dict[str, object] = {}
             omdb_cache[key] = empty
             wiki_cache[key] = {}
@@ -127,7 +114,39 @@ def analyze_movie(
             wiki_meta = {}
             return empty
 
-        omdb_dict = dict(record) if isinstance(record, Mapping) else {}
+        omdb_dict = dict(omdb_record)
+
+        imdb_id_from_omdb: str | None = None
+        imdb_raw = omdb_dict.get("imdbID")
+        if isinstance(imdb_raw, str) and imdb_raw.strip():
+            imdb_id_from_omdb = imdb_raw.strip()
+
+        # --- Wiki: SIEMPRE intentamos con título+año (y con imdb si lo hay) ---
+        wiki_item = get_wiki_client().get_wiki(
+            title=title_for_fetch,
+            year=year_for_fetch,
+            imdb_id=imdb_id_from_omdb or imdb_hint,
+        )
+
+        if wiki_item is not None:
+            # Para mantener compatibilidad interna con el pipeline ya existente:
+            # metemos un bloque __wiki dentro del "omdb_dict"
+            wiki_block = wiki_item.get("wiki")
+            wikidata_block = wiki_item.get("wikidata")
+
+            merged_wiki: dict[str, object] = {}
+            if isinstance(wiki_block, Mapping):
+                merged_wiki.update(dict(wiki_block))
+            if isinstance(wikidata_block, Mapping):
+                merged_wiki["wikidata"] = dict(wikidata_block)
+
+            # Guardamos también IDs “planos” que ya consumes en reporting
+            imdb_cached = wiki_item.get("imdbID")
+            if isinstance(imdb_cached, str) or imdb_cached is None:
+                merged_wiki["imdb_id"] = imdb_cached
+
+            omdb_dict["__wiki"] = merged_wiki
+
         wiki_dict = _extract_wiki_meta(omdb_dict)
 
         omdb_cache[key] = omdb_dict
@@ -250,7 +269,6 @@ def analyze_movie(
     row["title"] = display_title
     row["year"] = display_year
 
-    # file_size_bytes -> file_size (compat dashboard)
     file_size_bytes = row.get("file_size_bytes")
     if isinstance(file_size_bytes, int):
         row["file_size"] = file_size_bytes
@@ -259,24 +277,20 @@ def analyze_movie(
 
     row["file"] = movie_input.file_path or row.get("file", "")
 
-    # NUEVO: URL real del origen (DLNA/UPnP, etc.)
     source_url_obj = movie_input.extra.get("source_url")
     row["source_url"] = source_url_obj if isinstance(source_url_obj, str) else ""
 
-    # Campos Plex
     row["rating_key"] = movie_input.rating_key
     row["guid"] = movie_input.plex_guid
     row["thumb"] = movie_input.thumb_url
 
-    # Campos externos
     row["imdb_id"] = imdb_id
     row["poster_url"] = poster_url
     row["trailer_url"] = trailer_url
     row["omdb_json"] = omdb_json_str
 
-    row["wikidata_id"] = wiki_meta.get("wikidata_id")
+    row["wikidata_id"] = wiki_meta.get("wikibase_item") or wiki_meta.get("wikidata_id")
     row["wikipedia_title"] = wiki_meta.get("wikipedia_title")
-
-    # Importante: NO se recalcula ni se sobrescribe misidentified_hint aquí.
+    row["source_language"] = wiki_meta.get("source_language")
 
     return row, meta_sugg, logs

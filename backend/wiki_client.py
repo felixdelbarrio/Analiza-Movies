@@ -2,99 +2,83 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
+import unicodedata
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import TypedDict
+from typing import Final, TypedDict
+from urllib.parse import quote
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from backend import logger as _logger
-from backend.config import DATA_DIR, OMDB_RETRY_EMPTY_CACHE, SILENT_MODE
-from backend.omdb_client import (
-    is_omdb_data_empty_for_ratings,
-    omdb_cache,
-    search_omdb_by_imdb_id,
-    search_omdb_with_candidates,
+from backend.config import (
+    DATA_DIR,
+    SILENT_MODE,
+    WIKI_FALLBACK_LANGUAGE,
+    WIKI_LANGUAGE,
+    WIKI_DEBUG,
 )
-
-# --------------------------------------------------------------------
-# Tipos auxiliares
-# --------------------------------------------------------------------
+from backend.movie_input import normalize_title_for_lookup
 
 
-class WikiMeta(TypedDict, total=False):
-    wikidata_id: str | None
+class WikidataEntity(TypedDict, total=False):
+    label: str
+    description: str | None
+    type: str
+
+
+class WikiBlock(TypedDict, total=False):
+    language: str
+    fallback_language: str
+    source_language: str
     wikipedia_title: str | None
-    source_lang: str | None
-    imdb_id: str | None
+    wikipedia_pageid: int | None
+    wikibase_item: str | None
+    summary: str
+    description: str
+    urls: dict[str, object]
+    images: dict[str, object]
 
 
-class _AliasRecord(TypedDict):
-    __alias: str
+class WikidataBlock(TypedDict, total=False):
+    qid: str
+    directors: list[str]
+    countries: list[str]
+    genres: list[str]
 
 
-WikiRecord = dict[str, object]
-WikiCache = dict[str, object]
+class WikiCacheItem(TypedDict):
+    Title: str
+    Year: str
+    imdbID: str | None
+    wiki: WikiBlock
+    wikidata: WikidataBlock
 
 
-# --------------------------------------------------------------------
-# Fichero de caché maestro (wiki + omdb fusionado)
-# --------------------------------------------------------------------
-BASE_DIR: Path = Path(__file__).resolve().parent
-WIKI_CACHE_PATH: Path = DATA_DIR / "wiki_cache.json"
-
-_wiki_cache: WikiCache = {}
-_wiki_cache_loaded: bool = False
-
-# Contexto de progreso para prefijar logs (x/total, biblioteca, título)
-_CURRENT_PROGRESS: dict[str, object | None] = {
-    "idx": None,
-    "total": None,
-    "library": None,
-    "title": None,
-}
+class WikiCacheFile(TypedDict):
+    schema: int
+    language: str
+    fallback_language: str
+    items: list[WikiCacheItem]
+    entities: dict[str, WikidataEntity]
 
 
-def set_wiki_progress(idx: int, total: int, library_title: str, movie_title: str) -> None:
-    _CURRENT_PROGRESS["idx"] = idx
-    _CURRENT_PROGRESS["total"] = total
-    _CURRENT_PROGRESS["library"] = library_title
-    _CURRENT_PROGRESS["title"] = movie_title
+_SCHEMA_VERSION: Final[int] = 3
+_CACHE_PATH: Final[Path] = DATA_DIR / "wiki_cache.json"
 
-
-def _progress_prefix() -> str:
-    idx = _CURRENT_PROGRESS.get("idx")
-    total = _CURRENT_PROGRESS.get("total")
-    library = _CURRENT_PROGRESS.get("library")
-    title = _CURRENT_PROGRESS.get("title")
-
-    if (
-        not isinstance(idx, int)
-        or not isinstance(total, int)
-        or not isinstance(library, str)
-        or not isinstance(title, str)
-    ):
-        return ""
-
-    return f"({idx}/{total}) {library} · {title} | "
-
-
-def _log_wiki(msg: str) -> None:
-    prefix = _progress_prefix()
-    text = f"{prefix}{msg}"
-    try:
-        _logger.info(text)
-    except Exception:
-        if not SILENT_MODE:
-            print(text)
-
-
-# --------------------------------------------------------------------
-# HTTP session with retries
-# --------------------------------------------------------------------
 _SESSION: requests.Session | None = None
+
+_WIKI_DEBUG_ENV: Final[bool] = os.getenv("ANALIZA_WIKI_DEBUG", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "y",
+    "on",
+}
 
 
 def _get_session() -> requests.Session:
@@ -103,688 +87,819 @@ def _get_session() -> requests.Session:
         return _SESSION
 
     session = requests.Session()
+
+    # Headers recomendados (Wikipedia/Wikidata pueden bloquear sin User-Agent “humano”)
+    session.headers.update(
+        {
+            "User-Agent": "Analiza-Movies/1.0 (local; contact: your-email-or-site)",
+            "Accept": "application/json,text/plain,*/*",
+            "Accept-Language": f"{WIKI_LANGUAGE},{WIKI_FALLBACK_LANGUAGE};q=0.8,en;q=0.6,es;q=0.5",
+        }
+    )
+
     retries = Retry(
         total=3,
         backoff_factor=0.5,
         status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("GET", "POST"),
+        allowed_methods=("GET",),
         raise_on_status=False,
     )
     adapter = HTTPAdapter(max_retries=retries)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     _SESSION = session
-    return _SESSION
+    return session
 
 
-# --------------------------------------------------------------------
-# Carga / guardado de wiki_cache
-# --------------------------------------------------------------------
-def _load_wiki_cache() -> None:
-    global _wiki_cache_loaded, _wiki_cache
-    if _wiki_cache_loaded:
-        return
-
-    if WIKI_CACHE_PATH.exists():
-        try:
-            with WIKI_CACHE_PATH.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            _wiki_cache = dict(data) if isinstance(data, dict) else {}
-            _log_wiki(f"[WIKI] wiki_cache cargada ({len(_wiki_cache)} entradas)")
-        except Exception as exc:
-            _logger.warning(f"[WIKI] Error cargando wiki_cache.json: {exc}")
-            try:
-                broken = WIKI_CACHE_PATH.with_suffix(".broken.json")
-                WIKI_CACHE_PATH.replace(broken)
-                _logger.warning(f"[WIKI] Archivo corrupto renombrado a {broken}")
-            except Exception:
-                pass
-            _wiki_cache = {}
-    else:
-        _wiki_cache = {}
-
-    _wiki_cache_loaded = True
-    _upgrade_wiki_cache_to_alias_format()
-
-
-def _save_wiki_cache() -> None:
-    if not _wiki_cache_loaded:
-        return
+def _log(msg: str) -> None:
     try:
-        dirpath = WIKI_CACHE_PATH.parent
-        dirpath.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            delete=False,
-            dir=str(dirpath),
-        ) as tf:
-            json.dump(_wiki_cache, tf, ensure_ascii=False, indent=2)
-            temp_name = tf.name
-        os.replace(temp_name, str(WIKI_CACHE_PATH))
-    except Exception as exc:
-        _logger.error(f"[WIKI] Error guardando wiki_cache.json: {exc}")
+        _logger.info(msg)
+    except Exception:
+        if not SILENT_MODE:
+            print(msg)
 
 
-def _normalize_title(title: str) -> str:
-    return " ".join((title or "").strip().lower().split())
+def _dbg(msg: str) -> None:
+    if not (WIKI_DEBUG or _WIKI_DEBUG_ENV):
+        return
+    _log(msg)
 
 
 def _safe_str(value: object) -> str | None:
-    if isinstance(value, str):
-        v = value.strip()
-        return v or None
-    return None
-
-
-def _ratings_fields() -> tuple[str, ...]:
-    return ("imdbRating", "imdbVotes", "Ratings", "Metascore")
-
-
-def _is_meaningful_omdb_value(value: object) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str) and value.strip().upper() == "N/A":
-        return False
-    if isinstance(value, str) and not value.strip():
-        return False
-    return True
-
-
-def _extract_wiki_part(record: WikiRecord | None) -> dict[str, object]:
-    if not record:
-        return {}
-    w = record.get("__wiki")
-    return dict(w) if isinstance(w, dict) else {}
-
-
-def _extract_imdb_from_record(record: WikiRecord) -> str | None:
-    imdb_obj = record.get("imdbID")
-    imdb = _safe_str(imdb_obj)
-    if imdb:
-        return imdb
-
-    w = record.get("__wiki")
-    if isinstance(w, dict):
-        imdb2 = _safe_str(w.get("imdb_id"))
-        if imdb2:
-            return imdb2
-    return None
-
-
-def _make_imdb_key(imdb_id: str) -> str:
-    return f"imdb:{imdb_id.strip().lower()}"
-
-
-def _is_alias_record(obj: object) -> bool:
-    return isinstance(obj, dict) and isinstance(obj.get("__alias"), str)
-
-
-def _resolve_cache_record(key: str, *, max_depth: int = 10) -> WikiRecord | None:
-    current_key = key
-    seen: set[str] = set()
-
-    for _ in range(max_depth):
-        if current_key in seen:
-            return None
-        seen.add(current_key)
-
-        raw = _wiki_cache.get(current_key)
-        if raw is None:
-            return None
-        if _is_alias_record(raw):
-            target = raw.get("__alias")
-            if not isinstance(target, str) or not target.strip():
-                return None
-            current_key = target
-            continue
-        return dict(raw) if isinstance(raw, dict) else None
-
-    return None
-
-
-def _set_alias(alias_key: str, target_key: str) -> None:
-    _wiki_cache[alias_key] = _AliasRecord(__alias=target_key)
-
-
-def _upgrade_wiki_cache_to_alias_format() -> None:
-    """
-    Migra en memoria:
-      - Si existe un title:* con record completo que tiene imdbID → convertir a alias
-        y asegurar canon imdb:*.
-      - Si existe un imdb:* → siempre se considera canónico.
-    """
-    changed = False
-
-    for key, value in list(_wiki_cache.items()):
-        if not isinstance(key, str):
-            continue
-        if not key.startswith("title:"):
-            continue
-        if not isinstance(value, dict):
-            continue
-        if _is_alias_record(value):
-            continue
-
-        imdb_id = _extract_imdb_from_record(value)
-        if not imdb_id:
-            continue
-
-        canon_key = _make_imdb_key(imdb_id)
-        canon_obj = _wiki_cache.get(canon_key)
-
-        if canon_obj is None or _is_alias_record(canon_obj):
-            _wiki_cache[canon_key] = dict(value)
-            changed = True
-
-        _set_alias(key, canon_key)
-        changed = True
-
-    if changed:
-        _save_wiki_cache()
-        _log_wiki("[WIKI] wiki_cache migrada a formato alias (imdb único).")
-
-
-def _apply_ratings_from_omdb_cache(record: WikiRecord, imdb_id: str) -> bool:
-    cached_obj = omdb_cache.get(imdb_id)
-    cached = cached_obj if isinstance(cached_obj, dict) else None
-    if cached is None:
-        return False
-
-    changed = False
-    for k in _ratings_fields():
-        if k not in cached:
-            continue
-        val = cached.get(k)
-        if not _is_meaningful_omdb_value(val):
-            continue
-
-        cur = record.get(k)
-        if cur != val:
-            record[k] = val
-            changed = True
-
-    return changed
-
-
-# --------------------------------------------------------------------
-# Consultas a Wikidata / Wikipedia
-# --------------------------------------------------------------------
-WIKIDATA_API: str = "https://www.wikidata.org/w/api.php"
-WIKIDATA_SPARQL: str = "https://query.wikidata.org/sparql"
-WIKIPEDIA_API_TEMPLATE: str = "https://{lang}.wikipedia.org/w/api.php"
-
-
-def _wikidata_get_entity(wikidata_id: str) -> dict[str, object] | None:
-    try:
-        session = _get_session()
-        resp = session.get(
-            WIKIDATA_API,
-            params={
-                "action": "wbgetentities",
-                "ids": wikidata_id,
-                "format": "json",
-                "props": "labels|claims|sitelinks",
-            },
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        entities = data.get("entities", {})
-        if isinstance(entities, dict):
-            entity = entities.get(wikidata_id)
-            if isinstance(entity, dict):
-                return entity
+    if not isinstance(value, str):
         return None
-    except Exception as exc:
-        _log_wiki(f"[WIKI] Error obteniendo entidad {wikidata_id} de Wikidata: {exc}")
-        return None
+    v = value.strip()
+    return v or None
 
 
-def _wikidata_search_by_imdb(imdb_id: str) -> tuple[str, dict[str, object]] | None:
-    query = f"""
-    SELECT ?item WHERE {{
-      ?item wdt:P345 "{imdb_id}" .
-    }} LIMIT 1
-    """
-
-    try:
-        session = _get_session()
-        resp = session.get(
-            WIKIDATA_SPARQL,
-            params={"query": query, "format": "json"},
-            headers={"Accept": "application/sparql-results+json"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        results = data.get("results", {}).get("bindings", [])
-        if not isinstance(results, list) or not results:
-            return None
-
-        first = results[0]
-        item = first.get("item", {})
-        if not isinstance(item, dict):
-            return None
-
-        item_uri = item.get("value")
-        if not isinstance(item_uri, str):
-            return None
-
-        wikidata_id = item_uri.split("/")[-1]
-        entity = _wikidata_get_entity(wikidata_id)
-        if not entity:
-            return None
-
-        return wikidata_id, entity
-    except Exception as exc:
-        _log_wiki(f"[WIKI] Error en búsqueda SPARQL por IMDb ID {imdb_id}: {exc}")
-        return None
-
-
-def _wikidata_search_by_title(
-    title: str,
-    year: int | None,
-    language: str = "en",
-) -> tuple[str, dict[str, object]] | None:
-    try:
-        session = _get_session()
-        resp = session.get(
-            WIKIDATA_API,
-            params={
-                "action": "wbsearchentities",
-                "search": title,
-                "language": language,
-                "type": "item",
-                "format": "json",
-                "limit": 5,
-            },
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        search_results = data.get("search", [])
-        if not isinstance(search_results, list) or not search_results:
-            return None
-
-        for candidate in search_results:
-            if not isinstance(candidate, dict):
-                continue
-
-            wikidata_id = candidate.get("id")
-            if not isinstance(wikidata_id, str):
-                continue
-
-            entity = _wikidata_get_entity(wikidata_id)
-            if not entity:
-                continue
-
-            claims = entity.get("claims", {})
-            if not isinstance(claims, dict):
-                continue
-
-            if "P31" in claims:
-                ok_type = False
-                for inst in claims["P31"]:
-                    if not isinstance(inst, dict):
-                        continue
-                    val = (
-                        inst.get("mainsnak", {})
-                        .get("datavalue", {})
-                        .get("value", {})
-                    )
-                    if isinstance(val, dict) and val.get("id") in {
-                        "Q11424",
-                        "Q24869",
-                    }:
-                        ok_type = True
-                        break
-                if not ok_type:
-                    continue
-
-            if year is not None and "P577" in claims:
-                try:
-                    first_p577 = claims["P577"][0]
-                    if isinstance(first_p577, dict):
-                        time_str = (
-                            first_p577.get("mainsnak", {})
-                            .get("datavalue", {})
-                            .get("value", {})
-                            .get("time")
-                        )
-                        if isinstance(time_str, str) and len(time_str) >= 5:
-                            ent_year = int(time_str[1:5])
-                            if abs(ent_year - int(year)) > 1:
-                                continue
-                except Exception:
-                    pass
-
-            return wikidata_id, entity
-
-        return None
-    except Exception as exc:
-        _log_wiki(f"[WIKI] Error buscando por título '{title}' en Wikidata: {exc}")
-        return None
-
-
-def _extract_imdb_id_from_entity(entity: dict[str, object]) -> str | None:
-    claims = entity.get("claims", {})
-    if not isinstance(claims, dict) or "P345" not in claims:
-        return None
-    try:
-        first = claims["P345"][0]
-        if not isinstance(first, dict):
-            return None
-        snak = first["mainsnak"]
-        if not isinstance(snak, dict):
-            return None
-        datavalue = snak["datavalue"]
-        if not isinstance(datavalue, dict):
-            return None
-        value = datavalue["value"]
-        if not isinstance(value, str):
-            return None
+def _safe_int(value: object) -> int | None:
+    if isinstance(value, int):
         return value
-    except Exception:
-        return None
-
-
-def _extract_wikipedia_title(entity: dict[str, object], language: str) -> str | None:
-    sitelinks = entity.get("sitelinks", {})
-    if not isinstance(sitelinks, dict):
-        return None
-    key = f"{language}wiki"
-    site = sitelinks.get(key)
-    if isinstance(site, dict):
-        title = site.get("title")
-        return str(title) if title is not None else None
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            return None
     return None
 
 
-def _wiki_meta_from_entity(
-    *,
-    wikidata_id: str | None,
-    entity: dict[str, object] | None,
-    imdb_id: str | None,
-    language: str,
-) -> WikiMeta:
-    if entity is None:
-        return {}
-
-    wiki_title = _extract_wikipedia_title(entity, language) or _extract_wikipedia_title(entity, "es")
+def _empty_cache() -> WikiCacheFile:
     return {
-        "wikidata_id": wikidata_id,
-        "wikipedia_title": wiki_title,
-        "source_lang": language,
-        "imdb_id": imdb_id,
+        "schema": _SCHEMA_VERSION,
+        "language": WIKI_LANGUAGE,
+        "fallback_language": WIKI_FALLBACK_LANGUAGE,
+        "items": [],
+        "entities": {},
     }
 
 
-def _try_resolve_imdb_from_wiki_cache_by_title(norm_title: str) -> str | None:
-    if not norm_title:
-        return None
+def _save_cache(cache: WikiCacheFile) -> None:
+    dirpath = _CACHE_PATH.parent
+    dirpath.mkdir(parents=True, exist_ok=True)
 
-    imdb_ids: set[str] = set()
-    for key in list(_wiki_cache.keys()):
-        if not isinstance(key, str):
-            continue
-        if not key.startswith("title:"):
-            continue
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        delete=False,
+        dir=str(dirpath),
+    ) as tf:
+        json.dump(cache, tf, ensure_ascii=False, indent=2)
+        temp_name = tf.name
 
-        parts = key.split(":", 2)
-        if len(parts) != 3:
-            continue
+    Path(temp_name).replace(_CACHE_PATH)
 
-        key_norm_title = parts[2]
-        if key_norm_title != norm_title:
-            continue
 
-        resolved = _resolve_cache_record(key)
-        if resolved is None:
-            continue
+def _load_cache() -> WikiCacheFile:
+    if not _CACHE_PATH.exists():
+        cache = _empty_cache()
+        _save_cache(cache)
+        _dbg(f"[WIKI-DEBUG] cache file created: {_CACHE_PATH}")
+        return cache
 
-        imdb = _extract_imdb_from_record(resolved)
-        imdb_norm = imdb.lower() if isinstance(imdb, str) and imdb.strip() else None
-        if imdb_norm:
-            imdb_ids.add(imdb_norm)
-        if len(imdb_ids) > 1:
-            return None
+    try:
+        with _CACHE_PATH.open("r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except Exception as exc:
+        _dbg(f"[WIKI-DEBUG] cache read failed ({exc}); recreating empty cache")
+        cache = _empty_cache()
+        _save_cache(cache)
+        return cache
 
-    if len(imdb_ids) == 1:
-        return next(iter(imdb_ids))
+    if not isinstance(raw, Mapping):
+        cache = _empty_cache()
+        _save_cache(cache)
+        return cache
+
+    if raw.get("schema") != _SCHEMA_VERSION:
+        _dbg(f"[WIKI-DEBUG] cache schema mismatch -> recreate (found={raw.get('schema')})")
+        cache = _empty_cache()
+        _save_cache(cache)
+        return cache
+
+    items_obj = raw.get("items")
+    entities_obj = raw.get("entities")
+    if not isinstance(items_obj, list) or not isinstance(entities_obj, Mapping):
+        cache = _empty_cache()
+        _save_cache(cache)
+        return cache
+
+    return {
+        "schema": _SCHEMA_VERSION,
+        "language": str(raw.get("language") or WIKI_LANGUAGE),
+        "fallback_language": str(raw.get("fallback_language") or WIKI_FALLBACK_LANGUAGE),
+        "items": list(items_obj),  # type: ignore[list-item]
+        "entities": dict(entities_obj),  # type: ignore[dict-item]
+    }
+
+
+def _find_existing(
+    items: list[WikiCacheItem],
+    norm_title: str,
+    norm_year: str,
+    imdb_id: str | None,
+) -> WikiCacheItem | None:
+    if imdb_id:
+        for item in items:
+            if item.get("imdbID") == imdb_id:
+                return item
+
+    for item in items:
+        if (
+            item.get("imdbID") is None
+            and item.get("Title") == norm_title
+            and item.get("Year") == norm_year
+        ):
+            return item
+
     return None
 
 
-# --------------------------------------------------------------------
-# API pública: get_movie_record
-# --------------------------------------------------------------------
+_WORD_RE: Final[re.Pattern[str]] = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 
 
-def get_movie_record(
-    title: str,
-    year: int | None = None,
-    imdb_id_hint: str | None = None,
-    language: str = "en",
-) -> WikiRecord | None:
-    _load_wiki_cache()
+def _strip_accents(text: str) -> str:
+    norm = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in norm if not unicodedata.combining(ch))
 
-    norm_title = _normalize_title(title)
-    imdb_norm = _safe_str(imdb_id_hint)
-    imdb_norm_l = imdb_norm.lower() if imdb_norm else None
 
-    if imdb_norm_l is None:
-        resolved = _try_resolve_imdb_from_wiki_cache_by_title(norm_title)
-        if resolved is not None:
-            imdb_norm_l = resolved
-            _log_wiki(
-                f"[WIKI] imdb_id_hint ausente: resuelto desde wiki_cache por título "
-                f"norm='{norm_title}' → imdbID={imdb_norm_l}"
-            )
+def _canon_cmp(text: str) -> str:
+    base = _strip_accents(text).lower()
+    tokens = _WORD_RE.findall(base)
+    return " ".join(tokens)
 
-    imdb_key = _make_imdb_key(imdb_norm_l) if imdb_norm_l else None
-    title_key = f"title:{year}:{norm_title}"
-    base_cache_key = imdb_key if imdb_key else title_key
 
-    _log_wiki(
-        f"[WIKI] get_movie_record(title='{title}', year={year}, imdb_hint={imdb_id_hint}) "
-        f"→ base_cache_key='{base_cache_key}'"
-    )
+def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str, object] | None:
+    safe_title = quote(title.replace(" ", "_"), safe="")
+    url = f"https://{language}.wikipedia.org/api/rest_v1/page/summary/{safe_title}"
 
-    cached: WikiRecord | None = None
-    if imdb_key:
-        cached = _resolve_cache_record(imdb_key)
+    _dbg(f"[WIKI-DEBUG] wikipedia.summary -> GET {url}")
+
+    try:
+        session = _get_session()
+        resp = session.get(url, timeout=10)
+    except Exception as exc:
+        _dbg(f"[WIKI-DEBUG] wikipedia.summary EXC: {exc}")
+        return None
+
+    _dbg(f"[WIKI-DEBUG] wikipedia.summary <- status={resp.status_code}")
+
+    if resp.status_code != 200:
+        if resp.status_code == 403:
+            _dbg(f"[WIKI-DEBUG] wikipedia.summary 403 body={resp.text[:300]!r}")
+        return None
+
+    try:
+        data = resp.json()
+    except Exception as exc:
+        _dbg(f"[WIKI-DEBUG] wikipedia.summary JSON EXC: {exc}")
+        return None
+
+    if not isinstance(data, Mapping):
+        _dbg("[WIKI-DEBUG] wikipedia.summary JSON not Mapping")
+        return None
+
+    # Rechaza desambiguaciones explícitas
+    if _safe_str(data.get("type")) == "disambiguation":
+        _dbg("[WIKI-DEBUG] wikipedia.summary -> disambiguation (skip)")
+        return None
+
+    return data
+
+
+def _wikipedia_search(*, query: str, language: str, limit: int = 6) -> list[dict[str, object]]:
+    params: dict[str, str] = {
+        "action": "query",
+        "list": "search",
+        "srsearch": query,
+        "srlimit": str(limit),
+        "format": "json",
+        "utf8": "1",
+    }
+
+    url = f"https://{language}.wikipedia.org/w/api.php"
+    _dbg(f"[WIKI-DEBUG] wikipedia.search -> GET {url} params={params!r}")
+
+    try:
+        session = _get_session()
+        resp = session.get(url, params=params, timeout=10)
+    except Exception as exc:
+        _dbg(f"[WIKI-DEBUG] wikipedia.search EXC: {exc}")
+        return []
+
+    _dbg(f"[WIKI-DEBUG] wikipedia.search <- status={resp.status_code}")
+
+    if resp.status_code != 200:
+        if resp.status_code == 403:
+            _dbg(f"[WIKI-DEBUG] wikipedia.search 403 body={resp.text[:300]!r}")
+        return []
+
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        _dbg(f"[WIKI-DEBUG] wikipedia.search JSON EXC: {exc}")
+        return []
+
+    if not isinstance(payload, Mapping):
+        _dbg("[WIKI-DEBUG] wikipedia.search JSON not Mapping")
+        return []
+
+    q = payload.get("query")
+    if not isinstance(q, Mapping):
+        _dbg("[WIKI-DEBUG] wikipedia.search payload.query not Mapping")
+        return []
+
+    search_obj = q.get("search")
+    if not isinstance(search_obj, list):
+        _dbg("[WIKI-DEBUG] wikipedia.search payload.query.search not list")
+        return []
+
+    out: list[dict[str, object]] = []
+    for it in search_obj:
+        if isinstance(it, Mapping):
+            out.append(dict(it))
+
+    return out
+
+
+def _score_search_hit(*, hit_title: str, hit_snippet: str, wanted_title: str, year: int | None) -> float:
+    score = 0.0
+
+    want = _canon_cmp(wanted_title)
+    got = _canon_cmp(hit_title)
+
+    if want == got:
+        score += 10.0
+    elif want and got and (want in got or got in want):
+        score += 6.0
     else:
-        cached = _resolve_cache_record(title_key)
+        want_tokens = set(want.split())
+        got_tokens = set(got.split())
+        if want_tokens and got_tokens:
+            inter = len(want_tokens & got_tokens)
+            score += min(5.0, inter * 0.8)
 
-    if cached is not None:
-        _log_wiki(f"[WIKI] cache HIT para {imdb_key or title_key}")
+    sn = _canon_cmp(hit_snippet)
+    if "pelicula" in sn or "film" in sn or "largometraje" in sn or "movie" in sn:
+        score += 2.0
 
-        if OMDB_RETRY_EMPTY_CACHE and is_omdb_data_empty_for_ratings(cached):
-            imdb_cached = _extract_imdb_from_record(cached)
-            if imdb_cached:
-                _log_wiki(
-                    f"[WIKI] Registro en wiki_cache sin ratings, reintentando OMDb "
-                    f"con imdbID={imdb_cached}..."
-                )
-                refreshed = search_omdb_by_imdb_id(imdb_cached)
-                if isinstance(refreshed, dict) and refreshed.get("Response") == "True":
-                    merged: WikiRecord = dict(cached)
-                    merged.update(refreshed)
+    if year is not None:
+        y = str(year)
+        if y in hit_title:
+            score += 2.0
+        if y in hit_snippet:
+            score += 1.0
 
-                    wiki_part = cached.get("__wiki")
-                    if isinstance(wiki_part, dict):
-                        merged["__wiki"] = wiki_part
+    if "desambiguacion" in sn or "(desambiguacion" in _canon_cmp(hit_title):
+        score -= 4.0
 
-                    canon_key = _make_imdb_key(imdb_cached)
-                    _wiki_cache[canon_key] = merged
-                    _set_alias(title_key, canon_key)
-                    if imdb_key:
-                        _set_alias(imdb_key, canon_key)
-                    _save_wiki_cache()
-                    _log_wiki(
-                        f"[WIKI] wiki_cache actualizada con datos OMDb para {canon_key} (alias por título)."
-                    )
-                    return merged
+    return score
 
-        return cached
 
-    _log_wiki(f"[WIKI] cache MISS para {base_cache_key}, resolviendo...")
+def _rank_wikipedia_candidates(*, lookup_title: str, year: int | None, language: str) -> list[str]:
+    queries: list[str] = []
+    clean_title = " ".join(lookup_title.strip().split())
 
-    wikidata_id: str | None = None
-    entity: dict[str, object] | None = None
-    imdb_id_from_wiki: str | None = None
-    source_lang: str = language
-
-    if imdb_norm_l:
-        result = _wikidata_search_by_imdb(imdb_norm_l)
-        if result is not None:
-            wikidata_id, entity = result
-            imdb_id_from_wiki = _extract_imdb_id_from_entity(entity)
-            _log_wiki(
-                f"[WIKI] Encontrado en Wikidata por IMDb ID {imdb_norm_l}: "
-                f"wikidata_id={wikidata_id}, imdb_id_wiki={imdb_id_from_wiki}"
-            )
-
-        if entity is None:
-            for lang in (language, "es"):
-                result2 = _wikidata_search_by_title(title, year, language=lang)
-                if result2 is None:
-                    continue
-                wikidata_id, entity = result2
-                imdb_id_from_wiki = _extract_imdb_id_from_entity(entity)
-                source_lang = lang
-                _log_wiki(
-                    f"[WIKI] Reintento por título (lang={lang}): "
-                    f"wikidata_id={wikidata_id}, imdb_id_wiki={imdb_id_from_wiki}"
-                )
-                break
+    if language.lower().startswith("es"):
+        if year is not None:
+            queries += [f"{clean_title} {year} película", f"{clean_title} {year} film"]
+        queries += [f"{clean_title} película", f"{clean_title} film", clean_title]
     else:
-        for lang in (language, "es"):
-            result3 = _wikidata_search_by_title(title, year, language=lang)
-            if result3 is None:
+        if year is not None:
+            queries += [f"{clean_title} {year} film", f"{clean_title} {year} movie"]
+        queries += [f"{clean_title} film", f"{clean_title} movie", clean_title]
+
+    scored: dict[str, float] = {}
+
+    for q in queries:
+        hits = _wikipedia_search(query=q, language=language, limit=10)
+        for hit in hits:
+            hit_title = _safe_str(hit.get("title")) or ""
+            if not hit_title:
                 continue
-            wikidata_id, entity = result3
-            imdb_id_from_wiki = _extract_imdb_id_from_entity(entity)
-            source_lang = lang
-            _log_wiki(
-                f"[WIKI] Encontrado en Wikidata por título (lang={lang}): "
-                f"wikidata_id={wikidata_id}, imdb_id_wiki={imdb_id_from_wiki}"
+            snippet_raw = hit.get("snippet")
+            hit_snippet = str(snippet_raw) if snippet_raw is not None else ""
+            s = _score_search_hit(
+                hit_title=hit_title,
+                hit_snippet=hit_snippet,
+                wanted_title=clean_title,
+                year=year,
             )
-            break
+            # quédate con el mejor score visto para ese título
+            prev = scored.get(hit_title)
+            if prev is None or s > prev:
+                scored[hit_title] = s
 
-    imdb_id_final = (imdb_id_from_wiki or imdb_norm_l) if (imdb_id_from_wiki or imdb_norm_l) else None
+    # ordena por score desc
+    ranked = sorted(scored.items(), key=lambda kv: kv[1], reverse=True)
 
-    if imdb_id_final:
-        canon_key = _make_imdb_key(imdb_id_final)
-        cached2 = _resolve_cache_record(canon_key)
-        if cached2 is not None:
-            _log_wiki(f"[WIKI] cache HIT (post-resolve) para {canon_key}")
-            _set_alias(title_key, canon_key)
-            if imdb_key:
-                _set_alias(imdb_key, canon_key)
-            _save_wiki_cache()
-            return cached2
+    # umbral: evita basura
+    out = [t for (t, s) in ranked if s >= 4.0]
+    _dbg(f"[WIKI-DEBUG] ranked_candidates({language}) -> {out[:10]!r}")
+    return out
 
-    omdb_data: dict[str, object] | None = None
-    omdb_called_by_title = False
 
-    if imdb_id_final is None:
-        omdb_called_by_title = True
-        omdb_data = search_omdb_with_candidates(title, year)
-        if isinstance(omdb_data, dict) and omdb_data.get("Response") == "True":
-            imdb_obj = omdb_data.get("imdbID")
-            imdb_id_from_omdb = _safe_str(imdb_obj)
-            if imdb_id_from_omdb:
-                imdb_id_final = imdb_id_from_omdb.lower()
+def _choose_wikipedia_summary_candidates(title_for_lookup: str, year: int | None) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
 
-    if imdb_id_final is not None and not omdb_called_by_title:
-        omdb_data = search_omdb_by_imdb_id(imdb_id_final)
+    for t in _rank_wikipedia_candidates(lookup_title=title_for_lookup, year=year, language=WIKI_LANGUAGE)[:8]:
+        out.append((t, WIKI_LANGUAGE))
 
-    wiki_meta = _wiki_meta_from_entity(
-        wikidata_id=wikidata_id,
-        entity=entity,
-        imdb_id=imdb_id_final,
-        language=source_lang,
+    if WIKI_FALLBACK_LANGUAGE and WIKI_FALLBACK_LANGUAGE != WIKI_LANGUAGE:
+        for t in _rank_wikipedia_candidates(
+            lookup_title=title_for_lookup, year=year, language=WIKI_FALLBACK_LANGUAGE
+        )[:8]:
+            out.append((t, WIKI_FALLBACK_LANGUAGE))
+
+    return out
+
+
+# -------------------------
+# Wikidata helpers
+# -------------------------
+
+def _fetch_wikidata_entity_json(qid: str) -> Mapping[str, object] | None:
+    url = f"https://www.wikidata.org/wiki/Special:EntityData/{qid}.json"
+    _dbg(f"[WIKI-DEBUG] wikidata.entity -> GET {url}")
+
+    try:
+        session = _get_session()
+        resp = session.get(url, timeout=10)
+    except Exception as exc:
+        _dbg(f"[WIKI-DEBUG] wikidata.entity EXC: {exc}")
+        return None
+
+    _dbg(f"[WIKI-DEBUG] wikidata.entity <- status={resp.status_code}")
+
+    if resp.status_code != 200:
+        return None
+
+    try:
+        data = resp.json()
+    except Exception as exc:
+        _dbg(f"[WIKI-DEBUG] wikidata.entity JSON EXC: {exc}")
+        return None
+
+    if not isinstance(data, Mapping):
+        _dbg("[WIKI-DEBUG] wikidata.entity JSON not Mapping")
+        return None
+
+    entities = data.get("entities")
+    if not isinstance(entities, Mapping):
+        _dbg("[WIKI-DEBUG] wikidata.entity payload.entities not Mapping")
+        return None
+
+    entity = entities.get(qid)
+    if not isinstance(entity, Mapping):
+        _dbg("[WIKI-DEBUG] wikidata.entity payload.entities[qid] not Mapping")
+        return None
+
+    return entity
+
+
+def _extract_qids_from_claims(entity: Mapping[str, object], property_id: str) -> list[str]:
+    claims_obj = entity.get("claims")
+    if not isinstance(claims_obj, Mapping):
+        return []
+
+    prop_claims = claims_obj.get(property_id)
+    if not isinstance(prop_claims, list):
+        return []
+
+    qids: list[str] = []
+    for claim in prop_claims:
+        if not isinstance(claim, Mapping):
+            continue
+        mainsnak = claim.get("mainsnak")
+        if not isinstance(mainsnak, Mapping):
+            continue
+        datavalue = mainsnak.get("datavalue")
+        if not isinstance(datavalue, Mapping):
+            continue
+        value = datavalue.get("value")
+        if not isinstance(value, Mapping):
+            continue
+        qid = _safe_str(value.get("id"))
+        if not qid:
+            continue
+        if qid not in qids:
+            qids.append(qid)
+
+    return qids
+
+
+def _chunked(values: list[str], size: int) -> Iterable[list[str]]:
+    if size <= 0:
+        yield values
+        return
+    for i in range(0, len(values), size):
+        yield values[i : i + size]
+
+
+def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: str) -> dict[str, WikidataEntity]:
+    if not qids:
+        return {}
+
+    out: dict[str, WikidataEntity] = {}
+    languages = (
+        f"{language}|{fallback_language}"
+        if fallback_language and fallback_language != language
+        else language
     )
 
-    if isinstance(omdb_data, dict) and omdb_data:
-        record_out: WikiRecord = dict(omdb_data)
-        if imdb_id_final and not record_out.get("imdbID"):
-            record_out["imdbID"] = imdb_id_final
-    else:
-        record_out = {
-            "Title": title,
-            "Year": str(year) if year is not None else None,
-            "imdbID": imdb_id_final,
+    for batch in _chunked(qids, 50):
+        ids = "|".join(batch)
+        params: dict[str, str] = {
+            "action": "wbgetentities",
+            "ids": ids,
+            "props": "labels|descriptions",
+            "languages": languages,
+            "format": "json",
         }
 
-    if wiki_meta:
-        record_out["__wiki"] = wiki_meta
+        _dbg(f"[WIKI-DEBUG] wikidata.labels -> GET w/api.php params={params!r}")
 
-    if imdb_id_final:
-        _apply_ratings_from_omdb_cache(record_out, imdb_id_final)
+        try:
+            session = _get_session()
+            resp = session.get("https://www.wikidata.org/w/api.php", params=params, timeout=10)
+        except Exception as exc:
+            _dbg(f"[WIKI-DEBUG] wikidata.labels EXC: {exc}")
+            continue
 
-    existing: WikiRecord | None = None
-    canon_key_final: str | None = _make_imdb_key(imdb_id_final) if imdb_id_final else None
+        _dbg(f"[WIKI-DEBUG] wikidata.labels <- status={resp.status_code}")
 
-    if canon_key_final:
-        existing = _resolve_cache_record(canon_key_final)
-    if existing is None:
-        existing = _resolve_cache_record(title_key)
-    if existing is None and imdb_key:
-        existing = _resolve_cache_record(imdb_key)
+        if resp.status_code != 200:
+            continue
 
-    if existing is not None and not wiki_meta:
-        existing_wiki = existing.get("__wiki")
-        if isinstance(existing_wiki, dict):
-            record_out["__wiki"] = existing_wiki
+        try:
+            payload = resp.json()
+        except Exception as exc:
+            _dbg(f"[WIKI-DEBUG] wikidata.labels JSON EXC: {exc}")
+            continue
 
+        if not isinstance(payload, Mapping):
+            continue
+
+        entities_obj = payload.get("entities")
+        if not isinstance(entities_obj, Mapping):
+            continue
+
+        for qid in batch:
+            ent = entities_obj.get(qid)
+            if not isinstance(ent, Mapping):
+                continue
+
+            label = qid
+            labels_obj = ent.get("labels")
+            if isinstance(labels_obj, Mapping):
+                lbl_primary = labels_obj.get(language)
+                lbl_fallback = labels_obj.get(fallback_language) if fallback_language else None
+                if isinstance(lbl_primary, Mapping):
+                    label = str(lbl_primary.get("value") or qid)
+                elif isinstance(lbl_fallback, Mapping):
+                    label = str(lbl_fallback.get("value") or qid)
+
+            desc: str | None = None
+            descriptions_obj = ent.get("descriptions")
+            if isinstance(descriptions_obj, Mapping):
+                d_primary = descriptions_obj.get(language)
+                d_fallback = descriptions_obj.get(fallback_language) if fallback_language else None
+                if isinstance(d_primary, Mapping):
+                    desc = _safe_str(d_primary.get("value"))
+                elif isinstance(d_fallback, Mapping):
+                    desc = _safe_str(d_fallback.get("value"))
+
+            out[qid] = {"label": label, "description": desc}
+
+    _dbg(f"[WIKI-DEBUG] wikidata.labels parsed: n={len(out)}")
+    return out
+
+
+def _wikidata_sparql(query: str) -> Mapping[str, object] | None:
+    # endpoint SPARQL
+    url = "https://query.wikidata.org/sparql"
+    params = {"format": "json", "query": query}
+
+    _dbg(f"[WIKI-DEBUG] wikidata.sparql -> GET query.wikidata.org (len={len(query)})")
+
+    try:
+        session = _get_session()
+        resp = session.get(url, params=params, timeout=15)
+    except Exception as exc:
+        _dbg(f"[WIKI-DEBUG] wikidata.sparql EXC: {exc}")
+        return None
+
+    _dbg(f"[WIKI-DEBUG] wikidata.sparql <- status={resp.status_code}")
+
+    if resp.status_code != 200:
+        return None
+
+    try:
+        data = resp.json()
+    except Exception as exc:
+        _dbg(f"[WIKI-DEBUG] wikidata.sparql JSON EXC: {exc}")
+        return None
+
+    if not isinstance(data, Mapping):
+        return None
+    return data
+
+
+def _wikidata_is_film(qid: str) -> bool:
+    # Valida: instance-of / subclass-of film
+    # wdt:P31/wdt:P279* wd:Q11424
+    query = f"""
+ASK {{
+  wd:{qid} wdt:P31/wdt:P279* wd:Q11424 .
+}}
+""".strip()
+
+    data = _wikidata_sparql(query)
+    if not data:
+        return False
+
+    b = data.get("boolean")
+    ok = bool(b is True)
+    _dbg(f"[WIKI-DEBUG] wikidata.is_film({qid}) -> {ok}")
+    return ok
+
+
+def _fetch_qid_by_imdb_id(imdb_id: str) -> str | None:
+    # IMDb ID property: P345
+    imdb_id = imdb_id.strip()
+    if not imdb_id:
+        return None
+
+    query = f"""
+SELECT ?item WHERE {{
+  ?item wdt:P345 "{imdb_id}" .
+}}
+LIMIT 2
+""".strip()
+
+    data = _wikidata_sparql(query)
+    if not data:
+        return None
+
+    results = data.get("results")
+    if not isinstance(results, Mapping):
+        return None
+    bindings = results.get("bindings")
+    if not isinstance(bindings, list) or not bindings:
+        return None
+
+    first = bindings[0]
+    if not isinstance(first, Mapping):
+        return None
+    item = first.get("item")
+    if not isinstance(item, Mapping):
+        return None
+    val = _safe_str(item.get("value"))
+    if not val:
+        return None
+
+    # value = https://www.wikidata.org/entity/Qxxxxx
+    m = re.search(r"/entity/(Q\d+)$", val)
+    qid = m.group(1) if m else None
+    _dbg(f"[WIKI-DEBUG] qid_by_imdb({imdb_id}) -> {qid!r}")
+    return qid
+
+
+def _extract_sitelink_title(entity: Mapping[str, object], language: str) -> str | None:
+    # Special:EntityData incluye "sitelinks"
+    sitelinks = entity.get("sitelinks")
+    if not isinstance(sitelinks, Mapping):
+        return None
+    key = f"{language}wiki"
+    sl = sitelinks.get(key)
+    if not isinstance(sl, Mapping):
+        return None
+    return _safe_str(sl.get("title"))
+
+
+# -------------------------
+# Main
+# -------------------------
+
+def get_wiki_entry(title: str, year: int | None, imdb_id: str | None) -> WikiCacheItem | None:
+    lookup_title = normalize_title_for_lookup(title)
+    if not lookup_title:
+        _dbg(f"[WIKI-DEBUG] get_wiki_entry: empty lookup_title from title={title!r}")
+        return None
+
+    norm_title = lookup_title
+    norm_year = str(year) if year is not None else ""
+
+    cache = _load_cache()
+    existing = _find_existing(cache["items"], norm_title, norm_year, imdb_id)
     if existing is not None:
-        old_imdb = _safe_str(existing.get("imdbID"))
-        new_imdb = _safe_str(record_out.get("imdbID"))
+        _dbg("[WIKI-DEBUG] get_wiki_entry: cache HIT")
+        return existing
 
-        old_wiki = _extract_wiki_part(existing)
-        new_wiki = _extract_wiki_part(record_out)
+    # ------------------------------------------------------------
+    # 0) Si tenemos imdb_id: intentar resolver TODO por Wikidata (P345)
+    # ------------------------------------------------------------
+    if imdb_id:
+        qid = _fetch_qid_by_imdb_id(imdb_id)
+        if qid and _wikidata_is_film(qid):
+            wd_entity = _fetch_wikidata_entity_json(qid)
+            if wd_entity is not None:
+                # escoger sitelink al idioma principal/fallback
+                sl_title = _extract_sitelink_title(wd_entity, WIKI_LANGUAGE) or (
+                    _extract_sitelink_title(wd_entity, WIKI_FALLBACK_LANGUAGE)
+                    if WIKI_FALLBACK_LANGUAGE
+                    else None
+                )
+                sl_lang = WIKI_LANGUAGE if _extract_sitelink_title(wd_entity, WIKI_LANGUAGE) else (
+                    WIKI_FALLBACK_LANGUAGE if sl_title and WIKI_FALLBACK_LANGUAGE else WIKI_LANGUAGE
+                )
 
-        unchanged_ids = (old_imdb or None) == (new_imdb or None)
-        unchanged_wiki = old_wiki == new_wiki
+                wiki_raw = None
+                if sl_title:
+                    wiki_raw = _fetch_wikipedia_summary_by_title(sl_title, sl_lang)
 
-        unchanged_ratings = True
-        for k in _ratings_fields():
-            if existing.get(k) != record_out.get(k):
-                unchanged_ratings = False
-                break
+                # si no conseguimos summary, no abortamos: seguimos al método por título
+                if wiki_raw is not None:
+                    return _build_and_cache_item(
+                        cache=cache,
+                        norm_title=norm_title,
+                        norm_year=norm_year,
+                        imdb_id=imdb_id,
+                        wiki_raw=wiki_raw,
+                        source_language=sl_lang,
+                        wikibase_item=qid,
+                        wd_entity=wd_entity,
+                    )
+        _dbg("[WIKI-DEBUG] imdb path failed -> fallback to title search")
 
-        if unchanged_ids and unchanged_wiki and unchanged_ratings:
-            return existing
+    # ------------------------------------------------------------
+    # 1) Buscar por Wikipedia (como antes), pero:
+    #    - probando varios candidatos
+    #    - validando que el QID final sea “película”
+    # ------------------------------------------------------------
+    candidates = _choose_wikipedia_summary_candidates(lookup_title, year)
+    _dbg(f"[WIKI-DEBUG] candidates total={len(candidates)}")
 
-    if canon_key_final:
-        _wiki_cache[canon_key_final] = record_out
-        _set_alias(title_key, canon_key_final)
-        if imdb_key:
-            _set_alias(imdb_key, canon_key_final)
-    else:
-        _wiki_cache[title_key] = record_out
+    for (cand_title, cand_lang) in candidates:
+        raw = _fetch_wikipedia_summary_by_title(cand_title, cand_lang)
+        if raw is None:
+            continue
 
-    _save_wiki_cache()
+        wikibase_item = _safe_str(raw.get("wikibase_item"))
+        if not wikibase_item:
+            _dbg(f"[WIKI-DEBUG] candidate {cand_title!r} ({cand_lang}) has no wikibase_item -> skip")
+            continue
 
-    wikidata_id_logged: str | None = None
-    wiki_part = record_out.get("__wiki")
-    if isinstance(wiki_part, dict):
-        wd_val = wiki_part.get("wikidata_id")
-        if isinstance(wd_val, str):
-            wikidata_id_logged = wd_val
+        # (1) Validación: debe ser película (y no álbum, videojuego, etc.)
+        if not _wikidata_is_film(wikibase_item):
+            _dbg(f"[WIKI-DEBUG] candidate QID {wikibase_item} is NOT film -> try next")
+            continue
 
-    keys_logged: list[str] = [title_key]
-    if canon_key_final:
-        keys_logged.append(canon_key_final)
-    if imdb_key:
-        keys_logged.append(imdb_key)
+        wd_entity = _fetch_wikidata_entity_json(wikibase_item)
+        if wd_entity is None:
+            continue
 
-    _log_wiki(
-        f"[WIKI] Registro maestro guardado. "
-        f"imdbID={record_out.get('imdbID')}, wikidata_id={wikidata_id_logged}, "
-        f"keys={sorted(set(keys_logged))}"
-    )
+        return _build_and_cache_item(
+            cache=cache,
+            norm_title=norm_title,
+            norm_year=norm_year,
+            imdb_id=imdb_id,
+            wiki_raw=raw,
+            source_language=cand_lang,
+            wikibase_item=wikibase_item,
+            wd_entity=wd_entity,
+        )
 
-    return record_out
+    _dbg("[WIKI-DEBUG] get_wiki_entry: no valid film candidate found")
+    return None
+
+
+def _build_and_cache_item(
+    *,
+    cache: WikiCacheFile,
+    norm_title: str,
+    norm_year: str,
+    imdb_id: str | None,
+    wiki_raw: Mapping[str, object],
+    source_language: str,
+    wikibase_item: str,
+    wd_entity: Mapping[str, object],
+) -> WikiCacheItem:
+    titles_obj = wiki_raw.get("titles")
+    wikipedia_title: str | None = None
+    if isinstance(titles_obj, Mapping):
+        wikipedia_title = _safe_str(titles_obj.get("normalized")) or _safe_str(titles_obj.get("canonical"))
+
+    wiki_block: WikiBlock = {
+        "language": WIKI_LANGUAGE,
+        "fallback_language": WIKI_FALLBACK_LANGUAGE,
+        "source_language": source_language,
+        "wikipedia_title": wikipedia_title,
+        "wikipedia_pageid": _safe_int(wiki_raw.get("pageid")),
+        "wikibase_item": wikibase_item,
+        "summary": str(wiki_raw.get("extract") or ""),
+        "description": str(wiki_raw.get("description") or ""),
+        "urls": dict(wiki_raw.get("content_urls")) if isinstance(wiki_raw.get("content_urls"), Mapping) else {},
+    }
+
+    if "originalimage" in wiki_raw or "thumbnail" in wiki_raw:
+        images: dict[str, object] = {}
+        if isinstance(wiki_raw.get("originalimage"), Mapping):
+            images["original"] = dict(wiki_raw.get("originalimage"))  # type: ignore[assignment]
+        if isinstance(wiki_raw.get("thumbnail"), Mapping):
+            images["thumbnail"] = dict(wiki_raw.get("thumbnail"))  # type: ignore[assignment]
+        wiki_block["images"] = images
+
+    wikidata_block: WikidataBlock = {"qid": wikibase_item}
+    new_entities: dict[str, WikidataEntity] = {}
+
+    directors = _extract_qids_from_claims(wd_entity, "P57")
+    countries = _extract_qids_from_claims(wd_entity, "P495")
+    genres = _extract_qids_from_claims(wd_entity, "P136")
+
+    if directors:
+        wikidata_block["directors"] = directors
+    if countries:
+        wikidata_block["countries"] = countries
+    if genres:
+        wikidata_block["genres"] = genres
+
+    # (3) Opción A: NO duplicamos valores humanos en cada item.
+    #     Guardamos QIDs en wikidata.* y el “diccionario de labels” en cache["entities"].
+    qids_to_label = list({*directors, *countries, *genres})
+    fetched = _fetch_wikidata_labels(qids_to_label, WIKI_LANGUAGE, WIKI_FALLBACK_LANGUAGE)
+
+    for qid, ent in fetched.items():
+        etype: str | None = None
+        if qid in directors:
+            etype = "person"
+        elif qid in countries:
+            etype = "country"
+        elif qid in genres:
+            etype = "genre"
+
+        merged: WikidataEntity = dict(ent)
+        if etype:
+            merged["type"] = etype
+        new_entities[qid] = merged
+
+    item: WikiCacheItem = {
+        "Title": norm_title,
+        "Year": norm_year,
+        "imdbID": imdb_id,
+        "wiki": wiki_block,
+        "wikidata": wikidata_block,
+    }
+
+    cache["items"].append(item)
+    for qid, ent in new_entities.items():
+        cache["entities"][qid] = ent
+
+    _save_cache(cache)
+
+    year_label = norm_year if norm_year else "?"
+    _log(f"[WIKI] cached ({source_language}): {norm_title} ({year_label})")
+    return item
+
+
+# -------------------------------------------------------------------
+# API estilo “cliente”
+# -------------------------------------------------------------------
+
+class WikiClient:
+    def get_wiki(self, *, title: str, year: int | None, imdb_id: str | None) -> WikiCacheItem | None:
+        return get_wiki_entry(title=title, year=year, imdb_id=imdb_id)
+
+
+_WIKI_CLIENT_SINGLETON: WikiClient | None = None
+
+
+def get_wiki_client() -> WikiClient:
+    global _WIKI_CLIENT_SINGLETON
+    if _WIKI_CLIENT_SINGLETON is None:
+        _WIKI_CLIENT_SINGLETON = WikiClient()
+    return _WIKI_CLIENT_SINGLETON

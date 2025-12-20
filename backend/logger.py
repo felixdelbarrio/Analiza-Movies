@@ -1,4 +1,3 @@
-# backend/logger.py
 from __future__ import annotations
 
 import logging
@@ -13,9 +12,67 @@ _LOGGER: Any = None  # puede ser logging.Logger o un FakeLogger de tests
 _CONFIGURED: bool = False
 
 
-# ============================================================
-# Configuración interna
-# ============================================================
+def _safe_get_cfg() -> Any | None:
+    return sys.modules.get("backend.config")
+
+
+def _resolve_level_from_config() -> int:
+    """
+    Decide el nivel de logging (root) en base a backend.config.
+
+    Prioridad:
+      1) config.LOG_LEVEL (str: "DEBUG"/"INFO"/"WARNING"/"ERROR"/"CRITICAL")
+      2) flags de debug (p.ej. WIKI_DEBUG=True) -> DEBUG
+      3) fallback -> INFO
+    """
+    cfg = _safe_get_cfg()
+    if cfg is None:
+        return logging.INFO
+
+    # 1) LOG_LEVEL explícito
+    try:
+        lvl = getattr(cfg, "LOG_LEVEL", None)
+    except Exception:
+        lvl = None
+
+    if isinstance(lvl, str) and lvl.strip():
+        name = lvl.strip().upper()
+        mapped = {
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARNING": logging.WARNING,
+            "WARN": logging.WARNING,
+            "ERROR": logging.ERROR,
+            "CRITICAL": logging.CRITICAL,
+            "FATAL": logging.CRITICAL,
+        }.get(name)
+        if mapped is not None:
+            return mapped
+
+    # 2) Cualquier flag debug que quieras soportar
+    def _flag(name: str) -> bool:
+        try:
+            return bool(getattr(cfg, name, False))
+        except Exception:
+            return False
+
+    if _flag("WIKI_DEBUG") or _flag("OMDB_DEBUG") or _flag("DEBUG"):
+        return logging.DEBUG
+
+    return logging.INFO
+
+
+def _apply_root_level(level: int) -> None:
+    """
+    Aplica nivel al root y a sus handlers (importante en algunos entornos).
+    """
+    root = logging.getLogger()
+    root.setLevel(level)
+    for h in root.handlers:
+        try:
+            h.setLevel(level)
+        except Exception:
+            pass
 
 
 def _ensure_configured() -> Any:
@@ -30,14 +87,24 @@ def _ensure_configured() -> Any:
     global _LOGGER, _CONFIGURED
 
     if _CONFIGURED and _LOGGER is not None:
+        # OJO: aun así podemos ajustar el nivel si config cambió
+        try:
+            _apply_root_level(_resolve_level_from_config())
+        except Exception:
+            pass
         return _LOGGER
+
+    level = _resolve_level_from_config()
 
     root = logging.getLogger()
     if not root.handlers:
         logging.basicConfig(
-            level=logging.INFO,
+            level=level,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
+    else:
+        # Si ya hay handlers (por ejemplo, el entorno), ajustamos el nivel igualmente
+        _apply_root_level(level)
 
     _LOGGER = logging.getLogger(LOGGER_NAME)
     _CONFIGURED = True
@@ -60,7 +127,6 @@ def _should_log(*, always: bool = False) -> bool:
 
     cfg = sys.modules.get("backend.config")
     if cfg is None:
-        # Config no cargada o inexistente → por defecto, logueamos
         return True
 
     try:
@@ -76,17 +142,11 @@ def get_logger() -> Any:
     return _ensure_configured()
 
 
-# ============================================================
-# Wrappers públicos
-# ============================================================
-
-
 def debug(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
     """Debug, sujeto a SILENT_MODE salvo que always=True."""
     if not _should_log(always=always):
         return
     log = _ensure_configured()
-    # Quitamos 'always' por si nos lo pasan también en **kwargs
     kwargs.pop("always", None)
     log.debug(msg, *args, **kwargs)
 
