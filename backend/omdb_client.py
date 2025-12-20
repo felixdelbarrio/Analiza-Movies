@@ -26,7 +26,7 @@ from backend.movie_input import normalize_title_for_lookup
 
 
 # ============================================================
-#                       CACHE v2 (BORRÓN)
+#                       CACHE v2
 # ============================================================
 
 
@@ -306,11 +306,15 @@ def _find_existing(
     norm_year: str,
     imdb_id: str | None,
 ) -> OmdbCacheItem | None:
+    # REGLA: si hay imdb_id, SOLO puede haber HIT por imdb_id.
+    # Nunca devolvemos un registro cacheado por (Title, Year) con imdbID=None.
     if imdb_id:
         for it in items:
             if it.get("imdbID") == imdb_id:
                 return it
+        return None
 
+    # Solo si no hay imdb_id: lookup por (Title, Year) con imdbID=None
     for it in items:
         if (
             it.get("imdbID") is None
@@ -396,6 +400,7 @@ def _cache_store_item(
 ) -> OmdbCacheItem:
     cache = _load_cache()
 
+    # Un item por imdbID (si existe).
     if imdb_id is not None:
         kept: list[OmdbCacheItem] = []
         for it in cache["items"]:
@@ -404,6 +409,7 @@ def _cache_store_item(
             kept.append(it)
         cache["items"] = kept
 
+    # Si no existe imdbID, un item por (Title, Year) para imdbID=null.
     if imdb_id is None:
         kept2: list[OmdbCacheItem] = []
         for it in cache["items"]:
@@ -435,6 +441,8 @@ def _search_candidates_imdb_id(
     """
     Búsqueda fuzzy: usa 's=' y elige el mejor candidato por heurística.
     Devuelve imdbID (normalizado) o None.
+
+    IMPORTANTE: esta función solo debe usarse cuando NO tenemos imdb_id.
     """
     if OMDB_API_KEY is None:
         return None
@@ -527,12 +535,9 @@ def omdb_query_with_cache(
       - Un item por imdbID (si existe).
       - Si no existe imdbID, un item por (Title, Year) para imdbID=null.
 
-    Normalización de título: centralizada en movie_input.normalize_title_for_lookup().
-
-    Fallback integrado:
-      - si (t=title,y=year) => Movie not found
-        -> reintento sin año
-        -> si sigue: s= (candidatos) -> i= (ficha completa)
+    REGLA DE ORO:
+      - Si hay imdb_id: cache HIT solo por imdbID y request solo por i= (sin title-fallback).
+      - Solo si NO hay imdb_id: se permite t= (y) + fallback y s= candidatos.
     """
     global OMDB_DISABLED, OMDB_DISABLED_NOTICE_SHOWN, OMDB_RATE_LIMIT_NOTICE_SHOWN
 
@@ -543,6 +548,7 @@ def omdb_query_with_cache(
     if not norm_title and imdb_norm is None:
         return None
 
+    # Cache HIT (respeta regla: si imdb_norm existe, solo hace match por imdbID)
     cached = _get_cached_item(norm_title=norm_title, norm_year=year_str, imdb_id_hint=imdb_norm)
     if cached is not None and not OMDB_RETRY_EMPTY_CACHE:
         return dict(cached["omdb"])
@@ -583,7 +589,7 @@ def omdb_query_with_cache(
 
     had_failure = False
 
-    # --- 1) Búsqueda principal ---
+    # --- 1) Si hay imdb_id: SOLO i= (y sin fallbacks por título) ---
     if imdb_norm is not None:
         params_main: dict[str, object] = {"i": imdb_norm, "type": "movie", "plot": "short"}
         data_main = _request_with_rate_limit(params_main)
@@ -592,6 +598,18 @@ def omdb_query_with_cache(
         else:
             imdb_from_resp = _extract_imdb_id_from_omdb_record(data_main)
             imdb_final = imdb_from_resp or imdb_norm
+
+            # Para cache "bonito": si no tenemos título, usar el Title de OMDb
+            if not norm_title:
+                t_raw = data_main.get("Title")
+                if isinstance(t_raw, str):
+                    norm_title = normalize_title_for_lookup(t_raw) or norm_title
+
+            if not year_str:
+                y_resp = extract_year_from_omdb(data_main)
+                if y_resp is not None:
+                    year_str = str(y_resp)
+
             _cache_store_item(
                 norm_title=norm_title,
                 norm_year=year_str,
@@ -599,51 +617,70 @@ def omdb_query_with_cache(
                 omdb_data=dict(data_main),
             )
             return dict(data_main)
+
+        # Si falla, no se intenta nada más cuando hay imdb_id
+        if had_failure:
+            OMDB_DISABLED = True
+            if not OMDB_DISABLED_NOTICE_SHOWN:
+                _log_always(
+                    "ERROR: OMDb desactivado para esta ejecución tras fallos consecutivos. "
+                    "A partir de ahora se usará únicamente la caché local."
+                )
+                OMDB_DISABLED_NOTICE_SHOWN = True
+
+        cached2 = _get_cached_item(norm_title=norm_title, norm_year=year_str, imdb_id_hint=imdb_norm)
+        return dict(cached2["omdb"]) if cached2 is not None else None
+
+    # --- 2) Sin imdb_id: aquí sí hay búsqueda por título + fallbacks ---
+    params_t: dict[str, object] = {"t": norm_title, "type": "movie", "plot": "short"}
+    if year is not None:
+        params_t["y"] = str(year)
+
+    data_t = _request_with_rate_limit(params_t)
+    if data_t is None:
+        had_failure = True
     else:
-        params_t: dict[str, object] = {"t": norm_title, "type": "movie", "plot": "short"}
-        if year is not None:
-            params_t["y"] = str(year)
+        # --- Fallback: sin año ---
+        if year is not None and _is_movie_not_found(data_t):
+            params_no_year = dict(params_t)
+            params_no_year.pop("y", None)
+            data_no_year = _request_with_rate_limit(params_no_year)
+            if data_no_year is not None:
+                data_t = data_no_year
 
-        data_t = _request_with_rate_limit(params_t)
-        if data_t is None:
-            had_failure = True
-        else:
-            # --- 2) Fallback: sin año ---
-            if year is not None and _is_movie_not_found(data_t):
-                params_no_year = dict(params_t)
-                params_no_year.pop("y", None)
-                data_no_year = _request_with_rate_limit(params_no_year)
-                if data_no_year is not None:
-                    data_t = data_no_year
+        # --- Fallback: candidatos (s=) + ficha completa (i=) ---
+        if _is_movie_not_found(data_t):
+            imdb_best = _search_candidates_imdb_id(title_for_search=norm_title, year=year)
+            if imdb_best:
+                data_full = _request_with_rate_limit({"i": imdb_best, "type": "movie", "plot": "short"})
+                if isinstance(data_full, dict):
+                    imdb_from_full = _extract_imdb_id_from_omdb_record(data_full)
+                    imdb_final2 = imdb_from_full or imdb_best
 
-            # --- 3) Fallback: candidatos (s=) + ficha completa (i=) ---
-            if _is_movie_not_found(data_t):
-                imdb_best = _search_candidates_imdb_id(title_for_search=norm_title, year=year)
-                if imdb_best:
-                    data_full = _request_with_rate_limit(
-                        {"i": imdb_best, "type": "movie", "plot": "short"}
+                    y_resp2 = extract_year_from_omdb(data_full)
+                    year_str2 = year_str or (str(y_resp2) if y_resp2 is not None else "")
+
+                    _cache_store_item(
+                        norm_title=norm_title,
+                        norm_year=year_str2,
+                        imdb_id=imdb_final2,
+                        omdb_data=dict(data_full),
                     )
-                    if isinstance(data_full, dict):
-                        imdb_from_full = _extract_imdb_id_from_omdb_record(data_full)
-                        imdb_final2 = imdb_from_full or imdb_best
-                        _cache_store_item(
-                            norm_title=norm_title,
-                            norm_year=year_str,
-                            imdb_id=imdb_final2,
-                            omdb_data=dict(data_full),
-                        )
-                        return dict(data_full)
+                    return dict(data_full)
 
-            imdb_from_resp2 = _extract_imdb_id_from_omdb_record(data_t)
-            imdb_final3 = imdb_from_resp2
+        imdb_from_resp2 = _extract_imdb_id_from_omdb_record(data_t)
+        imdb_final3 = imdb_from_resp2
 
-            _cache_store_item(
-                norm_title=norm_title,
-                norm_year=year_str,
-                imdb_id=imdb_final3,
-                omdb_data=dict(data_t),
-            )
-            return dict(data_t)
+        y_resp3 = extract_year_from_omdb(data_t)
+        year_str3 = year_str or (str(y_resp3) if y_resp3 is not None else "")
+
+        _cache_store_item(
+            norm_title=norm_title,
+            norm_year=year_str3,
+            imdb_id=imdb_final3,
+            omdb_data=dict(data_t),
+        )
+        return dict(data_t)
 
     if had_failure:
         OMDB_DISABLED = True
@@ -654,8 +691,8 @@ def omdb_query_with_cache(
             )
             OMDB_DISABLED_NOTICE_SHOWN = True
 
-    cached2 = _get_cached_item(norm_title=norm_title, norm_year=year_str, imdb_id_hint=imdb_norm)
-    return dict(cached2["omdb"]) if cached2 is not None else None
+    cached3 = _get_cached_item(norm_title=norm_title, norm_year=year_str, imdb_id_hint=None)
+    return dict(cached3["omdb"]) if cached3 is not None else None
 
 
 # ============================================================
@@ -676,7 +713,6 @@ def search_omdb_by_title_and_year(
 ) -> dict[str, object] | None:
     if not title.strip():
         return None
-
     return omdb_query_with_cache(title=title, year=year, imdb_id=None)
 
 
