@@ -14,6 +14,11 @@ from backend.wiki_client import get_wiki_client
 
 _OmdbCacheKey: TypeAlias = tuple[str, int | None, str | None]
 
+# ✅ CACHÉS A NIVEL DE MÓDULO (persisten durante toda la ejecución)
+#    Así evitamos llamar a OMDb/Wiki repetidamente para los mismos títulos.
+_OMDB_LOCAL_CACHE: dict[_OmdbCacheKey, dict[str, object]] = {}
+_WIKI_LOCAL_CACHE: dict[_OmdbCacheKey, dict[str, object]] = {}
+
 
 def _safe_int(value: object) -> int | None:
     try:
@@ -72,13 +77,10 @@ def analyze_movie(
         display_year = movie_input.year
 
     # ------------------------------------------------------------------
-    # 1) Fetch OMDb + Wiki (separados) + caché local por iteración
+    # 1) Fetch OMDb + Wiki (con caché global)
     # ------------------------------------------------------------------
     omdb_data: Mapping[str, object] | None = None
     wiki_meta: dict[str, object] = {}
-
-    omdb_cache: dict[_OmdbCacheKey, dict[str, object]] = {}
-    wiki_cache: dict[_OmdbCacheKey, dict[str, object]] = {}
 
     def _norm_imdb_hint() -> str | None:
         hint = movie_input.imdb_id_hint
@@ -93,13 +95,14 @@ def analyze_movie(
         imdb_hint = _norm_imdb_hint()
         key: _OmdbCacheKey = (title_for_fetch, year_for_fetch, imdb_hint)
 
-        cached = omdb_cache.get(key)
+        # ✅ 1) Cache local (módulo)
+        cached = _OMDB_LOCAL_CACHE.get(key)
         if cached is not None:
             omdb_data = cached
-            wiki_meta = wiki_cache.get(key, {})
+            wiki_meta = _WIKI_LOCAL_CACHE.get(key, {})
             return cached
 
-        # --- OMDb (cache v2) ---
+        # ✅ 2) OMDb (cache v2 del propio cliente)
         omdb_record = omdb_query_with_cache(
             title=title_for_fetch,
             year=year_for_fetch,
@@ -108,20 +111,38 @@ def analyze_movie(
 
         if omdb_record is None:
             empty: dict[str, object] = {}
-            omdb_cache[key] = empty
-            wiki_cache[key] = {}
+            _OMDB_LOCAL_CACHE[key] = empty
+            _WIKI_LOCAL_CACHE[key] = {}
             omdb_data = empty
             wiki_meta = {}
             return empty
 
         omdb_dict = dict(omdb_record)
 
+        # ✅ 3) Si OMDb YA trae __wiki, no llamamos a Wiki
+        if "__wiki" in omdb_dict and isinstance(omdb_dict.get("__wiki"), Mapping):
+            wiki_dict = _extract_wiki_meta(omdb_dict)
+            _OMDB_LOCAL_CACHE[key] = omdb_dict
+            _WIKI_LOCAL_CACHE[key] = wiki_dict
+            omdb_data = omdb_dict
+            wiki_meta = wiki_dict
+            return omdb_dict
+
+        # ✅ 4) Si ya teníamos wiki_cache local, tampoco llamamos
+        cached_wiki = _WIKI_LOCAL_CACHE.get(key)
+        if cached_wiki is not None and cached_wiki:
+            omdb_dict["__wiki"] = dict(cached_wiki)
+            _OMDB_LOCAL_CACHE[key] = omdb_dict
+            omdb_data = omdb_dict
+            wiki_meta = dict(cached_wiki)
+            return omdb_dict
+
+        # --- Wiki: intentamos con título+año (y con imdb si lo hay) ---
         imdb_id_from_omdb: str | None = None
         imdb_raw = omdb_dict.get("imdbID")
         if isinstance(imdb_raw, str) and imdb_raw.strip():
             imdb_id_from_omdb = imdb_raw.strip()
 
-        # --- Wiki: SIEMPRE intentamos con título+año (y con imdb si lo hay) ---
         wiki_item = get_wiki_client().get_wiki(
             title=title_for_fetch,
             year=year_for_fetch,
@@ -129,8 +150,6 @@ def analyze_movie(
         )
 
         if wiki_item is not None:
-            # Para mantener compatibilidad interna con el pipeline ya existente:
-            # metemos un bloque __wiki dentro del "omdb_dict"
             wiki_block = wiki_item.get("wiki")
             wikidata_block = wiki_item.get("wikidata")
 
@@ -140,7 +159,6 @@ def analyze_movie(
             if isinstance(wikidata_block, Mapping):
                 merged_wiki["wikidata"] = dict(wikidata_block)
 
-            # Guardamos también IDs “planos” que ya consumes en reporting
             imdb_cached = wiki_item.get("imdbID")
             if isinstance(imdb_cached, str) or imdb_cached is None:
                 merged_wiki["imdb_id"] = imdb_cached
@@ -149,8 +167,8 @@ def analyze_movie(
 
         wiki_dict = _extract_wiki_meta(omdb_dict)
 
-        omdb_cache[key] = omdb_dict
-        wiki_cache[key] = wiki_dict
+        _OMDB_LOCAL_CACHE[key] = omdb_dict
+        _WIKI_LOCAL_CACHE[key] = wiki_dict
 
         omdb_data = omdb_dict
         wiki_meta = wiki_dict
@@ -209,9 +227,7 @@ def analyze_movie(
         )
 
     # ------------------------------------------------------------------
-    # 5) Sugerencias de metadata (solo Plex)
-    #    CAMBIO: pasamos MovieInput (no el objeto Plex) para que metadata_fix
-    #    pueda usar movie_input.extra["library_language"] / heurísticas.
+    # 5) Sugerencias de metadata (solo Plex) -> usamos MovieInput
     # ------------------------------------------------------------------
     omdb_dict: dict[str, object] = dict(omdb_data) if omdb_data else {}
     meta_sugg: dict[str, object] | None = None
@@ -271,6 +287,7 @@ def analyze_movie(
     row["title"] = display_title
     row["year"] = display_year
 
+    # Tamaño en disco (bytes) -> export como file_size
     file_size_bytes = row.get("file_size_bytes")
     if isinstance(file_size_bytes, int):
         row["file_size"] = file_size_bytes
