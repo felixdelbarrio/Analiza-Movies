@@ -67,6 +67,27 @@ dlna_PORT: int = _get_env_int("dlna_PORT", 8200)
 PLEX_TOKEN: str | None = os.getenv("PLEX_TOKEN")
 OMDB_API_KEY: str | None = os.getenv("OMDB_API_KEY")
 
+# ----------------------------------------------------
+# Conexión a WikiData / SPARQL
+# ----------------------------------------------------
+# Lenguaje preferido para títulos y descripciones
+WIKI_LANGUAGE: str = (os.getenv("WIKI_LANGUAGE", "es") or "es").strip() or "es"
+WIKI_FALLBACK_LANGUAGE: str = (
+    os.getenv("WIKI_FALLBACK_LANGUAGE", "en") or "en"
+).strip() or "en"
+import os
+
+# ----------------------------------------------------
+# Debug Wiki
+# ----------------------------------------------------
+# Prioridad:
+#  1) env ANALIZA_WIKI_DEBUG
+#  2) env WIKI_DEBUG
+#  3) valor por defecto (False)
+WIKI_DEBUG: bool = (
+    _get_env_bool("ANALIZA_WIKI_DEBUG", False)
+    or _get_env_bool("WIKI_DEBUG", False)
+)
 
 # ----------------------------------------------------
 # Rutas de salida estándar (CSV)
@@ -219,3 +240,4 @@ _log_config_debug("DEBUG METADATA_APPLY_CHANGES", METADATA_APPLY_CHANGES)
 _log_config_debug("DEBUG OMDB_RETRY_EMPTY_CACHE", OMDB_RETRY_EMPTY_CACHE)
 _log_config_debug("DEBUG SILENT_MODE", SILENT_MODE)
 _log_config_debug("DEBUG IMDB_VOTES_BY_YEAR", IMDB_VOTES_BY_YEAR)
+_log_config_debug("DEBUG WIKI_DEBUG", WIKI_DEBUG)
