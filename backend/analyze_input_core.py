@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """
 Core genérico de análisis para una película, independiente del origen
-(Plex, DLNA, fichero local, etc.).
+(Plex, DLNA, fichero local, etc).
 
 Este módulo recibe un MovieInput (modelo de entrada unificado),
 obtiene datos de OMDb mediante una función inyectada y delega la
@@ -73,7 +73,7 @@ def analyze_input_movie(
       4. Usa `decision_logic.detect_misidentified` para construir
          `misidentified_hint`.
       5. Devuelve una fila `AnalysisRow` mínima, lista para ser enriquecida por
-         capas superiores (Plex, DLNA concreto, etc.).
+         capas superiores (Plex, DLNA concreto, etc).
 
     No realiza I/O de ficheros ni logging directamente.
     """
@@ -110,9 +110,11 @@ def analyze_input_movie(
     detect_title = plex_title if plex_title is not None else movie.title
     detect_year = plex_year if plex_year is not None else movie.year
 
+    # IMPORTANTE: plex_imdb_id sale del MovieInput unificado (hint)
     misidentified_hint = detect_misidentified(
         plex_title=detect_title,
         plex_year=detect_year,
+        plex_imdb_id=movie.imdb_id_hint,
         omdb_data=omdb_data,
         imdb_rating=imdb_rating,
         imdb_votes=imdb_votes,

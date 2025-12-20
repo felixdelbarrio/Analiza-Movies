@@ -9,7 +9,6 @@ import xml.etree.ElementTree as ET
 from backend import logger as _logger
 from backend.collection_analysis import analyze_movie
 from backend.config import (
-    EXCLUDE_DLNA_LIBRARIES,
     METADATA_FIX_PATH,
     REPORT_ALL_PATH,
     REPORT_FILTERED_PATH,
@@ -364,9 +363,7 @@ def _ask_dlna_device() -> DLNADevice | None:
         _logger.info(f"      LOCATION: {dev.location}", always=True)
 
     while True:
-        raw = input(
-            f"\nSelecciona un servidor (1-{len(devices)}) o pulsa Enter para cancelar: "
-        ).strip()
+        raw = input(f"\nSelecciona un servidor (1-{len(devices)}) o pulsa Enter para cancelar: ").strip()
         if raw == "":
             _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
@@ -378,10 +375,7 @@ def _ask_dlna_device() -> DLNADevice | None:
             _logger.warning("Opción fuera de rango.", always=True)
             continue
         chosen = devices[num - 1]
-        _logger.info(
-            f"\nHas seleccionado: {chosen.friendly_name} ({chosen.host}:{chosen.port})\n",
-            always=True,
-        )
+        _logger.info(f"\nHas seleccionado: {chosen.friendly_name} ({chosen.host}:{chosen.port})\n", always=True)
         return chosen
 
 
@@ -426,7 +420,6 @@ def _select_folders_non_plex(base: _DlnaContainer, device: DLNADevice) -> list[_
             return [base]
 
         folders = _list_child_containers(device, base.object_id)
-        folders = [c for c in folders if c.title not in EXCLUDE_DLNA_LIBRARIES]
 
         if not folders:
             _logger.error("[DLNA] No se han encontrado carpetas dentro del contenedor seleccionado.", always=True)
@@ -472,7 +465,6 @@ def _select_folders_plex(base: _DlnaContainer, device: DLNADevice) -> list[_Dlna
             return [base]
 
         folders = _list_child_containers(device, base.object_id)
-        folders = [c for c in folders if c.title not in EXCLUDE_DLNA_LIBRARIES]
         folders = [c for c in folders if not _is_plex_virtual_container_title(c.title)]
 
         if not folders:
@@ -543,11 +535,7 @@ def _extract_video_item(elem: ET.Element) -> _DlnaVideoItem | None:
     if not title or not resource_url:
         return None
 
-    return _DlnaVideoItem(
-        title=title,
-        resource_url=resource_url,
-        size_bytes=size_bytes,
-    )
+    return _DlnaVideoItem(title=title, resource_url=resource_url, size_bytes=size_bytes)
 
 
 def _iter_video_items_recursive(device: DLNADevice, root_object_id: str) -> list[_DlnaVideoItem]:
@@ -566,13 +554,7 @@ def _iter_video_items_recursive(device: DLNADevice, root_object_id: str) -> list
         total = 1
 
         while start < total:
-            browse = _soap_browse_direct_children(
-                control_url,
-                service_type,
-                current_id,
-                start,
-                page_size,
-            )
+            browse = _soap_browse_direct_children(control_url, service_type, current_id, start, page_size)
             if browse is None:
                 break
 
@@ -715,10 +697,6 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
 
     candidates: list[tuple[str, str, int | None, str]] = []
     for container in selected_containers:
-        if container.title in EXCLUDE_DLNA_LIBRARIES:
-            _logger.info(f"[DLNA] Omitiendo '{container.title}' por EXCLUDE_DLNA_LIBRARIES.", always=True)
-            continue
-
         items = _iter_video_items_recursive(device, container.object_id)
         for it in items:
             candidates.append((it.title, it.resource_url, it.size_bytes, container.title))
@@ -747,9 +725,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
             plex_guid=None,
             rating_key=None,
             thumb_url=None,
-            extra={
-                "source_url": file_url,
-            },
+            extra={"source_url": file_url},
         )
 
         try:
@@ -762,7 +738,6 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
             _logger.info(log)
 
         if row:
-            # Mantener compatibilidad con tu pipeline actual:
             row["file_url"] = file_url
             row["file"] = display_file
             all_rows.append(row)
