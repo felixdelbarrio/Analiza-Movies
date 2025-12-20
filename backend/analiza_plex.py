@@ -26,6 +26,25 @@ from backend.reporting import write_all_csv, write_filtered_csv, write_suggestio
 from backend.movie_input import MovieInput
 
 
+# ---------------------------------------------------
+# Idioma por librería (Opción A: Plex manda)
+# - Si TODO está en español: deja el default en "es"
+# - Si quieres por librería: rellena el dict y cae al default
+# ---------------------------------------------------
+_PLEX_LIBRARY_LANGUAGE_DEFAULT = "es"
+
+_PLEX_LIBRARY_LANGUAGE_BY_NAME: dict[str, str] = {
+    # "Animación 2D": "es",
+    # "Animación 3D": "es",
+    # "Movies": "es",
+}
+
+
+def _get_plex_library_language(lib_name: str) -> str:
+    lang = _PLEX_LIBRARY_LANGUAGE_BY_NAME.get(lib_name)
+    return lang or _PLEX_LIBRARY_LANGUAGE_DEFAULT
+
+
 def analyze_all_libraries() -> None:
     """Analiza todas las bibliotecas Plex aplicando EXCLUDE_PLEX_LIBRARIES."""
     plex = connect_plex()
@@ -48,6 +67,9 @@ def analyze_all_libraries() -> None:
             continue
 
         _logger.info(f"Analizando biblioteca Plex: {lib_name}")
+
+        # ✅ idioma decidido a nivel de librería Plex
+        library_language = _get_plex_library_language(lib_name)
 
         for movie in library.search():
             title = getattr(movie, "title", "") or ""
@@ -82,6 +104,10 @@ def analyze_all_libraries() -> None:
                     # Precedencia: Plex manda para reportar
                     "display_title": title,
                     "display_year": year,
+
+                    # ✅ CLAVE: esto permite que el generador de sugerencias
+                    # sepa el idioma objetivo de la librería.
+                    "library_language": library_language,
                 },
             )
 

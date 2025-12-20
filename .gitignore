@@ -13,7 +13,7 @@ __pycache__/
 #Ignorar los reportes 
 report_*.csv
 report_*.html
-metadata_*.*
+metadata_*.csv
 
 # metadatos de empaquetado
 *.egg-info/

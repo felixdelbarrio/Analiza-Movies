@@ -210,13 +210,15 @@ def analyze_movie(
 
     # ------------------------------------------------------------------
     # 5) Sugerencias de metadata (solo Plex)
+    #    CAMBIO: pasamos MovieInput (no el objeto Plex) para que metadata_fix
+    #    pueda usar movie_input.extra["library_language"] / heurísticas.
     # ------------------------------------------------------------------
     omdb_dict: dict[str, object] = dict(omdb_data) if omdb_data else {}
     meta_sugg: dict[str, object] | None = None
     if movie_input.source == "plex" and source_movie is not None:
         try:
             meta_candidate = generate_metadata_suggestions_row(
-                source_movie,
+                movie_input,
                 omdb_dict or None,
             )
             if isinstance(meta_candidate, dict):
