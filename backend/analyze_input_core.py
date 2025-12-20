@@ -6,8 +6,7 @@ Core genérico de análisis para una película, independiente del origen
 
 Este módulo recibe un MovieInput (modelo de entrada unificado),
 obtiene datos de OMDb mediante una función inyectada y delega la
-decisión final a la lógica bayesiana de `scoring.py` y a los
-umbrales configurados en `config.py`, a través de `decide_action`.
+decisión final a la lógica bayesiana de `scoring.py` (compute_scoring).
 
 Además, utiliza `decision_logic.detect_misidentified` para producir
 la pista `misidentified_hint` cuando hay sospechas de identificación
@@ -20,7 +19,7 @@ from typing import TypedDict
 from backend.decision_logic import detect_misidentified
 from backend.movie_input import MovieInput
 from backend.omdb_client import extract_ratings_from_omdb
-from backend.scoring import decide_action
+from backend.scoring import compute_scoring
 
 
 class AnalysisRow(TypedDict, total=False):
@@ -36,6 +35,7 @@ class AnalysisRow(TypedDict, total=False):
     year: int | None
 
     imdb_rating: float | None
+    imdb_bayes: float | None  # ✅ NUEVO: puntuación bayesiana final exportable
     rt_score: int | None
     imdb_votes: int | None
     plex_rating: float | None
@@ -68,8 +68,8 @@ def analyze_input_movie(
       1. Llama a `fetch_omdb(title, year)` para obtener un dict tipo OMDb.
       2. Usa `extract_ratings_from_omdb` para sacar imdb_rating, imdb_votes,
          rt_score.
-      3. Llama a `scoring.decide_action` (Bayes + thresholds del .env vía
-         config.py).
+      3. Llama a `scoring.compute_scoring` (Bayes + thresholds del .env vía
+         config.py) para producir decision/reason y el score bayesiano.
       4. Usa `decision_logic.detect_misidentified` para construir
          `misidentified_hint`.
       5. Devuelve una fila `AnalysisRow` mínima, lista para ser enriquecida por
@@ -94,15 +94,38 @@ def analyze_input_movie(
     imdb_rating, imdb_votes, rt_score = extract_ratings_from_omdb(omdb_data)
 
     # ------------------------------------------------------------------
-    # 3) Decisión KEEP / MAYBE / DELETE / UNKNOWN vía scoring.decide_action
+    # 3) Decisión KEEP / MAYBE / DELETE / UNKNOWN vía scoring.compute_scoring
+    #    + capturamos el score bayesiano en imdb_bayes
     # ------------------------------------------------------------------
-    decision, reason = decide_action(
-        imdb_rating=imdb_rating,
-        imdb_votes=imdb_votes,
-        rt_score=rt_score,
-        year=movie.year,
-        metacritic_score=metacritic_score,
-    )
+    decision: str = "UNKNOWN"
+    reason: str = ""
+    imdb_bayes: float | None = None
+
+    try:
+        scoring = compute_scoring(
+            imdb_rating=imdb_rating,
+            imdb_votes=imdb_votes,
+            rt_score=rt_score,
+            year=movie.year,
+            metacritic_score=metacritic_score,
+        )
+
+        d = scoring.get("decision")
+        r = scoring.get("reason")
+        decision = str(d) if d is not None else "UNKNOWN"
+        reason = str(r) if r is not None else ""
+
+        inputs = scoring.get("inputs")
+        if isinstance(inputs, Mapping):
+            sb = inputs.get("score_bayes")
+            if isinstance(sb, (int, float)):
+                imdb_bayes = float(sb)
+
+    except Exception:
+        # Defensivo: si algo raro pasa, no rompemos el análisis
+        decision = "UNKNOWN"
+        reason = "compute_scoring failed"
+        imdb_bayes = None
 
     # ------------------------------------------------------------------
     # 4) Detección de posibles películas mal identificadas
@@ -130,6 +153,7 @@ def analyze_input_movie(
         "title": movie.title,
         "year": movie.year,
         "imdb_rating": imdb_rating,
+        "imdb_bayes": imdb_bayes,  # ✅ NUEVO
         "rt_score": rt_score,
         "imdb_votes": imdb_votes,
         "plex_rating": plex_rating,

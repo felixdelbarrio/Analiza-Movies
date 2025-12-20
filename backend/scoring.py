@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Final
-
 from backend.config import (
     BAYES_DELETE_MAX_SCORE,
     IMDB_DELETE_MAX_RATING,
@@ -100,6 +98,8 @@ def compute_scoring(
         "rt_score": rt_score,
         "year": year,
         "metacritic_score": metacritic_score,
+        # score_bayes SIEMPRE presente para reporting uniforme
+        "score_bayes": None,
     }
 
     # ----------------------------------------------------
@@ -221,9 +221,7 @@ def compute_scoring(
                 "inputs": inputs,
             }
 
-        if preliminary_decision == "MAYBE" and bayes_score <= (
-            bayes_delete_thr + 0.3
-        ):
+        if preliminary_decision == "MAYBE" and bayes_score <= (bayes_delete_thr + 0.3):
             return {
                 "decision": "DELETE",
                 "reason": (
@@ -289,10 +287,7 @@ def compute_scoring(
                     f" La crítica especializada también es favorable "
                     f"(Metacritic={meta})."
                 )
-            elif (
-                preliminary_decision == "DELETE"
-                and meta <= METACRITIC_DELETE_MAX_SCORE
-            ):
+            elif preliminary_decision == "DELETE" and meta <= METACRITIC_DELETE_MAX_SCORE:
                 reason += (
                     f" La crítica especializada también es muy negativa "
                     f"(Metacritic={meta})."
@@ -340,32 +335,3 @@ def compute_scoring(
         "rule": "UNKNOWN_PARTIAL",
         "inputs": inputs,
     }
-
-
-def decide_action(
-    imdb_rating: float | None,
-    imdb_votes: int | None,
-    rt_score: int | None,
-    year: int | None = None,
-    metacritic_score: int | None = None,
-) -> tuple[str, str]:
-    """
-    Devuelve (decision, reason) usando compute_scoring.
-
-    metacritic_score es opcional (0-100). Todas las llamadas anteriores
-    que pasan solo (rating, votos, rt, year) siguen funcionando igual.
-    """
-    result = compute_scoring(
-        imdb_rating=imdb_rating,
-        imdb_votes=imdb_votes,
-        rt_score=rt_score,
-        year=year,
-        metacritic_score=metacritic_score,
-    )
-    decision = result.get("decision")
-    reason = result.get("reason")
-
-    # Protección de tipos por si algo raro se cuela en el dict
-    decision_str = str(decision) if decision is not None else "UNKNOWN"
-    reason_str = str(reason) if reason is not None else ""
-    return decision_str, reason_str
