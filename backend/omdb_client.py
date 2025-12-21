@@ -8,10 +8,10 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Final, TypedDict
 
-import requests
-from requests import Response
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import requests  # type: ignore[import-not-found]
+from requests import Response  # type: ignore[import-not-found]
+from requests.adapters import HTTPAdapter  # type: ignore[import-not-found]
+from urllib3.util.retry import Retry  # type: ignore[import-not-found]
 
 from backend import logger as _logger
 from backend.config import (
@@ -215,6 +215,149 @@ def _is_movie_not_found(data: Mapping[str, object]) -> bool:
 
 
 # ============================================================
+#           WIKI MINIMAL (SANITIZE PARA NO ENSUCIAR CACHE)
+# ============================================================
+
+_ALLOWED_WIKI_KEYS: Final[set[str]] = {"imdb_id", "wikidata_id", "wikipedia_title", "wiki_lookup"}
+_ALLOWED_WIKI_LOOKUP_KEYS: Final[set[str]] = {"via", "imdb_id", "title", "year"}
+
+
+def _sanitize_wiki_lookup(v: object) -> dict[str, object] | None:
+    if not isinstance(v, Mapping):
+        return None
+    out: dict[str, object] = {}
+
+    via = v.get("via")
+    if isinstance(via, str) and via.strip():
+        out["via"] = via.strip()
+
+    imdb_id = v.get("imdb_id")
+    if isinstance(imdb_id, str) and imdb_id.strip():
+        out["imdb_id"] = imdb_id.strip()
+
+    title = v.get("title")
+    if isinstance(title, str) and title.strip():
+        out["title"] = title.strip()
+
+    year = v.get("year")
+    if isinstance(year, int):
+        out["year"] = year
+    elif isinstance(year, str) and year.strip().isdigit():
+        out["year"] = int(year.strip())
+
+    return out or None
+
+
+def _sanitize_wiki_block(v: object) -> dict[str, object] | None:
+    """
+    Deja pasar SOLO:
+      - imdb_id (str)
+      - wikidata_id (str)
+      - wikipedia_title (str)
+      - wiki_lookup (dict con {via, imdb_id, title, year})
+    """
+    if not isinstance(v, Mapping):
+        return None
+
+    out: dict[str, object] = {}
+
+    imdb_id = v.get("imdb_id")
+    if isinstance(imdb_id, str) and imdb_id.strip():
+        out["imdb_id"] = imdb_id.strip()
+
+    wikidata_id = v.get("wikidata_id")
+    if isinstance(wikidata_id, str) and wikidata_id.strip():
+        out["wikidata_id"] = wikidata_id.strip()
+
+    wikipedia_title = v.get("wikipedia_title")
+    if isinstance(wikipedia_title, str) and wikipedia_title.strip():
+        out["wikipedia_title"] = wikipedia_title.strip()
+
+    wiki_lookup = _sanitize_wiki_lookup(v.get("wiki_lookup"))
+    if wiki_lookup is not None:
+        out["wiki_lookup"] = wiki_lookup
+
+    return out or None
+
+
+# ============================================================
+#                  PROVENANCE / TRAZABILIDAD
+# ============================================================
+
+
+def _build_default_provenance(
+    *,
+    imdb_norm: str | None,
+    norm_title: str,
+    year: int | None,
+) -> dict[str, object]:
+    if imdb_norm:
+        lookup_key = f"imdb_id:{imdb_norm}"
+    else:
+        if year is not None:
+            lookup_key = f"title_year:{norm_title}|{year}"
+        else:
+            lookup_key = f"title:{norm_title}"
+
+    return {
+        "lookup_key": lookup_key,
+        "had_imdb_hint": bool(imdb_norm),
+    }
+
+
+def _merge_provenance(
+    existing: Mapping[str, object] | None,
+    incoming: Mapping[str, object] | None,
+) -> dict[str, object]:
+    out: dict[str, object] = {}
+    if isinstance(existing, Mapping):
+        out.update(dict(existing))
+    if isinstance(incoming, Mapping):
+        out.update(dict(incoming))
+    return out
+
+
+def _attach_provenance(
+    omdb_data: dict[str, object],
+    prov: Mapping[str, object] | None,
+) -> dict[str, object]:
+    existing = omdb_data.get("__prov")
+    merged = _merge_provenance(existing if isinstance(existing, Mapping) else None, prov)
+    if merged:
+        omdb_data["__prov"] = merged
+    return omdb_data
+
+
+def _merge_dict_shallow(dst: dict[str, object], patch: Mapping[str, object]) -> dict[str, object]:
+    """
+    Merge “shallow” con comportamiento especial para __prov y __wiki:
+      - __prov: mergea dicts
+      - __wiki: sanitiza y reemplaza por bloque minimal (o lo elimina si queda vacío)
+      - resto: patch pisa claves directas
+    """
+    for k, v in patch.items():
+        if k == "__prov" and isinstance(v, Mapping):
+            existing = dst.get("__prov")
+            merged = _merge_provenance(existing if isinstance(existing, Mapping) else None, v)
+            dst["__prov"] = merged
+            continue
+
+        if k == "__wiki":
+            sanitized = _sanitize_wiki_block(v)
+            if sanitized is None:
+                # si el patch trae __wiki pero queda vacío / inválido, mejor no guardarlo
+                if "__wiki" in dst:
+                    dst.pop("__wiki", None)
+            else:
+                dst["__wiki"] = sanitized
+            continue
+
+        dst[k] = v  # type: ignore[assignment]
+
+    return dst
+
+
+# ============================================================
 #                  LOAD/SAVE CACHE (ATÓMICO)
 # ============================================================
 
@@ -306,15 +449,12 @@ def _find_existing(
     norm_year: str,
     imdb_id: str | None,
 ) -> OmdbCacheItem | None:
-    # REGLA: si hay imdb_id, SOLO puede haber HIT por imdb_id.
-    # Nunca devolvemos un registro cacheado por (Title, Year) con imdbID=None.
     if imdb_id:
         for it in items:
             if it.get("imdbID") == imdb_id:
                 return it
         return None
 
-    # Solo si no hay imdb_id: lookup por (Title, Year) con imdbID=None
     for it in items:
         if (
             it.get("imdbID") is None
@@ -330,6 +470,64 @@ def iter_cached_omdb_records() -> Iterable[dict[str, object]]:
     cache = _load_cache()
     for it in cache["items"]:
         yield dict(it["omdb"])
+
+
+# ============================================================
+#                 PATCH / WRITE-BACK AL CACHE v2
+# ============================================================
+
+
+def patch_cached_omdb_record(
+    *,
+    norm_title: str,
+    norm_year: str,
+    imdb_id: str | None,
+    patch: Mapping[str, object],
+) -> bool:
+    """
+    Actualiza EN DISCO el registro cacheado (omdb_cache.json) aplicando un patch
+    a it["omdb"].
+
+    Matching:
+      - Si imdb_id existe: it["imdbID"] == imdb_id
+      - Si imdb_id es None: imdbID=None y (Title,Year)==(norm_title,norm_year)
+
+    Merge:
+      - "__prov": mergea dicts
+      - "__wiki": SANITIZA y guarda solo el bloque minimal permitido
+      - resto: pisa claves directas
+    """
+    imdb_norm = _safe_imdb_id(imdb_id) if imdb_id else None
+    cache = _load_cache()
+    items = cache.get("items", [])
+
+    target: OmdbCacheItem | None = None
+    if imdb_norm:
+        for it in items:
+            if it.get("imdbID") == imdb_norm:
+                target = it
+                break
+    else:
+        for it in items:
+            if (
+                it.get("imdbID") is None
+                and it.get("Title") == norm_title
+                and it.get("Year") == norm_year
+            ):
+                target = it
+                break
+
+    if target is None:
+        return False
+
+    omdb_obj = target.get("omdb")
+    if not isinstance(omdb_obj, dict):
+        omdb_obj = dict(omdb_obj) if isinstance(omdb_obj, Mapping) else {}
+        target["omdb"] = omdb_obj
+
+    _merge_dict_shallow(omdb_obj, patch)
+    _save_cache(cache)
+    return True
 
 
 # ============================================================
@@ -400,7 +598,6 @@ def _cache_store_item(
 ) -> OmdbCacheItem:
     cache = _load_cache()
 
-    # Un item por imdbID (si existe).
     if imdb_id is not None:
         kept: list[OmdbCacheItem] = []
         for it in cache["items"]:
@@ -409,7 +606,6 @@ def _cache_store_item(
             kept.append(it)
         cache["items"] = kept
 
-    # Si no existe imdbID, un item por (Title, Year) para imdbID=null.
     if imdb_id is None:
         kept2: list[OmdbCacheItem] = []
         for it in cache["items"]:
@@ -438,12 +634,6 @@ def _search_candidates_imdb_id(
     title_for_search: str,
     year: int | None,
 ) -> str | None:
-    """
-    Búsqueda fuzzy: usa 's=' y elige el mejor candidato por heurística.
-    Devuelve imdbID (normalizado) o None.
-
-    IMPORTANTE: esta función solo debe usarse cuando NO tenemos imdb_id.
-    """
     if OMDB_API_KEY is None:
         return None
 
@@ -516,29 +706,13 @@ def _search_candidates_imdb_id(
     return best_imdb
 
 
-def _fetch_full_by_imdb_id(imdb_id: str) -> dict[str, object] | None:
-    params: dict[str, object] = {"i": imdb_id, "type": "movie", "plot": "short"}
-    data = omdb_request(params)
-    if not isinstance(data, dict):
-        return None
-    return data
-
-
 def omdb_query_with_cache(
     *,
     title: str | None,
     year: int | None,
     imdb_id: str | None,
+    provenance: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
-    """
-    Cache v2:
-      - Un item por imdbID (si existe).
-      - Si no existe imdbID, un item por (Title, Year) para imdbID=null.
-
-    REGLA DE ORO:
-      - Si hay imdb_id: cache HIT solo por imdbID y request solo por i= (sin title-fallback).
-      - Solo si NO hay imdb_id: se permite t= (y) + fallback y s= candidatos.
-    """
     global OMDB_DISABLED, OMDB_DISABLED_NOTICE_SHOWN, OMDB_RATE_LIMIT_NOTICE_SHOWN
 
     imdb_norm = _safe_imdb_id(imdb_id) if imdb_id else None
@@ -548,21 +722,29 @@ def omdb_query_with_cache(
     if not norm_title and imdb_norm is None:
         return None
 
-    # Cache HIT (respeta regla: si imdb_norm existe, solo hace match por imdbID)
+    prov_base = _build_default_provenance(imdb_norm=imdb_norm, norm_title=norm_title, year=year)
+    prov_in = _merge_provenance(prov_base, provenance)
+
     cached = _get_cached_item(norm_title=norm_title, norm_year=year_str, imdb_id_hint=imdb_norm)
     if cached is not None and not OMDB_RETRY_EMPTY_CACHE:
-        return dict(cached["omdb"])
+        out = dict(cached["omdb"])
+        _attach_provenance(out, prov_in)
+        return out
 
     if cached is not None and OMDB_RETRY_EMPTY_CACHE:
         old = dict(cached["omdb"])
         if not is_omdb_data_empty_for_ratings(old):
+            _attach_provenance(old, prov_in)
             return old
         _log(f"INFO: reintentando OMDb para {norm_title} ({year_str or '?'}) (cache sin ratings).")
 
     if OMDB_DISABLED:
-        return dict(cached["omdb"]) if cached is not None else None
+        if cached is None:
+            return None
+        out2 = dict(cached["omdb"])
+        _attach_provenance(out2, prov_in)
+        return out2
 
-    # --- Helper para ejecutar request con rate-limit handling (sin recursión) ---
     def _request_with_rate_limit(params: Mapping[str, object]) -> dict[str, object] | None:
         global OMDB_RATE_LIMIT_NOTICE_SHOWN
 
@@ -589,7 +771,6 @@ def omdb_query_with_cache(
 
     had_failure = False
 
-    # --- 1) Si hay imdb_id: SOLO i= (y sin fallbacks por título) ---
     if imdb_norm is not None:
         params_main: dict[str, object] = {"i": imdb_norm, "type": "movie", "plot": "short"}
         data_main = _request_with_rate_limit(params_main)
@@ -599,7 +780,6 @@ def omdb_query_with_cache(
             imdb_from_resp = _extract_imdb_id_from_omdb_record(data_main)
             imdb_final = imdb_from_resp or imdb_norm
 
-            # Para cache "bonito": si no tenemos título, usar el Title de OMDb
             if not norm_title:
                 t_raw = data_main.get("Title")
                 if isinstance(t_raw, str):
@@ -610,6 +790,10 @@ def omdb_query_with_cache(
                 if y_resp is not None:
                     year_str = str(y_resp)
 
+            prov_final = dict(prov_in)
+            prov_final["resolved_via"] = "i"
+            _attach_provenance(data_main, prov_final)
+
             _cache_store_item(
                 norm_title=norm_title,
                 norm_year=year_str,
@@ -618,7 +802,6 @@ def omdb_query_with_cache(
             )
             return dict(data_main)
 
-        # Si falla, no se intenta nada más cuando hay imdb_id
         if had_failure:
             OMDB_DISABLED = True
             if not OMDB_DISABLED_NOTICE_SHOWN:
@@ -629,9 +812,12 @@ def omdb_query_with_cache(
                 OMDB_DISABLED_NOTICE_SHOWN = True
 
         cached2 = _get_cached_item(norm_title=norm_title, norm_year=year_str, imdb_id_hint=imdb_norm)
-        return dict(cached2["omdb"]) if cached2 is not None else None
+        if cached2 is None:
+            return None
+        out3 = dict(cached2["omdb"])
+        _attach_provenance(out3, prov_in)
+        return out3
 
-    # --- 2) Sin imdb_id: aquí sí hay búsqueda por título + fallbacks ---
     params_t: dict[str, object] = {"t": norm_title, "type": "movie", "plot": "short"}
     if year is not None:
         params_t["y"] = str(year)
@@ -640,25 +826,31 @@ def omdb_query_with_cache(
     if data_t is None:
         had_failure = True
     else:
-        # --- Fallback: sin año ---
+        used_no_year = False
         if year is not None and _is_movie_not_found(data_t):
             params_no_year = dict(params_t)
             params_no_year.pop("y", None)
             data_no_year = _request_with_rate_limit(params_no_year)
             if data_no_year is not None:
                 data_t = data_no_year
+                used_no_year = True
 
-        # --- Fallback: candidatos (s=) + ficha completa (i=) ---
         if _is_movie_not_found(data_t):
             imdb_best = _search_candidates_imdb_id(title_for_search=norm_title, year=year)
             if imdb_best:
-                data_full = _request_with_rate_limit({"i": imdb_best, "type": "movie", "plot": "short"})
+                data_full = _request_with_rate_limit(
+                    {"i": imdb_best, "type": "movie", "plot": "short"}
+                )
                 if isinstance(data_full, dict):
                     imdb_from_full = _extract_imdb_id_from_omdb_record(data_full)
                     imdb_final2 = imdb_from_full or imdb_best
 
                     y_resp2 = extract_year_from_omdb(data_full)
                     year_str2 = year_str or (str(y_resp2) if y_resp2 is not None else "")
+
+                    prov_final2 = dict(prov_in)
+                    prov_final2["resolved_via"] = "s_i"
+                    _attach_provenance(data_full, prov_final2)
 
                     _cache_store_item(
                         norm_title=norm_title,
@@ -673,6 +865,13 @@ def omdb_query_with_cache(
 
         y_resp3 = extract_year_from_omdb(data_t)
         year_str3 = year_str or (str(y_resp3) if y_resp3 is not None else "")
+
+        prov_final3 = dict(prov_in)
+        if year is not None and not used_no_year:
+            prov_final3["resolved_via"] = "t_y"
+        else:
+            prov_final3["resolved_via"] = "t"
+        _attach_provenance(data_t, prov_final3)
 
         _cache_store_item(
             norm_title=norm_title,
@@ -692,7 +891,11 @@ def omdb_query_with_cache(
             OMDB_DISABLED_NOTICE_SHOWN = True
 
     cached3 = _get_cached_item(norm_title=norm_title, norm_year=year_str, imdb_id_hint=None)
-    return dict(cached3["omdb"]) if cached3 is not None else None
+    if cached3 is None:
+        return None
+    out4 = dict(cached3["omdb"])
+    _attach_provenance(out4, prov_in)
+    return out4
 
 
 # ============================================================
@@ -720,7 +923,6 @@ def search_omdb_with_candidates(
     plex_title: str,
     plex_year: int | None,
 ) -> dict[str, object] | None:
-    # Se mantiene por compatibilidad interna, pero el fallback principal ya está integrado.
     title_raw = plex_title.strip()
     if not title_raw:
         return None
