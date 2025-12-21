@@ -123,7 +123,18 @@ OMDB_RATE_LIMIT_MAX_RETRIES: int = _get_env_int("OMDB_RATE_LIMIT_MAX_RETRIES", 1
 # Si TRUE: rehace llamadas OMDb cuando el registro en cache está incompleto
 # OMDB_RETRY_EMPTY_CACHE=false
 OMDB_RETRY_EMPTY_CACHE: bool = _get_env_bool("OMDB_RETRY_EMPTY_CACHE", False)
-
+############################################################
+# 🔎  BUSQUEDAS EN WIKI
+############################################################
+# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
+# WIKI_LANGUAGE=es
+WIKI_LANGUAGE: str = os.getenv("WIKI_LANGUAGE", "es")
+# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
+# WIKI_FALLBACK_LANGUAGE=en
+WIKI_FALLBACK_LANGUAGE: str = os.getenv("WIKI_FALLBACK_LANGUAGE", "en")
+# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
+# WIKI_DEBUG=false
+WIKI_DEBUG: bool = _get_env_bool("WIKI_DEBUG", False)
 ############################################################
 # 🎬 1) Scoring bayesiano (regla principal)
 ############################################################
@@ -273,9 +284,14 @@ METADATA_FIX_PATH: Final[str] = os.path.join(REPORTS_DIR, METADATA_FIX_FILENAME)
 ############################################################
 # IMPORTANTE: se definen aquí para que el logger pueda consultarlos
 # durante la carga de config (por ejemplo en warnings de parseo).
-DEBUG_MODE: bool = _get_env_bool("DEBUG_MODE", False)
+# Si true: reduce logs al mínimo
+# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
+# SILENT_MODE=true
 SILENT_MODE: bool = _get_env_bool("SILENT_MODE", False)
 
+# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
+# DEBUG_MODE=true
+DEBUG_MODE: bool = _get_env_bool("DEBUG_MODE", False)
 
 ############################################################
 # VARIABLES PARA EL DASHBOARD
