@@ -11,11 +11,21 @@ from backend.movie_input import MovieInput
 from backend.omdb_client import omdb_query_with_cache
 from backend.wiki_client import get_wiki_client
 
+# ✅ Write-back a cache OMDb (si existe en tu omdb_client.py)
+try:
+    from backend.omdb_client import patch_cached_omdb_record  # type: ignore
+except Exception:  # pragma: no cover
+    patch_cached_omdb_record = None  # type: ignore[assignment]
+
+# Para normalizar el title como hace omdb_client internamente
+try:
+    from backend.movie_input import normalize_title_for_lookup
+except Exception:  # pragma: no cover
+    normalize_title_for_lookup = None  # type: ignore[assignment]
+
 
 _OmdbCacheKey: TypeAlias = tuple[str, int | None, str | None]
 
-# ✅ CACHÉS A NIVEL DE MÓDULO (persisten durante toda la ejecución)
-#    Así evitamos llamar a OMDb/Wiki repetidamente para los mismos títulos.
 _OMDB_LOCAL_CACHE: dict[_OmdbCacheKey, dict[str, object]] = {}
 _WIKI_LOCAL_CACHE: dict[_OmdbCacheKey, dict[str, object]] = {}
 
@@ -49,6 +59,103 @@ def _extract_wiki_meta(omdb_record: Mapping[str, object] | None) -> dict[str, ob
     if isinstance(wiki_raw, Mapping):
         return dict(wiki_raw)
     return {}
+
+
+def _build_lookup_key(title_for_fetch: str, year_for_fetch: int | None, imdb_hint: str | None) -> str:
+    t = title_for_fetch.strip()
+    if imdb_hint:
+        return f"imdb_id:{imdb_hint}"
+    if year_for_fetch is not None:
+        return f"title_year:{t}|{year_for_fetch}"
+    return f"title:{t}"
+
+
+def _build_wiki_lookup_info(
+    *,
+    title_for_fetch: str,
+    year_for_fetch: int | None,
+    imdb_used: str | None,
+) -> dict[str, object]:
+    """
+    Describe con qué parámetros se consultó a Wiki.
+    """
+    title_clean = title_for_fetch.strip()
+    if imdb_used:
+        return {"via": "imdb_id", "imdb_id": imdb_used}
+    if year_for_fetch is not None:
+        return {"via": "title_year", "title": title_clean, "year": year_for_fetch}
+    return {"via": "title", "title": title_clean}
+
+
+def _build_minimal_wiki_block(
+    *,
+    imdb_id: str | None,
+    wikidata_id: str | None,
+    wikipedia_title: str | None,
+    wiki_lookup: Mapping[str, object],
+) -> dict[str, object]:
+    """
+    ✅ Bloque mínimo que sí queremos persistir en omdb_cache.json.
+    """
+    out: dict[str, object] = {
+        "wiki_lookup": dict(wiki_lookup),
+    }
+    if imdb_id is not None:
+        out["imdb_id"] = imdb_id
+    if wikidata_id is not None:
+        out["wikidata_id"] = wikidata_id
+    if wikipedia_title is not None:
+        out["wikipedia_title"] = wikipedia_title
+    return out
+
+
+def _persist_minimal_wiki_into_omdb_cache(
+    *,
+    title_for_fetch: str,
+    year_for_fetch: int | None,
+    imdb_id_for_cache: str | None,
+    imdb_hint: str | None,
+    minimal_wiki: Mapping[str, object],
+    lookup_key: str,
+) -> None:
+    """
+    Persiste __wiki MINIMAL y wiki_wikidata_id en __prov dentro del omdb_cache.json.
+
+    Requiere patch_cached_omdb_record(); si no existe, no hace nada.
+    """
+    if patch_cached_omdb_record is None:
+        return
+
+    imdb_id_final = imdb_id_for_cache or imdb_hint
+
+    if normalize_title_for_lookup is not None:
+        norm_title = normalize_title_for_lookup(title_for_fetch or "")
+    else:
+        norm_title = (title_for_fetch or "").strip().lower()
+
+    norm_year = str(year_for_fetch) if year_for_fetch is not None else ""
+
+    wikidata_id = None
+    if isinstance(minimal_wiki, Mapping):
+        raw = minimal_wiki.get("wikidata_id")
+        wikidata_id = raw if isinstance(raw, str) and raw.strip() else None
+
+    prov_patch: dict[str, object] = {
+        "lookup_key": lookup_key,
+        "had_imdb_hint": bool(imdb_hint),
+    }
+    if wikidata_id:
+        prov_patch["wiki_wikidata_id"] = wikidata_id
+
+    patch_cached_omdb_record(
+        norm_title=norm_title,
+        norm_year=norm_year,
+        imdb_id=imdb_id_final,
+        patch={
+            "__wiki": dict(minimal_wiki),
+            "__prov": prov_patch,  # en omdb_client mergea __prov, no lo pisa a lo bruto
+        },
+    )
 
 
 def analyze_movie(
@@ -102,11 +209,17 @@ def analyze_movie(
             wiki_meta = _WIKI_LOCAL_CACHE.get(key, {})
             return cached
 
-        # ✅ 2) OMDb (cache v2 del propio cliente)
+        lookup_key = _build_lookup_key(title_for_fetch, year_for_fetch, imdb_hint)
+
+        # ✅ 2) OMDb (cache v2 del propio cliente) + provenance embebida
         omdb_record = omdb_query_with_cache(
             title=title_for_fetch,
             year=year_for_fetch,
             imdb_id=imdb_hint,
+            provenance={
+                "lookup_key": lookup_key,
+                "had_imdb_hint": bool(imdb_hint),
+            },
         )
 
         if omdb_record is None:
@@ -119,7 +232,7 @@ def analyze_movie(
 
         omdb_dict = dict(omdb_record)
 
-        # ✅ 3) Si OMDb YA trae __wiki, no llamamos a Wiki
+        # ✅ 3) Si OMDb YA trae __wiki (pero ojo: ahora es minimal), no llamamos a Wiki
         if "__wiki" in omdb_dict and isinstance(omdb_dict.get("__wiki"), Mapping):
             wiki_dict = _extract_wiki_meta(omdb_dict)
             _OMDB_LOCAL_CACHE[key] = omdb_dict
@@ -128,10 +241,25 @@ def analyze_movie(
             wiki_meta = wiki_dict
             return omdb_dict
 
-        # ✅ 4) Si ya teníamos wiki_cache local, tampoco llamamos
+        # ✅ 4) Si ya teníamos wiki_cache local, lo aplicamos y persistimos (minimal)
         cached_wiki = _WIKI_LOCAL_CACHE.get(key)
         if cached_wiki is not None and cached_wiki:
             omdb_dict["__wiki"] = dict(cached_wiki)
+
+            imdb_id_from_omdb: str | None = None
+            imdb_raw = omdb_dict.get("imdbID")
+            if isinstance(imdb_raw, str) and imdb_raw.strip():
+                imdb_id_from_omdb = imdb_raw.strip()
+
+            _persist_minimal_wiki_into_omdb_cache(
+                title_for_fetch=title_for_fetch,
+                year_for_fetch=year_for_fetch,
+                imdb_id_for_cache=imdb_id_from_omdb,
+                imdb_hint=imdb_hint,
+                minimal_wiki=cached_wiki,
+                lookup_key=lookup_key,
+            )
+
             _OMDB_LOCAL_CACHE[key] = omdb_dict
             omdb_data = omdb_dict
             wiki_meta = dict(cached_wiki)
@@ -143,27 +271,64 @@ def analyze_movie(
         if isinstance(imdb_raw, str) and imdb_raw.strip():
             imdb_id_from_omdb = imdb_raw.strip()
 
+        imdb_used_for_wiki = imdb_id_from_omdb or imdb_hint
+
         wiki_item = get_wiki_client().get_wiki(
             title=title_for_fetch,
             year=year_for_fetch,
-            imdb_id=imdb_id_from_omdb or imdb_hint,
+            imdb_id=imdb_used_for_wiki,
         )
 
+        # ✅ Construimos siempre un bloque MINIMAL si Wiki responde
         if wiki_item is not None:
             wiki_block = wiki_item.get("wiki")
             wikidata_block = wiki_item.get("wikidata")
 
-            merged_wiki: dict[str, object] = {}
-            if isinstance(wiki_block, Mapping):
-                merged_wiki.update(dict(wiki_block))
-            if isinstance(wikidata_block, Mapping):
-                merged_wiki["wikidata"] = dict(wikidata_block)
-
+            # imdb_id que nos devuelve wiki_client (si lo ofrece)
             imdb_cached = wiki_item.get("imdbID")
-            if isinstance(imdb_cached, str) or imdb_cached is None:
-                merged_wiki["imdb_id"] = imdb_cached
+            imdb_from_wiki = imdb_cached if isinstance(imdb_cached, str) and imdb_cached.strip() else None
 
-            omdb_dict["__wiki"] = merged_wiki
+            # wikidata_id: lo buscamos primero en wikidata_block (típico)
+            wikidata_id: str | None = None
+            if isinstance(wikidata_block, Mapping):
+                # soporta varias formas por compatibilidad
+                for k in ("wikibase_item", "wikidata_id", "id"):
+                    v = wikidata_block.get(k)
+                    if isinstance(v, str) and v.strip():
+                        wikidata_id = v.strip()
+                        break
+
+            # wikipedia_title: lo buscamos en wiki_block si viene
+            wikipedia_title: str | None = None
+            if isinstance(wiki_block, Mapping):
+                v = wiki_block.get("wikipedia_title")
+                if isinstance(v, str) and v.strip():
+                    wikipedia_title = v.strip()
+
+            wiki_lookup = _build_wiki_lookup_info(
+                title_for_fetch=title_for_fetch,
+                year_for_fetch=year_for_fetch,
+                imdb_used=imdb_used_for_wiki,
+            )
+
+            minimal_wiki = _build_minimal_wiki_block(
+                imdb_id=imdb_from_wiki or imdb_used_for_wiki,
+                wikidata_id=wikidata_id,
+                wikipedia_title=wikipedia_title,
+                wiki_lookup=wiki_lookup,
+            )
+
+            omdb_dict["__wiki"] = minimal_wiki
+
+            # ✅ Persistimos inmediatamente en cache OMDb (minimal + prov.wiki_wikidata_id)
+            _persist_minimal_wiki_into_omdb_cache(
+                title_for_fetch=title_for_fetch,
+                year_for_fetch=year_for_fetch,
+                imdb_id_for_cache=imdb_id_from_omdb,
+                imdb_hint=imdb_hint,
+                minimal_wiki=minimal_wiki,
+                lookup_key=lookup_key,
+            )
 
         wiki_dict = _extract_wiki_meta(omdb_dict)
 
@@ -287,7 +452,6 @@ def analyze_movie(
     row["title"] = display_title
     row["year"] = display_year
 
-    # Tamaño en disco (bytes) -> export como file_size
     file_size_bytes = row.get("file_size_bytes")
     if isinstance(file_size_bytes, int):
         row["file_size"] = file_size_bytes
@@ -308,7 +472,8 @@ def analyze_movie(
     row["trailer_url"] = trailer_url
     row["omdb_json"] = omdb_json_str
 
-    row["wikidata_id"] = wiki_meta.get("wikibase_item") or wiki_meta.get("wikidata_id")
+    # ✅ Ahora wiki_meta es minimal: wikidata_id y wikipedia_title salen directo remindando compat
+    row["wikidata_id"] = wiki_meta.get("wikadata_id") or wiki_meta.get("wikidata_id")
     row["wikipedia_title"] = wiki_meta.get("wikipedia_title")
     row["source_language"] = wiki_meta.get("source_language")
 
