@@ -5,26 +5,17 @@ import warnings
 
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
 
 from backend import logger as _logger
 from backend.config import (
-    AUTO_DELETE_RATING_PERCENTILE,
-    AUTO_KEEP_RATING_PERCENTILE,
-    BAYES_DELETE_MAX_SCORE,
-    BAYES_GLOBAL_MEAN_DEFAULT,
-    BAYES_MIN_TITLES_FOR_GLOBAL_MEAN,
-    IMDB_DELETE_MAX_RATING,
-    IMDB_KEEP_MIN_RATING,
-    IMDB_KEEP_MIN_RATING_WITH_RT,
-    IMDB_KEEP_MIN_VOTES,
-    IMDB_RATING_LOW_THRESHOLD,
-    METADATA_FIX_PATH,
-    RATING_MIN_TITLES_FOR_AUTO,
-    REPORT_ALL_PATH,
-    REPORT_FILTERED_PATH,
-    RT_RATING_LOW_THRESHOLD,
     SILENT_MODE,
+    REPORT_ALL_PATH, 
+    REPORT_FILTERED_PATH,
+    DELETE_DRY_RUN, 
+    DELETE_REQUIRE_CONFIRM, 
+    METADATA_FIX_PATH, 
+    IMDB_KEEP_MIN_RATING,
+    IMDB_DELETE_MAX_RATING
 )
 from backend.report_loader import load_reports
 from backend.stats import (
@@ -102,46 +93,8 @@ def _log_effective_thresholds_once() -> None:
     eff_delete = get_auto_delete_rating_threshold()
     bayes_mean, bayes_source, bayes_n = get_global_imdb_mean_info()
 
-    _logger.info("================ UMBRALES DE SCORING EFECTIVOS ================")
-    _logger.info(
-        f"IMDB_KEEP_MIN_VOTES (fallback / votos por año): {IMDB_KEEP_MIN_VOTES}"
-    )
-    _logger.info(f"IMDB_KEEP_MIN_RATING (fallback): {IMDB_KEEP_MIN_RATING}")
-    _logger.info(f"IMDB_DELETE_MAX_RATING (fallback): {IMDB_DELETE_MAX_RATING}")
-    _logger.info(f"IMDB_KEEP_MIN_RATING_WITH_RT: {IMDB_KEEP_MIN_RATING_WITH_RT}")
-    _logger.info(
-        "AUTO_KEEP_RATING_PERCENTILE = "
-        f"{AUTO_KEEP_RATING_PERCENTILE} "
-        f"(RATING_MIN_TITLES_FOR_AUTO = {RATING_MIN_TITLES_FOR_AUTO})"
-    )
-    _logger.info(
-        "AUTO_DELETE_RATING_PERCENTILE = "
-        f"{AUTO_DELETE_RATING_PERCENTILE} "
-        f"(RATING_MIN_TITLES_FOR_AUTO = {RATING_MIN_TITLES_FOR_AUTO})"
-    )
-    _logger.info(f"→ Umbral KEEP efectivo (auto/fallback)   = {eff_keep:.3f}")
-    _logger.info(f"→ Umbral DELETE efectivo (auto/fallback) = {eff_delete:.3f}")
-    _logger.info(
-        "BAYES_GLOBAL_MEAN_DEFAULT = "
-        f"{BAYES_GLOBAL_MEAN_DEFAULT} "
-        f"(mín. títulos para media caché = {BAYES_MIN_TITLES_FOR_GLOBAL_MEAN})"
-    )
-    _logger.info(
-        "Media global IMDb usada como C = "
-        f"{bayes_mean:.3f} "
-        f"(fuente = {bayes_source}, n = {bayes_n})"
-    )
-    _logger.info(f"BAYES_DELETE_MAX_SCORE = {BAYES_DELETE_MAX_SCORE}")
-    _logger.info(f"IMDB_RATING_LOW_THRESHOLD = {IMDB_RATING_LOW_THRESHOLD}")
-    _logger.info(f"RT_RATING_LOW_THRESHOLD   = {RT_RATING_LOW_THRESHOLD}")
-    _logger.info("===============================================================")
-
     st.session_state["thresholds_logged"] = True
 
-
-# ============================================================
-# Configuración inicial
-# ============================================================
 
 # Silenciar SettingWithCopyWarning (st_aggrid/pandas)
 warnings.filterwarnings(
@@ -151,21 +104,14 @@ warnings.filterwarnings(
 )
 warnings.simplefilter("ignore", pd.errors.SettingWithCopyWarning)
 
-# Carga de .env
-load_dotenv()
-
-# Parámetros de entorno
-DELETE_DRY_RUN = _env_bool("DELETE_DRY_RUN", True)
-DELETE_REQUIRE_CONFIRM = _env_bool("DELETE_REQUIRE_CONFIRM", True)
-
 # Página principal
-st.set_page_config(page_title="Plex Movies Cleaner", layout="wide")
+st.set_page_config(page_title="Movies Cleaner", layout="wide")
 _hide_streamlit_chrome()
 _init_modal_state()
 
 # Título (no mostramos si estamos en modo modal)
 if not st.session_state.get("modal_open"):
-    st.title("🎬 Plex Movies Cleaner — Dashboard")
+    st.title("🎬 Movies Cleaner — Dashboard")
 
 # Vista modal de detalle (si está activa, corta el flujo normal)
 render_modal()
