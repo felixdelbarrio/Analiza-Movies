@@ -279,19 +279,6 @@ METADATA_FIX_FILENAME: Final[str] = "metadata_fix.csv"
 REPORT_ALL_PATH: Final[str] = os.path.join(REPORTS_DIR, REPORT_ALL_FILENAME)
 REPORT_FILTERED_PATH: Final[str] = os.path.join(REPORTS_DIR, REPORT_FILTERED_FILENAME)
 METADATA_FIX_PATH: Final[str] = os.path.join(REPORTS_DIR, METADATA_FIX_FILENAME)
-############################################################
-# ⚙️ MODO DE EJECUCIÓN
-############################################################
-# IMPORTANTE: se definen aquí para que el logger pueda consultarlos
-# durante la carga de config (por ejemplo en warnings de parseo).
-# Si true: reduce logs al mínimo
-# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
-# SILENT_MODE=true
-SILENT_MODE: bool = _get_env_bool("SILENT_MODE", False)
-
-# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
-# DEBUG_MODE=true
-DEBUG_MODE: bool = _get_env_bool("DEBUG_MODE", False)
 
 ############################################################
 # VARIABLES PARA EL DASHBOARD
@@ -308,8 +295,19 @@ DELETE_DRY_RUN = _get_env_bool("DELETE_DRY_RUN", True)
 DELETE_REQUIRE_CONFIRM = _get_env_bool("DELETE_REQUIRE_CONFIRM", True)
 
 ############################################################
-# 🔎  LOGGER
+# ⚙️ MODO DE EJECUCIÓN LOGGER
 ############################################################
+# IMPORTANTE: se definen aquí para que el logger pueda consultarlos
+# durante la carga de config (por ejemplo en warnings de parseo).
+# Si true: reduce logs al mínimo
+# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
+# SILENT_MODE=true
+SILENT_MODE: bool = _get_env_bool("SILENT_MODE", True)
+
+# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
+# DEBUG_MODE=true
+DEBUG_MODE: bool = _get_env_bool("DEBUG_MODE", False)
+
 def _log_config_debug(label: str, value: object) -> None:
     """Registra configuración solo en DEBUG_MODE (y respetando SILENT_MODE)."""
     if not DEBUG_MODE or SILENT_MODE:
