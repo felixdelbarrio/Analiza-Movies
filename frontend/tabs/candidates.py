@@ -1,5 +1,23 @@
 from __future__ import annotations
 
+"""
+candidates.py
+
+Pestaña “Candidatas a borrar (DELETE / MAYBE)” (Streamlit).
+
+Responsabilidad:
+- Mostrar el CSV/DF filtrado (df_filtered) con las candidatas a borrar.
+- Re-validar que solo contiene decisiones DELETE/MAYBE por robustez.
+- Ordenar de forma útil (peores primero) si hay columnas disponibles.
+- Mostrar un resumen corto del conteo de DELETE/MAYBE.
+- Renderizar tabla (AgGrid) + panel de detalle.
+
+Principios:
+- No mutar df_filtered: trabajar con copias.
+- Tolerancia a columnas ausentes (decision, imdb_rating, etc.).
+- UI delegada a frontend.components.
+"""
+
 from typing import Final
 
 import pandas as pd
@@ -11,42 +29,91 @@ from frontend.components import aggrid_with_row_click, render_detail_card
 TITLE_TEXT: Final[str] = "### Candidatas a borrar (DELETE / MAYBE)"
 
 
-def render(df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
-    """Pestaña 2: Candidatas a borrar (DELETE / MAYBE)."""
-    st.write(TITLE_TEXT)
+def _filter_candidates(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Asegura que el DataFrame contenga solo filas con decision DELETE/MAYBE si existe la columna.
 
-    # Nada que mostrar
-    if not isinstance(df_filtered, pd.DataFrame) or df_filtered.empty:
-        st.info("No hay CSV filtrado o está vacío.")
-        return
-
-    # Trabajamos con copia para no modificar el DataFrame original
-    df_view = df_filtered.copy()
-
-    # Aseguramos que solo contiene DELETE / MAYBE por si el CSV tuviera más cosas
+    Si no existe la columna 'decision', se devuelve el DF tal cual.
+    """
+    df_view = df.copy()
     if "decision" in df_view.columns:
         df_view = df_view[df_view["decision"].isin(["DELETE", "MAYBE"])].copy()
+    return df_view
 
-    if df_view.empty:
-        st.info("No hay películas marcadas como DELETE o MAYBE.")
-        return
 
-    # Ordenar por algo útil si existen las columnas
+def _sort_candidates_view(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ordena el DataFrame por columnas típicamente relevantes, si existen:
+
+    - decision (asc): DELETE antes que MAYBE (orden alfabético funciona: DELETE < MAYBE).
+    - imdb_rating (desc): peor rating arriba dentro del grupo si se invierte (desc para “mejor arriba”,
+      pero aquí queremos priorizar “peor”; sin un orden semántico claro mantenemos el patrón estándar
+      del proyecto. Si quieres “peor arriba”, podemos invertir imdb_rating a asc).
+    - imdb_votes (desc)
+    - year (desc)
+    - file_size (desc): tamaño grande arriba (impacto potencial de borrado).
+
+    Nota:
+    - Mantengo el esquema original del fichero que me pasaste (decision asc, resto desc).
+      Si prefieres “más borrable arriba” (rating asc), lo ajusto.
+    """
+    df_view = df.copy()
+
     sort_cols: list[str] = []
     for col in ("decision", "imdb_rating", "imdb_votes", "year", "file_size"):
         if col in df_view.columns:
             sort_cols.append(col)
 
-    if sort_cols:
-        # decisión asc, resto desc (borrados duros + peor rating + más tamaño arriba)
-        ascending = [True] + [False] * (len(sort_cols) - 1)
-        df_view = df_view.sort_values(by=sort_cols, ascending=ascending, ignore_index=True)
+    if not sort_cols:
+        return df_view
 
-    # Pequeño resumen rápido
-    total = len(df_view)
-    delete_count = int((df_view["decision"] == "DELETE").sum()) if "decision" in df_view.columns else 0
-    maybe_count = int((df_view["decision"] == "MAYBE").sum()) if "decision" in df_view.columns else 0
+    ascending = [True] + [False] * (len(sort_cols) - 1)
+
+    try:
+        return df_view.sort_values(by=sort_cols, ascending=ascending, ignore_index=True)
+    except Exception:
+        return df_view
+
+
+def _render_quick_caption(df: pd.DataFrame) -> None:
+    """
+    Muestra un resumen corto: total, DELETE, MAYBE.
+
+    Si falta 'decision', muestra solo total.
+    """
+    total = int(len(df))
+    if "decision" not in df.columns:
+        st.caption(f"{total} candidata(s)")
+        return
+
+    delete_count = int((df["decision"] == "DELETE").sum())
+    maybe_count = int((df["decision"] == "MAYBE").sum())
     st.caption(f"{total} candidata(s): DELETE={delete_count}, MAYBE={maybe_count}")
+
+
+def render(df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
+    """
+    Renderiza la pestaña 2: Candidatas a borrar (DELETE/MAYBE).
+
+    Args:
+        df_all: DataFrame completo (no se usa aquí, pero se mantiene por compatibilidad de firma).
+        df_filtered: DataFrame filtrado (puede ser None o vacío).
+    """
+    st.write(TITLE_TEXT)
+
+    if not isinstance(df_filtered, pd.DataFrame) or df_filtered.empty:
+        st.info("No hay CSV filtrado o está vacío.")
+        return
+
+    df_view = _filter_candidates(df_filtered)
+
+    if df_view.empty:
+        st.info("No hay películas marcadas como DELETE o MAYBE.")
+        return
+
+    df_view = _sort_candidates_view(df_view)
+
+    _render_quick_caption(df_view)
 
     col_grid, col_detail = st.columns([2, 1])
 
@@ -54,5 +121,5 @@ def render(df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
         selected_row = aggrid_with_row_click(df_view, "filtered")
 
     with col_detail:
-        # usamos un prefix distinto para no chocar con la pestaña "all"
+        # prefix distinto para evitar colisiones con pestañas (all/advanced/etc.)
         render_detail_card(selected_row, button_key_prefix="candidates")

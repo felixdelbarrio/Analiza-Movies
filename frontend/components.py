@@ -1,22 +1,57 @@
 from __future__ import annotations
 
+"""
+components.py
+
+Componentes UI del dashboard (Streamlit + st_aggrid).
+
+Objetivos
+- Mostrar una tabla (AgGrid) optimizada para selección de una sola fila.
+- Renderizar una “ficha” de detalle estilo Plex a partir de la fila seleccionada.
+- Soportar un “modal” (detalle ampliado) usando st.session_state.
+
+Principios
+- Robustez frente a datos “raros” (NaN, None, tipos inesperados, Series/dict/DataFrame).
+- Parseo de JSON (omdb_json) bajo demanda (solo para la fila en detalle).
+- Keys únicas en widgets para evitar colisiones entre pestañas/vistas.
+
+Notas de compatibilidad (st_aggrid)
+- Se usa update_on=["selectionChanged"] (en lugar de GridUpdateMode.*).
+- Se aplica autoSizeStrategy recomendado por st_aggrid.
+
+Logging
+- Este módulo no hace logging agresivo: en UI se prefieren st.info/st.warning.
+- Si necesitas instrumentación, añade logs en capas “backend”; aquí se mantiene simple.
+"""
+
 import os
-from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Dict, Mapping, MutableMapping, Optional
 
 import pandas as pd
 import streamlit as st
-from st_aggrid import AgGrid, GridOptionsBuilder  # GridUpdateMode eliminado
+from st_aggrid import AgGrid, GridOptionsBuilder
 
 from frontend.data_utils import safe_json_loads_single
 
 
-# -------------------------------------------------------------------
+# ============================================================================
 # Tabla principal con selección de fila
-# -------------------------------------------------------------------
+# ============================================================================
 
 
 def _normalize_selected_rows(selected_raw: Any) -> list[Mapping[str, Any]]:
-    """Normaliza el objeto devuelto por AgGrid a una lista de mappings."""
+    """
+    Normaliza el objeto devuelto por AgGrid a una lista de mappings.
+
+    st_aggrid puede devolver:
+    - None
+    - list[dict] (típico)
+    - pd.DataFrame (dependiendo de configuración/versión)
+    - dict (caso raro)
+    - otros iterables
+
+    Devuelve siempre una lista; si no hay selección, lista vacía.
+    """
     if selected_raw is None:
         return []
 
@@ -24,9 +59,9 @@ def _normalize_selected_rows(selected_raw: Any) -> list[Mapping[str, Any]]:
     if isinstance(selected_raw, pd.DataFrame):
         return selected_raw.to_dict(orient="records")
 
-    # AgGrid normalmente devuelve list[dict]
+    # Caso estándar: list[dict]
     if isinstance(selected_raw, (list, tuple)):
-        # Aseguramos que todos los elementos sean mappings o algo convertible luego
+        # Dejamos pasar Mapping o elementos convertibles; se normaliza luego.
         return list(selected_raw)
 
     # Raro: un solo dict
@@ -35,28 +70,31 @@ def _normalize_selected_rows(selected_raw: Any) -> list[Mapping[str, Any]]:
 
     # Intentar tratarlo como iterable genérico
     try:
-        if hasattr(selected_raw, "__iter__") and not isinstance(
-            selected_raw,
-            (str, bytes),
-        ):
+        if hasattr(selected_raw, "__iter__") and not isinstance(selected_raw, (str, bytes)):
             return list(selected_raw)
     except Exception:
         pass
 
-    # Último recurso: devolverlo envuelto en lista para intentar dict() después
+    # Último recurso: envolver para que el caller intente dict() / fallback
     return [selected_raw]
 
 
 def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[Dict[str, Any]]:
     """
     Muestra un AgGrid con selección de una sola fila.
-    Devuelve un dict con los valores de la fila seleccionada o None.
+
+    Args:
+        df: DataFrame a renderizar. Si está vacío, muestra st.info y devuelve None.
+        key_suffix: sufijo para key del componente AgGrid (evita colisiones).
+
+    Returns:
+        Un dict “normal” con los valores de la fila seleccionada o None.
     """
     if df.empty:
         st.info("No hay datos para mostrar.")
         return None
 
-    # Orden sugerido de columnas visibles
+    # Orden sugerido de columnas visibles (resto quedan ocultas por defecto)
     desired_order = [
         "title",
         "year",
@@ -82,13 +120,13 @@ def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[Dict[st
             gb.configure_column(col, hide=True)
 
     grid_options = gb.build()
-    # Nuevo autosize recomendado por st_aggrid:
+
+    # Nuevo autosize recomendado por st_aggrid
     grid_options["autoSizeStrategy"] = {"type": "fitGridWidth"}
 
     grid_response = AgGrid(
         df,
         gridOptions=grid_options,
-        # Reemplazo de GridUpdateMode.SELECTION_CHANGED
         update_on=["selectionChanged"],
         enable_enterprise_modules=False,
         height=520,
@@ -105,24 +143,30 @@ def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[Dict[st
 
     if isinstance(first, pd.Series):
         return first.to_dict()
+
     if isinstance(first, Mapping):
-        # Nos aseguramos de devolver un dict mutable “normal”
+        # Devolver dict mutable “normal”
         return dict(first)
 
-    # Último recurso: intentar dict() o envolverlo
+    # Último recurso: intentar dict(); si falla, envolver en una clave
     try:
         return dict(first)  # type: ignore[arg-type]
     except Exception:
         return {"value": first}
 
 
-# -------------------------------------------------------------------
+# ============================================================================
 # Detalle de una película (panel tipo ficha)
-# -------------------------------------------------------------------
+# ============================================================================
 
 
 def _normalize_row_to_dict(row: Any) -> Optional[Dict[str, Any]]:
-    """Convierte distintas formas de fila (Series, dict, etc.) a dict."""
+    """
+    Convierte distintas formas de fila (Series, dict, etc.) a dict.
+
+    Returns:
+        dict o None si es imposible convertir.
+    """
     if row is None:
         return None
 
@@ -135,16 +179,16 @@ def _normalize_row_to_dict(row: Any) -> Optional[Dict[str, Any]]:
     try:
         return dict(row)  # type: ignore[arg-type]
     except Exception:
-        # Demasiado raro para convertir; el caller decidirá qué hacer
         return None
 
 
-def _get_from_omdb_or_row(
-    row: Mapping[str, Any],
-    omdb_dict: Mapping[str, Any] | None,
-    key: str,
-) -> Any:
-    """Devuelve primero row[key] y, si no, omdb_dict[key]."""
+def _get_from_omdb_or_row(row: Mapping[str, Any], omdb_dict: Mapping[str, Any] | None, key: str) -> Any:
+    """
+    Devuelve primero row[key] y, si no existe/no es usable, omdb_dict[key].
+
+    Nota:
+    - Considera vacío: None y "".
+    """
     if key in row and row.get(key) not in (None, ""):
         return row.get(key)
     if omdb_dict and isinstance(omdb_dict, Mapping):
@@ -153,6 +197,7 @@ def _get_from_omdb_or_row(
 
 
 def _safe_number_to_str(v: Any) -> str:
+    """Convierte números/valores a string seguro para UI."""
     try:
         if v is None or (isinstance(v, float) and pd.isna(v)):
             return "N/A"
@@ -162,6 +207,7 @@ def _safe_number_to_str(v: Any) -> str:
 
 
 def _safe_votes(v: Any) -> str:
+    """Formatea votos con separador de miles; tolera strings tipo '12,345'."""
     try:
         if v is None or (isinstance(v, float) and pd.isna(v)):
             return "N/A"
@@ -174,6 +220,7 @@ def _safe_votes(v: Any) -> str:
 
 
 def _is_nonempty_str(value: Any) -> bool:
+    """True si value es string “usable” (no '', 'nan', 'none')."""
     if value is None:
         return False
     s = str(value).strip()
@@ -181,6 +228,29 @@ def _is_nonempty_str(value: Any) -> bool:
         return False
     lower = s.lower()
     return lower not in ("nan", "none")
+
+
+def _build_plex_url(rating_key: Any) -> str | None:
+    """
+    Construye URL a Plex Web si hay baseURL y rating_key.
+
+    Busca base en varias variables de entorno para compatibilidad:
+      - PLEX_WEB_BASEURL
+      - PLEX_BASEURL
+      - BASEURL
+    """
+    plex_base = os.getenv("PLEX_WEB_BASEURL") or os.getenv("PLEX_BASEURL") or os.getenv("BASEURL") or ""
+    if not plex_base:
+        return None
+    if rating_key in (None, ""):
+        return None
+    return f"{plex_base}/web/index.html#!/server/library/metadata/{rating_key}"
+
+
+def _build_imdb_url(imdb_id: Any) -> str | None:
+    if imdb_id in (None, ""):
+        return None
+    return f"https://www.imdb.com/title/{imdb_id}"
 
 
 def render_detail_card(
@@ -192,8 +262,10 @@ def render_detail_card(
     Panel lateral / ficha de detalle tipo Plex.
     Parseamos omdb_json SOLO para esta fila (si existe).
 
-    button_key_prefix se usa para dar un key único al botón "Abrir en ventana"
-    por pestaña (all / candidates / advanced, etc.) y evitar colisiones.
+    Args:
+        row: fila seleccionada (dict/Series/Mapping).
+        show_modal_button: si True, muestra botón “Abrir en ventana”.
+        button_key_prefix: prefijo de key para evitar colisiones entre tabs.
     """
     if row is None:
         st.info("Haz click en una fila para ver su detalle.")
@@ -204,8 +276,9 @@ def render_detail_card(
         st.warning("Detalle no disponible: fila con formato inesperado.")
         return
 
-    row = normalized  # a partir de aquí asumimos dict[str, Any]
+    row = normalized
 
+    # Parseo omdb_json (solo para la fila actual)
     omdb_dict: Mapping[str, Any] | None = None
     if "omdb_json" in row:
         try:
@@ -215,6 +288,7 @@ def render_detail_card(
         except Exception:
             omdb_dict = None
 
+    # Campos principales
     title = row.get("title", "¿Sin título?")
     year = row.get("year")
     library = row.get("library")
@@ -223,7 +297,6 @@ def render_detail_card(
     imdb_rating = row.get("imdb_rating")
     imdb_votes = row.get("imdb_votes")
     rt_score = row.get("rt_score")
-    plex_rating = row.get("plex_rating")  # ahora mismo no se muestra, pero lo dejamos
 
     poster_url = row.get("poster_url")
     file_path = row.get("file")
@@ -232,6 +305,7 @@ def render_detail_card(
     rating_key = row.get("rating_key")
     imdb_id = row.get("imdb_id")
 
+    # OMDb fields (prioriza row, fallback a omdb_dict)
     rated = _get_from_omdb_or_row(row, omdb_dict, "Rated")
     released = _get_from_omdb_or_row(row, omdb_dict, "Released")
     runtime = _get_from_omdb_or_row(row, omdb_dict, "Runtime")
@@ -246,26 +320,19 @@ def render_detail_card(
 
     col_left, col_right = st.columns([1, 2])
 
-    # POSTER + enlaces
+    # Poster + enlaces
     with col_left:
         if _is_nonempty_str(poster_url):
-            st.image(poster_url, width=280)
+            st.image(str(poster_url), width=280)
         else:
             st.write("📷 Sin póster")
 
-        if imdb_id:
-            imdb_url = f"https://www.imdb.com/title/{imdb_id}"
+        imdb_url = _build_imdb_url(imdb_id)
+        if imdb_url:
             st.markdown(f"[🎬 Ver en IMDb]({imdb_url})")
 
-        # Leer base de Plex desde varias posibles vars de entorno para mayor compatibilidad
-        plex_base = (
-            os.getenv("PLEX_WEB_BASEURL")
-            or os.getenv("PLEX_BASEURL")
-            or os.getenv("BASEURL")
-            or ""
-        )
-        if plex_base and rating_key:
-            plex_url = f"{plex_base}/web/index.html#!/server/library/metadata/{rating_key}"
+        plex_url = _build_plex_url(rating_key)
+        if plex_url:
             st.markdown(f"[📺 Ver en Plex Web]({plex_url})")
 
         if show_modal_button:
@@ -276,14 +343,13 @@ def render_detail_card(
                 st.session_state["modal_open"] = True
                 st.experimental_rerun()
 
-    # DETALLE
+    # Detalle
     with col_right:
         header = str(title)
         try:
             if year is not None and not pd.isna(year):
                 header += f" ({int(float(year))})"
         except Exception:
-            # ignorar año inválido
             pass
 
         st.markdown(f"### {header}")
@@ -293,7 +359,6 @@ def render_detail_card(
         st.write(f"**Decisión:** `{decision}` — {reason}")
 
         m1, m2, m3 = st.columns(3)
-
         m1.metric("IMDb", _safe_number_to_str(imdb_rating))
 
         rt_str = _safe_number_to_str(rt_score)
@@ -352,9 +417,8 @@ def render_detail_card(
         if file_path:
             st.code(str(file_path), language="bash")
 
-        if file_size is not None and not (
-            isinstance(file_size, float) and pd.isna(file_size)
-        ):
+        # file_size en bytes → mostrar GB, tolerante
+        if file_size is not None and not (isinstance(file_size, float) and pd.isna(file_size)):
             try:
                 gb = float(file_size) / (1024**3)
                 st.write(f"**Tamaño:** {gb:.2f} GB")
@@ -363,25 +427,33 @@ def render_detail_card(
 
         if _is_nonempty_str(trailer_url):
             st.markdown("#### 🎞 Tráiler")
-            st.video(trailer_url)
+            st.video(str(trailer_url))
 
     with st.expander("Ver JSON completo"):
         try:
             full_row: MutableMapping[str, Any] = dict(row)
         except Exception:
             full_row = {"value": str(row)}
+
         if omdb_dict is not None:
             full_row["_omdb_parsed"] = dict(omdb_dict)
+
         st.json(full_row)
 
 
-# -------------------------------------------------------------------
+# ============================================================================
 # Modal de detalle ampliado
-# -------------------------------------------------------------------
+# ============================================================================
 
 
 def render_modal() -> None:
-    """Vista de detalle ampliado usando el estado global de Streamlit."""
+    """
+    Vista de detalle ampliado usando el estado global de Streamlit.
+
+    Requisitos de estado:
+      - st.session_state["modal_open"] = True/False
+      - st.session_state["modal_row"]  = dict de la fila seleccionada
+    """
     if not st.session_state.get("modal_open"):
         return
 

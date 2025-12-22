@@ -1,5 +1,55 @@
 from __future__ import annotations
 
+"""
+backend/collection_analysis.py
+
+Orquestador “por item” que conecta el pipeline completo para UNA película:
+
+- Entrada: MovieInput (modelo unificado: Plex/DLNA/etc.)
+- Fetch: OMDb (cache v2 persistente) + Wiki (solo si falta __wiki minimal)
+- Core: analyze_input_movie() -> decisión KEEP/MAYBE/DELETE + score bayesiano
+- Metadata suggestions: solo Plex (generate_metadata_suggestions_row)
+- Salida: fila final enriquecida para reporting CSV + logs acotados
+
+Diseño y responsabilidades
+-------------------------
+Este módulo NO imprime progreso por película/elemento; eso lo hacen los
+orquestadores de alto nivel (analiza_plex.py / analiza_dlna.py) con logger.progress().
+
+Aquí se hace:
+1) Resolver título/año “display” para reporting (si Plex aporta display_title).
+2) Resolver OMDb (cache v2) y, si falta, resolver Wiki y persistir un bloque minimal.
+3) Llamar al core genérico (backend/analyze_input_core.py) con analysis_trace opcional.
+4) Generar (si aplica) sugerencias de metadata (Plex).
+5) Enriquecer la fila con campos extra (poster_url, imdb_id, omdb_json, wikidata_id, etc.).
+6) Devolver (row, meta_sugg, logs) para que el orquestador decida qué imprimir.
+
+Filosofía de logs (alineada con lo trabajado)
+---------------------------------------------
+- SILENT_MODE=True:
+    - No acumulamos logs (memoria/CPU) salvo que DEBUG_MODE=True.
+    - En SILENT + DEBUG:
+        * permitimos pocas trazas cortas y útiles (sin dumps grandes)
+        * la consola recibe señales cortas vía _log_debug (progress)
+- SILENT_MODE=False:
+    - logs humanos y útiles, capados y truncados para evitar explosiones.
+
+Reglas clave:
+- El core analyze_input_movie() NO loguea por sí mismo.
+  En su lugar acepta `analysis_trace` (callback).
+- Aquí conectamos ese callback SOLO si DEBUG_MODE=True.
+- Las trazas se guardan acotadas en `logs` y (opcionalmente) se emiten a consola
+  con _log_debug (que ya respeta SILENT/DEBUG).
+
+Concurrencia
+------------
+- analyze_movie() puede ejecutarse en paralelo (ThreadPool).
+- Caches locales en memoria:
+    _OMDB_LOCAL_CACHE / _WIKI_LOCAL_CACHE protegidas por _LOCAL_CACHE_LOCK.
+- Write-back a omdb_cache.json (v2):
+    serializado con _OMDB_CACHE_WRITE_LOCK para evitar race conditions.
+"""
+
 import json
 import threading
 from collections.abc import Mapping
@@ -25,18 +75,9 @@ try:
 except Exception:  # pragma: no cover
     normalize_title_for_lookup = None  # type: ignore[assignment]
 
+
 # ============================================================
 #                  CACHE LOCAL (módulo) + THREADPOOL
-# ============================================================
-#
-# Con ThreadPool, analyze_movie() puede ejecutarse en paralelo. Estos caches
-# se usan para:
-# - evitar repetir consultas OMDb/Wiki dentro de la misma ejecución
-# - compartir resultados entre reintentos/fallbacks
-#
-# Importante:
-# - El cache "global real" está en omdb_client (v2, persistente en disco).
-# - Este cache es local y efímero (solo memoria).
 # ============================================================
 
 _OmdbCacheKey: TypeAlias = tuple[str, int | None, str | None]
@@ -44,17 +85,13 @@ _OmdbCacheKey: TypeAlias = tuple[str, int | None, str | None]
 _OMDB_LOCAL_CACHE: dict[_OmdbCacheKey, dict[str, object]] = {}
 _WIKI_LOCAL_CACHE: dict[_OmdbCacheKey, dict[str, object]] = {}
 
-# Lock para acceso concurrente a caches locales
 _LOCAL_CACHE_LOCK = threading.Lock()
-
-# Lock dedicado para write-back a omdb_cache.json (evita condiciones de carrera)
 _OMDB_CACHE_WRITE_LOCK = threading.Lock()
 
 
 # ============================================================
 #                  LOGGING CONTROLADO POR MODOS
 # ============================================================
-
 
 def _log(msg: object) -> None:
     """
@@ -71,8 +108,7 @@ def _log(msg: object) -> None:
 
 def _log_always(msg: object) -> None:
     """
-    Log “siempre visible”:
-    - Para avisos/errores que deben verse incluso en SILENT_MODE.
+    Log “siempre visible” (avisos/errores) incluso en SILENT_MODE.
     """
     try:
         _logger.warning(str(msg), always=True)
@@ -85,7 +121,7 @@ def _log_debug(msg: object) -> None:
     Debug contextual:
     - DEBUG_MODE=False: no hace nada.
     - DEBUG_MODE=True:
-        * SILENT_MODE=True: progress (señales mínimas, estilo “heartbeat”)
+        * SILENT_MODE=True: progress (señales mínimas estilo heartbeat)
         * SILENT_MODE=False: info normal
     """
     if not DEBUG_MODE:
@@ -103,9 +139,87 @@ def _log_debug(msg: object) -> None:
 
 
 # ============================================================
-#                 UTILIDADES DE PARSEO / SEGURIDAD
+#                    LOG BUFFER (OPTIMIZACIÓN)
 # ============================================================
 
+# Política:
+# - SILENT + !DEBUG: 0 logs
+# - SILENT + DEBUG: pocos logs
+# - NO SILENT: logs humanos, pero capados
+_LOGS_MAX_SILENT: int = 0
+_LOGS_MAX_SILENT_DEBUG: int = 12
+_LOGS_MAX_NORMAL: int = 50
+
+# Cap general para líneas de log (evita explotar por JSONs/tracebacks enormes)
+_LOG_LINE_MAX_CHARS: int = 500
+
+# Para TRACE del core: aún más conservador (mensajes cortos)
+_TRACE_LINE_MAX_CHARS: int = 220
+
+
+def _logs_limit() -> int:
+    if SILENT_MODE:
+        return _LOGS_MAX_SILENT_DEBUG if DEBUG_MODE else _LOGS_MAX_SILENT
+    return _LOGS_MAX_NORMAL
+
+
+def _truncate_line(s: str, max_len: int) -> str:
+    if len(s) <= max_len:
+        return s
+    return s[: max(0, max_len - 12)] + " …(truncated)"
+
+
+def _append_log(logs: list[str], line: str, *, force: bool = False) -> None:
+    """
+    Añade logs de forma acotada.
+
+    Args:
+        logs: buffer de logs del item (se devuelve al orquestador).
+        line: línea a añadir (se truncará).
+        force: ignora límites (solo para errores críticos).
+
+    Importante:
+    - En silent (limit=0) no acumulamos nada salvo force=True.
+    - Si se alcanza el límite, añadimos un sentinel "[LOGS_TRUNCATED]" una vez.
+    """
+    if not isinstance(line, str):
+        line = str(line)
+
+    line = _truncate_line(line, _LOG_LINE_MAX_CHARS)
+
+    limit = _logs_limit()
+    if force:
+        logs.append(line)
+        return
+
+    if limit <= 0:
+        return
+
+    if len(logs) >= limit:
+        if not logs or logs[-1] != "[LOGS_TRUNCATED]":
+            logs.append("[LOGS_TRUNCATED]")
+        return
+
+    logs.append(line)
+
+
+def _append_trace(logs: list[str], line: str) -> None:
+    """
+    Añade trazas del core (analysis_trace) de forma ultra-acotada.
+
+    - Nunca mete strings largas.
+    - Respeta el límite global de logs.
+    - Prefijo [TRACE] para distinguirlo de logs “normales”.
+    """
+    if not isinstance(line, str):
+        line = str(line)
+    clipped = _truncate_line(line, _TRACE_LINE_MAX_CHARS)
+    _append_log(logs, f"[TRACE] {clipped}")
+
+
+# ============================================================
+#                 UTILIDADES DE PARSEO / SEGURIDAD
+# ============================================================
 
 def _safe_int(value: object) -> int | None:
     try:
@@ -132,9 +246,9 @@ def _safe_float(value: object) -> float | None:
 def _extract_wiki_meta(omdb_record: Mapping[str, object] | None) -> dict[str, object]:
     """
     OMDb cache v2 puede contener __wiki con bloque MINIMAL.
-    Aquí extraemos ese bloque (si existe) para:
-    - enriquecer reporting (wikidata_id, wikipedia_title, etc.)
-    - fallback de metacritic_score (si se decide usar)
+    Extraemos ese bloque para:
+      - enriquecer el reporting
+      - evitar re-llamar a Wiki en futuras ejecuciones
     """
     if not omdb_record:
         return {}
@@ -145,6 +259,14 @@ def _extract_wiki_meta(omdb_record: Mapping[str, object] | None) -> dict[str, ob
 
 
 def _build_lookup_key(title_for_fetch: str, year_for_fetch: int | None, imdb_hint: str | None) -> str:
+    """
+    Clave humana para trazabilidad (provenance).
+
+    Ejemplos:
+      - imdb_id:tt1234567
+      - title_year:the matrix|1999
+      - title:spirited away
+    """
     t = title_for_fetch.strip()
     if imdb_hint:
         return f"imdb_id:{imdb_hint}"
@@ -179,17 +301,13 @@ def _build_minimal_wiki_block(
     wiki_lookup: Mapping[str, object],
 ) -> dict[str, object]:
     """
-    ✅ Bloque mínimo que sí queremos persistir en omdb_cache.json (v2).
+    Bloque mínimo que persistimos dentro de omdb_cache.json (v2).
 
     Objetivo:
-    - persistir lo justo para:
-        * enlazar con Wikidata/Wikipedia
-        * evitar re-llamar a Wiki en futuras ejecuciones
-        * no “ensuciar” el cache con datos voluminosos/variables
+    - Guardar solo lo esencial para evitar re-llamadas a Wiki.
+    - Mantener el cache limpio (sin payloads enormes).
     """
-    out: dict[str, object] = {
-        "wiki_lookup": dict(wiki_lookup),
-    }
+    out: dict[str, object] = {"wiki_lookup": dict(wiki_lookup)}
     if imdb_id is not None:
         out["imdb_id"] = imdb_id
     if wikidata_id is not None:
@@ -209,13 +327,13 @@ def _persist_minimal_wiki_into_omdb_cache(
     lookup_key: str,
 ) -> None:
     """
-    Persiste __wiki MINIMAL y wiki_wikidata_id en __prov dentro del omdb_cache.json.
+    Persiste __wiki MINIMAL y un resumen en __prov dentro del omdb_cache.json.
 
     Requiere patch_cached_omdb_record(); si no existe, no hace nada.
 
-    Nota ThreadPool:
+    ThreadPool:
     - Serializamos la escritura en disco con _OMDB_CACHE_WRITE_LOCK para evitar
-      race conditions (writes simultáneos) cuando analyze_movie() corre en paralelo.
+      race conditions (writes simultáneos).
     """
     if patch_cached_omdb_record is None:
         return
@@ -248,7 +366,7 @@ def _persist_minimal_wiki_into_omdb_cache(
             imdb_id=imdb_id_final,
             patch={
                 "__wiki": dict(minimal_wiki),
-                "__prov": prov_patch,  # omdb_client mergea __prov (no pisa a lo bruto)
+                "__prov": prov_patch,  # omdb_client mergea __prov
             },
         )
 
@@ -261,27 +379,21 @@ def _persist_minimal_wiki_into_omdb_cache(
 # ============================================================
 #                      FUNCIÓN PRINCIPAL
 # ============================================================
-#
-# analyze_movie() es el “puente” entre:
-# - inputs (Plex/DLNA/etc.) en MovieInput
-# - fetchers (OMDb/Wiki) con cache + provenance
-# - core engine (analyze_input_movie) que decide KEEP/MAYBE/DELETE
-# - metadata suggestions (solo Plex)
-# - row final para report CSV
-#
-# Con ThreadPool:
-# - esta función puede correr concurrentemente.
-# - por eso:
-#     * caches locales usan lock
-#     * write-back a cache OMDb se serializa con lock
-# ============================================================
-
 
 def analyze_movie(
     movie_input: MovieInput,
     *,
     source_movie: object | None = None,
 ) -> tuple[dict[str, object] | None, dict[str, object] | None, list[str]]:
+    """
+    Analiza un MovieInput y devuelve:
+      - row: dict para report_all.csv (o None si no se pudo analizar)
+      - meta_sugg: dict de sugerencias metadata (solo Plex) o None
+      - logs: lista de strings (acotada) para que el orquestador decida imprimirlos
+
+    Nota:
+    - Los orquestadores imprimen progreso por item; aquí solo devolvemos logs acotados.
+    """
     logs: list[str] = []
 
     # ------------------------------------------------------------------
@@ -303,7 +415,7 @@ def analyze_movie(
         display_year = movie_input.year
 
     # ------------------------------------------------------------------
-    # 1) Fetch OMDb + Wiki (con caché global + local)
+    # 1) Fetch OMDb + Wiki (cache global + cache local)
     # ------------------------------------------------------------------
     omdb_data: Mapping[str, object] | None = None
     wiki_meta: dict[str, object] = {}
@@ -319,21 +431,26 @@ def analyze_movie(
         """
         Fetch OMDb con workflow:
         1) Cache local (módulo)
-        2) omdb_client (cache v2 persistente + provenance)
+        2) omdb_query_with_cache (cache v2 persistente + provenance)
         3) Si __wiki ya está en OMDb (minimal) => no llamar a Wiki
         4) Si no hay __wiki:
              - si existe wiki_cache local => inyecta + persiste minimal
              - si no => llama a Wiki, construye minimal, persiste y devuelve
+
+        Importante:
+        - omdb_data/wiki_meta se actualizan por cierre (nonlocal) para que luego
+          el orquestador pueda enriquecer la fila final sin repetir lecturas.
         """
         nonlocal omdb_data, wiki_meta
 
         imdb_hint = _norm_imdb_hint()
         key: _OmdbCacheKey = (title_for_fetch, year_for_fetch, imdb_hint)
 
-        # ✅ 1) Cache local (módulo) - thread-safe
+        # 1) Cache local
         with _LOCAL_CACHE_LOCK:
             cached = _OMDB_LOCAL_CACHE.get(key)
             cached_wiki_local = _WIKI_LOCAL_CACHE.get(key)
+
         if cached is not None:
             omdb_data = cached
             wiki_meta = dict(cached_wiki_local) if isinstance(cached_wiki_local, Mapping) else {}
@@ -341,7 +458,7 @@ def analyze_movie(
 
         lookup_key = _build_lookup_key(title_for_fetch, year_for_fetch, imdb_hint)
 
-        # ✅ 2) OMDb (cache v2 del propio cliente) + provenance embebida
+        # 2) OMDb (cache v2)
         omdb_record = omdb_query_with_cache(
             title=title_for_fetch,
             year=year_for_fetch,
@@ -359,12 +476,12 @@ def analyze_movie(
                 _WIKI_LOCAL_CACHE[key] = {}
             omdb_data = empty
             wiki_meta = {}
-            _log_debug(f"OMDb returned None | lookup_key={lookup_key}")
+            _append_log(logs, f"[OMDB_NONE] lookup_key={lookup_key}")
             return empty
 
         omdb_dict = dict(omdb_record)
 
-        # ✅ 3) Si OMDb YA trae __wiki (minimal), no llamamos a Wiki
+        # 3) Si ya trae __wiki minimal, evitamos Wiki
         if "__wiki" in omdb_dict and isinstance(omdb_dict.get("__wiki"), Mapping):
             wiki_dict = _extract_wiki_meta(omdb_dict)
             with _LOCAL_CACHE_LOCK:
@@ -375,11 +492,11 @@ def analyze_movie(
             _log_debug(f"Using __wiki from OMDb cache | lookup_key={lookup_key}")
             return omdb_dict
 
-        # ✅ 4) Si ya teníamos wiki_cache local, lo aplicamos y persistimos (minimal)
+        # 4) Si tenemos wiki_cache local => inyectamos y persistimos minimal
         with _LOCAL_CACHE_LOCK:
             cached_wiki = _WIKI_LOCAL_CACHE.get(key)
 
-        if cached_wiki is not None and cached_wiki:
+        if cached_wiki:
             omdb_dict["__wiki"] = dict(cached_wiki)
 
             imdb_id_from_omdb: str | None = None
@@ -405,7 +522,7 @@ def analyze_movie(
             _log_debug(f"Injected cached wiki local | lookup_key={lookup_key}")
             return omdb_dict
 
-        # --- Wiki: intentamos con título+año (y con imdb si lo hay) ---
+        # --- Wiki (solo si falta __wiki) ---
         imdb_id_from_omdb: str | None = None
         imdb_raw2 = omdb_dict.get("imdbID")
         if isinstance(imdb_raw2, str) and imdb_raw2.strip():
@@ -419,28 +536,23 @@ def analyze_movie(
             imdb_id=imdb_used_for_wiki,
         )
 
-        # ✅ Construimos siempre un bloque MINIMAL si Wiki responde
         if wiki_item is not None:
             wiki_block = wiki_item.get("wiki")
             wikidata_block = wiki_item.get("wikidata")
 
-            # imdb_id que nos devuelve wiki_client (si lo ofrece)
             imdb_cached = wiki_item.get("imdbID")
             imdb_from_wiki = (
                 imdb_cached if isinstance(imdb_cached, str) and imdb_cached.strip() else None
             )
 
-            # wikidata_id: lo buscamos primero en wikidata_block (típico)
             wikidata_id: str | None = None
             if isinstance(wikidata_block, Mapping):
-                # soporta varias formas por compatibilidad
                 for k in ("wikibase_item", "wikidata_id", "id"):
                     v = wikidata_block.get(k)
                     if isinstance(v, str) and v.strip():
                         wikidata_id = v.strip()
                         break
 
-            # wikipedia_title: lo buscamos en wiki_block si viene
             wikipedia_title: str | None = None
             if isinstance(wiki_block, Mapping):
                 v2 = wiki_block.get("wikipedia_title")
@@ -462,7 +574,6 @@ def analyze_movie(
 
             omdb_dict["__wiki"] = minimal_wiki
 
-            # ✅ Persistimos inmediatamente en cache OMDb (minimal + prov.wiki_wikidata_id)
             _persist_minimal_wiki_into_omdb_cache(
                 title_for_fetch=title_for_fetch,
                 year_for_fetch=year_for_fetch,
@@ -504,8 +615,18 @@ def analyze_movie(
         plex_rating = _safe_float(plex_user_rating) or _safe_float(plex_rating_raw)
 
     # ------------------------------------------------------------------
-    # 4) Core genérico: ratings + decisión + misidentified_hint (único)
+    # 4) Core genérico (con trazas opcionales)
     # ------------------------------------------------------------------
+    # Conectamos analysis_trace SOLO cuando DEBUG_MODE=True.
+    # Además:
+    # - TRACE se guarda acotado en logs con _append_trace()
+    # - TRACE a consola solo vía _log_debug (respeta SILENT/DEBUG)
+    def _analysis_trace(line: str) -> None:
+        _append_trace(logs, line)
+        _log_debug(line)
+
+    analysis_trace_cb = _analysis_trace if DEBUG_MODE else None
+
     try:
         base_row: AnalysisRow = analyze_input_movie(
             movie_input,
@@ -514,51 +635,60 @@ def analyze_movie(
             plex_year=display_year,
             plex_rating=plex_rating,
             metacritic_score=metacritic_score,
+            analysis_trace=analysis_trace_cb,
         )
     except Exception as exc:  # pragma: no cover
         msg = (
             f"[ERROR] {movie_input.library} / {display_title} ({display_year}): "
-            f"fallo en core de análisis: {exc}"
+            f"fallo en core de análisis: {exc!r}"
         )
         _logger.error(msg)
-        logs.append(msg)
+        _append_log(logs, msg, force=True)
         return None, None, logs
 
     if not base_row:
-        logs.append(
-            f"[WARN] {movie_input.library} / {display_title} ({display_year}): "
-            "core de análisis devolvió fila vacía."
+        _append_log(
+            logs,
+            f"[WARN] {movie_input.library} / {display_title} ({display_year}): core devolvió fila vacía.",
+            force=not SILENT_MODE,
         )
         return None, None, logs
 
     misidentified_hint = base_row.get("misidentified_hint")
     if isinstance(misidentified_hint, str) and misidentified_hint:
-        logs.append(
-            f"[MISIDENTIFIED] {movie_input.library} / {display_title} ({display_year}): "
-            f"{misidentified_hint}"
+        _append_log(
+            logs,
+            f"[MISIDENTIFIED] {movie_input.library} / {display_title} ({display_year}): {misidentified_hint}",
         )
 
     # ------------------------------------------------------------------
-    # 5) Sugerencias de metadata (solo Plex) -> usamos MovieInput
+    # 5) Sugerencias de metadata (solo Plex)
     # ------------------------------------------------------------------
     omdb_dict: dict[str, object] = dict(omdb_data) if omdb_data else {}
     meta_sugg: dict[str, object] | None = None
+
     if movie_input.source == "plex" and source_movie is not None:
         try:
-            meta_candidate = generate_metadata_suggestions_row(
-                movie_input,
-                omdb_dict or None,
-            )
+            meta_candidate = generate_metadata_suggestions_row(movie_input, omdb_dict or None)
             if isinstance(meta_candidate, dict):
                 meta_sugg = meta_candidate
-                logs.append(
-                    "[METADATA_SUGG] "
-                    f"{movie_input.library} / {display_title} ({display_year}): "
-                    f"{meta_sugg.get('suggestions_json', '')}"
-                )
+
+                # suggestions_json puede ser enorme -> evitamos volcarlo.
+                if not SILENT_MODE:
+                    _append_log(
+                        logs,
+                        "[METADATA_SUGG] "
+                        f"{movie_input.library} / {display_title} ({display_year})",
+                    )
+                elif DEBUG_MODE:
+                    _append_log(
+                        logs,
+                        "[METADATA_SUGG] "
+                        f"{movie_input.library} / {display_title} ({display_year}) (stored)",
+                    )
         except Exception as exc:  # pragma: no cover
             _logger.warning(
-                f"generate_metadata_suggestions_row falló para {display_title!r}: {exc}"
+                f"generate_metadata_suggestions_row falló para {display_title!r}: {exc!r}"
             )
 
     # ------------------------------------------------------------------
@@ -583,7 +713,10 @@ def analyze_movie(
     if imdb_id is None and imdb_hint is not None:
         imdb_id = imdb_hint
 
-    if omdb_dict:
+    # omdb_json suele ser grande:
+    # - En modo normal: lo dejamos (útil para inspección).
+    # - En SILENT: lo omitimos salvo DEBUG_MODE=True.
+    if omdb_dict and (not SILENT_MODE or DEBUG_MODE):
         try:
             omdb_json_str = json.dumps(omdb_dict, ensure_ascii=False)
         except Exception:
@@ -619,12 +752,11 @@ def analyze_movie(
     row["trailer_url"] = trailer_url
     row["omdb_json"] = omdb_json_str
 
-    # ✅ wiki_meta es minimal: wikidata_id y wikipedia_title salen directos
-    # Nota compat:
-    # - se detectó que algunos sitios guardaban "wikadata_id" (typo). Respetamos ambos.
+    # wiki_meta es minimal: wikidata_id y wikipedia_title salen directos.
+    # Compat: algunos sitios guardaron "wikadata_id" (typo). Respetamos ambos.
     wikidata_id = wiki_meta.get("wikidata_id")
     if not isinstance(wikidata_id, str) or not wikidata_id.strip():
-        wikidata_id = wiki_meta.get("wikadata_id")  # compat typo histórico
+        wikidata_id = wiki_meta.get("wikadata_id")
 
     row["wikidata_id"] = wikidata_id
     row["wikipedia_title"] = wiki_meta.get("wikipedia_title")

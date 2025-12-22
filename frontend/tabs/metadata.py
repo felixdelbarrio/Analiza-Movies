@@ -1,5 +1,28 @@
 from __future__ import annotations
 
+"""
+metadata_tab.py
+
+Pestaña 6 del dashboard (Streamlit): Corrección de metadata (sugerencias).
+
+Este módulo carga y muestra el CSV de sugerencias generado por el backend
+(p.ej. `metadata_fix.csv` / `metadata_suggestions.csv`) y permite:
+
+- Filtrar por biblioteca (`library`) y por tipo de acción sugerida (`action`).
+- Visualizar el resultado filtrado en una tabla.
+- Descargar el CSV filtrado.
+
+Diseño:
+- Lectura defensiva del CSV (errores → DataFrame vacío + mensaje).
+- Cache de Streamlit para evitar re-lecturas en cada interacción.
+- UI coherente con el resto del dashboard (filtros arriba, tabla, export).
+
+Notas:
+- Se usa `width="stretch"` en `st.dataframe` (evita API deprecada
+  `use_container_width=True`).
+- El nombre de exportación es estable para facilitar flujos de trabajo.
+"""
+
 import os
 from typing import Final
 
@@ -12,7 +35,13 @@ DEFAULT_EXPORT_NAME: Final[str] = "metadata_suggestions_filtered.csv"
 
 @st.cache_data(show_spinner=False)
 def _load_metadata_csv(path: str) -> pd.DataFrame:
-    """Carga el CSV de sugerencias de metadata de forma cacheada y defensiva."""
+    """
+    Carga el CSV de sugerencias de metadata de forma cacheada y defensiva.
+
+    Devuelve:
+      - DataFrame con el contenido del CSV si se puede leer.
+      - DataFrame vacío si ocurre cualquier error (y muestra un error en UI).
+    """
     try:
         dtype_hint: dict[str, str] = {
             "library": "string",
@@ -25,7 +54,12 @@ def _load_metadata_csv(path: str) -> pd.DataFrame:
 
 
 def render(metadata_sugg_csv: str) -> None:
-    """Pestaña 6: Corrección de metadata (sugerencias)."""
+    """
+    Pestaña 6: Corrección de metadata (sugerencias).
+
+    Args:
+        metadata_sugg_csv: ruta al CSV de sugerencias de metadata.
+    """
     st.write("### Corrección de metadata (sugerencias)")
 
     if not metadata_sugg_csv:
@@ -88,7 +122,11 @@ def render(metadata_sugg_csv: str) -> None:
                 .tolist()
             )
             actions.sort()
-            action_filter = st.multiselect("Acción sugerida", actions, key="action_filter_metadata")
+            action_filter = st.multiselect(
+                "Acción sugerida",
+                actions,
+                key="action_filter_metadata",
+            )
         else:
             action_filter = []
             st.info("El CSV no incluye columna 'action'.")
@@ -111,7 +149,7 @@ def render(metadata_sugg_csv: str) -> None:
         return
 
     # -------------------------
-    # Tabla Streamlit corregida (SÍ: width="stretch", NO: use_container_width)
+    # Tabla Streamlit
     # -------------------------
     st.dataframe(
         df_view,

@@ -3,55 +3,33 @@ from __future__ import annotations
 """
 analiza_dlna.py
 
-Orquestador principal de análisis DLNA/UPnP.
+Orquestador principal de análisis DLNA/UPnP (streaming).
 
-Workflow (alto nivel):
-1) Descubre servidores DLNA/UPnP en la red (o usa el device inyectado).
-2) Encuentra contenedores raíz de vídeo y permite elegir uno.
-3) Intenta descender automáticamente a un “browse by folder” si se detecta.
-4) Permite seleccionar contenedores (carpetas) a analizar.
-5) Escanea recursivamente el árbol DLNA desde esos contenedores y construye la lista
-   de candidatos (items de vídeo).
-6) Analiza los candidatos con analyze_movie(MovieInput):
-   - OMDb + Wiki (cacheados)
-   - decisión KEEP/MAYBE/DELETE, etc.
-7) Genera CSVs:
-   - report_all.csv
-   - report_filtered.csv
-   - metadata_fix.csv
+Alineado con la filosofía de logging centralizada en `backend/logger.py`:
+- _logger.progress(...)            -> señal SIEMPRE visible (heartbeat)
+- _logger.info/warning/error(...)  -> logs por nivel (respetan SILENT_MODE salvo error())
+- _logger.debug_ctx("DLNA", "...") -> debug contextual (DEBUG_MODE gated)
 
-Objetivos de salida por consola:
-- SILENT_MODE=True:
-    - Evitar logs detallados
-    - Mantener señales mínimas de progreso (servidor / contenedor / resúmenes)
-- SILENT_MODE=False:
-    - Mostrar progreso por item (i/total) en consola
-    - En modo normal, mostrar año si existe
-- DEBUG_MODE=True:
-    - Permitir más visibilidad (heartbeat cada N elementos, más contexto)
-    - En modo normal, añadir extra útil por item (p.ej. tamaño si se conoce)
+Cambios clave (streaming):
+- report_all.csv se escribe incrementalmente (open_all_csv_writer) => no se acumula all_rows.
+- metadata_fix.csv se escribe incrementalmente (open_suggestions_csv_writer) => no se acumula suggestions_rows.
+- Solo se mantiene en memoria:
+    * filtered_rows (DELETE/MAYBE) para ordenarlo al final (si hay)
+    * contadores (decisions_count) y contadores globales (procesados/errores)
+- report_filtered.csv:
+    * SOLO se genera si hay filas (open_filtered_csv_writer_only_if_rows)
+    * En SILENT_MODE, el resumen muestra explícitamente:
+      filtered_csv=SKIPPED (0 rows) cuando no hay DELETE/MAYBE.
 
-Performance:
-- La fase de “análisis” (OMDb/Wiki) es I/O bound.
-- Se usa paralelismo controlado con ThreadPool para acelerar.
-- El nº de workers se lee de config.py (PLEX_ANALYZE_WORKERS) para mantener
-  una configuración única y coherente en el proyecto.
-
-Métricas OMDb por contenedor:
-- Para que los deltas por contenedor sean REALMENTE atribuibles, se crea un ThreadPool
-  por contenedor (barrera de concurrencia por grupo).
-- Así evitamos que el trabajo del contenedor N se solape con el N+1.
-
-Alineación con OMDb limiter (config.py):
-- OMDB_HTTP_MAX_CONCURRENCY (semaforo global en omdb_client)
-- OMDB_HTTP_MIN_INTERVAL_SECONDS (throttle global)
-Aunque pongas muchos workers, OMDb se “suaviza”, pero aun así capamos workers
-a un valor razonable para no crear hilos que van a estar casi siempre esperando.
+Métricas OMDb:
+- Snapshots/deltas del cliente OMDb para debugging en SILENT+DEBUG.
+- Deltas por contenedor (scan/analyze) para rankings de “coste”.
 """
 
 import re
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from urllib.parse import unquote, urljoin, urlparse
@@ -73,8 +51,11 @@ from backend.decision_logic import sort_filtered_rows
 from backend.dlna_discovery import DLNADevice, discover_dlna_devices
 from backend.movie_input import MovieInput
 from backend.omdb_client import get_omdb_metrics_snapshot, reset_omdb_metrics
-from backend.reporting import write_all_csv, write_filtered_csv, write_suggestions_csv
-
+from backend.reporting import (
+    open_all_csv_writer,
+    open_filtered_csv_writer_only_if_rows,
+    open_suggestions_csv_writer,
+)
 
 # ============================================================================
 # MODELOS INTERNOS (DLNA)
@@ -83,9 +64,7 @@ from backend.reporting import write_all_csv, write_filtered_csv, write_suggestio
 
 @dataclass(frozen=True, slots=True)
 class _DlnaContainer:
-    """
-    Representa un contenedor DLNA (carpeta / categoría) accesible por ObjectID.
-    """
+    """Representa un contenedor DLNA (carpeta / categoría) accesible por ObjectID."""
 
     object_id: str
     title: str
@@ -93,9 +72,7 @@ class _DlnaContainer:
 
 @dataclass(frozen=True, slots=True)
 class _DlnaVideoItem:
-    """
-    Representa un item de vídeo DLNA (título + URL del recurso).
-    """
+    """Representa un item de vídeo DLNA (título + URL del recurso)."""
 
     title: str
     resource_url: str
@@ -112,43 +89,14 @@ _TITLE_YEAR_SUFFIX_RE: re.Pattern[str] = re.compile(
     r"\(\s*(?P<year>\d{4})\s*\)\s*$"
 )
 
-# Heartbeat para ejecución silenciosa + debug: evita “pantalla muerta”
 _PROGRESS_EVERY_N_ITEMS: int = 100
-
-# Tamaño de paginación DIDL al navegar contenedores (trade-off entre latencia y payload)
 _BROWSE_PAGE_SIZE: int = 200
+_MAX_WORKERS_CAP: int = 64
 
 
 # ============================================================================
-# LOGGING CONTROLADO POR MODOS (en línea con el resto del proyecto)
+# OMDb metrics helpers
 # ============================================================================
-
-
-def _log_debug(msg: object) -> None:
-    """
-    Debug contextual:
-    - DEBUG_MODE=False → no hace nada.
-    - DEBUG_MODE=True:
-        * SILENT_MODE=True: progress para señales de vida sin ruido excesivo.
-        * SILENT_MODE=False: info normal.
-    """
-    if not DEBUG_MODE:
-        return
-
-    text = str(msg)
-    try:
-        if SILENT_MODE:
-            _logger.progress(f"[DLNA][DEBUG] {text}")
-        else:
-            _logger.info(f"[DLNA][DEBUG] {text}")
-    except Exception:
-        if not SILENT_MODE:
-            print(text)
-
-
-# --------------------------
-# OMDb metrics helpers (igual que Plex)
-# --------------------------
 
 
 def _metrics_get_int(m: dict[str, object], key: str) -> int:
@@ -188,12 +136,6 @@ def _metrics_diff(before: dict[str, object], after: dict[str, object]) -> dict[s
 
 
 def _log_omdb_metrics(prefix: str, metrics: dict[str, object] | None = None) -> None:
-    """
-    Imprime (solo en silent+debug) un resumen rápido del comportamiento del cliente OMDb:
-    cache hits/misses, requests, sleeps por throttle, rate-limit, etc.
-
-    Si `metrics` es None, usa snapshot global actual.
-    """
     if not (SILENT_MODE and DEBUG_MODE):
         return
 
@@ -214,28 +156,13 @@ def _log_omdb_metrics(prefix: str, metrics: dict[str, object] | None = None) -> 
     )
 
 
-def _rank_top(
-    deltas_by_group: dict[str, dict[str, int]],
-    key: str,
-    top_n: int = 5,
-) -> list[tuple[str, int]]:
-    rows: list[tuple[str, int]] = []
-    for group, d in deltas_by_group.items():
-        rows.append((group, int(d.get(key, 0))))
+def _rank_top(deltas_by_group: dict[str, dict[str, int]], key: str, top_n: int = 5) -> list[tuple[str, int]]:
+    rows: list[tuple[str, int]] = [(group, int(d.get(key, 0))) for group, d in deltas_by_group.items()]
     rows.sort(key=lambda x: x[1], reverse=True)
     return rows[:top_n]
 
 
 def _compute_cost_score(delta: dict[str, int]) -> int:
-    """
-    Score “coste total” para detectar contenedores “caros”.
-    Pesos elegidos para reflejar dolor real:
-      - rate_limit_sleeps: muy caro (bloquea y alarga ejecución) -> *50
-      - http_failures: caro (reintentos/ruido/decisiones peor)  -> *20
-      - rate_limit_hits: señal de presión                             -> *10
-      - throttle_sleeps: coste moderado                                -> *3
-      - http_requests: coste base                                       -> *1
-    """
     http_requests = int(delta.get("http_requests", 0))
     rate_limit_sleeps = int(delta.get("rate_limit_sleeps", 0))
     http_failures = int(delta.get("http_failures", 0))
@@ -251,22 +178,13 @@ def _compute_cost_score(delta: dict[str, int]) -> int:
     return score
 
 
-def _rank_top_by_total_cost(
-    deltas_by_group: dict[str, dict[str, int]],
-    top_n: int = 5,
-) -> list[tuple[str, int]]:
-    rows: list[tuple[str, int]] = []
-    for group, d in deltas_by_group.items():
-        rows.append((group, _compute_cost_score(d)))
+def _rank_top_by_total_cost(deltas_by_group: dict[str, dict[str, int]], top_n: int = 5) -> list[tuple[str, int]]:
+    rows: list[tuple[str, int]] = [(group, _compute_cost_score(d)) for group, d in deltas_by_group.items()]
     rows.sort(key=lambda x: x[1], reverse=True)
     return rows[:top_n]
 
 
 def _log_omdb_rankings(deltas_by_group: dict[str, dict[str, int]], *, min_groups: int = 2) -> None:
-    """
-    Ranking automático (solo silent+debug) por deltas reales.
-    Imprime solo si hay al menos `min_groups` grupos (por defecto: 2).
-    """
     if not (SILENT_MODE and DEBUG_MODE):
         return
     if not deltas_by_group or len(deltas_by_group) < min_groups:
@@ -276,42 +194,38 @@ def _log_omdb_rankings(deltas_by_group: dict[str, dict[str, int]], *, min_groups
         usable = [(name, val) for (name, val) in items if val > 0]
         return " | ".join([f"{i+1}) {name}: {val}" for i, (name, val) in enumerate(usable)])
 
-    top_cost = _rank_top_by_total_cost(deltas_by_group, top_n=5)
-    top_http = _rank_top(deltas_by_group, "http_requests", top_n=5)
-    top_rls = _rank_top(deltas_by_group, "rate_limit_sleeps", top_n=5)
-    top_fail = _rank_top(deltas_by_group, "http_failures", top_n=5)
-    top_rlh = _rank_top(deltas_by_group, "rate_limit_hits", top_n=5)
-
-    cost_line = _fmt(top_cost)
-    http_line = _fmt(top_http)
-    rls_line = _fmt(top_rls)
-    fail_line = _fmt(top_fail)
-    rlh_line = _fmt(top_rlh)
-
-    if cost_line:
-        _logger.progress(f"[DLNA][DEBUG] Top containers by TOTAL_COST: {cost_line}")
-    if http_line:
-        _logger.progress(f"[DLNA][DEBUG] Top containers by http_requests: {http_line}")
-    if rls_line:
-        _logger.progress(f"[DLNA][DEBUG] Top containers by rate_limit_sleeps: {rls_line}")
-    if fail_line:
-        _logger.progress(f"[DLNA][DEBUG] Top containers by http_failures: {fail_line}")
-    if rlh_line:
-        _logger.progress(f"[DLNA][DEBUG] Top containers by rate_limit_hits: {rlh_line}")
+    if (line := _fmt(_rank_top_by_total_cost(deltas_by_group, top_n=5))):
+        _logger.progress(f"[DLNA][DEBUG] Top containers by TOTAL_COST: {line}")
+    if (line := _fmt(_rank_top(deltas_by_group, "http_requests", top_n=5))):
+        _logger.progress(f"[DLNA][DEBUG] Top containers by http_requests: {line}")
+    if (line := _fmt(_rank_top(deltas_by_group, "rate_limit_sleeps", top_n=5))):
+        _logger.progress(f"[DLNA][DEBUG] Top containers by rate_limit_sleeps: {line}")
+    if (line := _fmt(_rank_top(deltas_by_group, "http_failures", top_n=5))):
+        _logger.progress(f"[DLNA][DEBUG] Top containers by http_failures: {line}")
+    if (line := _fmt(_rank_top(deltas_by_group, "rate_limit_hits", top_n=5))):
+        _logger.progress(f"[DLNA][DEBUG] Top containers by rate_limit_hits: {line}")
 
 
-def _count_decisions(rows: list[dict[str, object]]) -> dict[str, int]:
-    """
-    Cuenta decisiones en all_rows para el resumen final.
-    """
-    out = {"KEEP": 0, "MAYBE": 0, "DELETE": 0, "UNKNOWN": 0}
-    for r in rows:
-        d = r.get("decision")
-        if d in ("KEEP", "MAYBE", "DELETE"):
-            out[str(d)] += 1
-        else:
-            out["UNKNOWN"] += 1
-    return out
+# ============================================================================
+# WORKERS (cap por OMDb limiter)
+# ============================================================================
+
+
+def _compute_max_workers(requested: int) -> int:
+    max_workers = int(requested)
+
+    if max_workers < 1:
+        max_workers = 1
+    if max_workers > _MAX_WORKERS_CAP:
+        max_workers = _MAX_WORKERS_CAP
+
+    omdb_cap = max(4, int(OMDB_HTTP_MAX_CONCURRENCY) * 8)
+    max_workers = min(max_workers, omdb_cap)
+
+    if max_workers < 1:
+        max_workers = 1
+
+    return max_workers
 
 
 # ============================================================================
@@ -320,9 +234,6 @@ def _count_decisions(rows: list[dict[str, object]]) -> dict[str, int]:
 
 
 def _format_human_size(num_bytes: int) -> str:
-    """
-    Convierte bytes a unidades humanas (B, KiB, MiB, GiB, TiB).
-    """
     value = float(num_bytes)
     units = ("B", "KiB", "MiB", "GiB", "TiB")
     unit_index = 0
@@ -336,50 +247,25 @@ def _format_human_size(num_bytes: int) -> str:
     return f"{value:.1f} {units[unit_index]}"
 
 
-def _format_item_progress_line(
-    *,
-    index: int,
-    total: int,
-    title: str,
-    year: int | None,
-    file_size_bytes: int | None,
-) -> str:
-    """
-    Construye la línea que se imprime en modo no-silent por item DLNA.
-
-    Formato:
-      - "(i/total) Título (Año) [Tamaño]"
-
-    Reglas:
-      - Año solo si existe
-      - Tamaño solo si DEBUG_MODE=True y size está disponible
-    """
+def _format_item_progress_line(*, index: int, total: int, title: str, year: int | None, file_size_bytes: int | None) -> str:
     base = title.strip() or "UNKNOWN"
     if year is not None:
         base = f"{base} ({year})"
-
     if DEBUG_MODE and file_size_bytes is not None and file_size_bytes >= 0:
         base = f"{base} [{_format_human_size(file_size_bytes)}]"
-
     return f"({index}/{total}) {base}"
 
 
 # ============================================================================
-# UTILIDADES GENERALES
+# UTILIDADES GENERALES (DLNA SOAP)
 # ============================================================================
 
 
 def _is_plex_server(device: DLNADevice) -> bool:
-    """
-    Detecta heurísticamente si el servidor DLNA es Plex Media Server.
-    """
     return "plex media server" in device.friendly_name.lower()
 
 
 def _xml_text(elem: ET.Element | None) -> str | None:
-    """
-    Extrae texto de un elemento XML (normalizado y sin espacios).
-    """
     if elem is None or elem.text is None:
         return None
     val = elem.text.strip()
@@ -387,29 +273,21 @@ def _xml_text(elem: ET.Element | None) -> str | None:
 
 
 def _fetch_xml_root(url: str, timeout_s: float = 5.0) -> ET.Element | None:
-    """
-    Descarga y parsea XML desde una URL.
-    """
     try:
         with urlopen(url, timeout=timeout_s) as resp:
             data = resp.read()
     except Exception as exc:  # pragma: no cover
-        _logger.warning(f"[DLNA] No se pudo descargar XML {url}: {exc}")
+        _logger.warning(f"[DLNA] No se pudo descargar XML {url}: {exc!r}", always=True)
         return None
 
     try:
         return ET.fromstring(data)
     except Exception as exc:  # pragma: no cover
-        _logger.warning(f"[DLNA] No se pudo parsear XML {url}: {exc}")
+        _logger.warning(f"[DLNA] No se pudo parsear XML {url}: {exc!r}", always=True)
         return None
 
 
 def _find_content_directory_endpoints(device_location: str) -> tuple[str, str] | None:
-    """
-    Dado el LOCATION del device, encuentra:
-      - controlURL del servicio ContentDirectory
-      - serviceType necesario para SOAPAction
-    """
     root = _fetch_xml_root(device_location)
     if root is None:
         return None
@@ -446,13 +324,6 @@ def _soap_browse_direct_children(
     starting_index: int,
     requested_count: int,
 ) -> tuple[list[ET.Element], int] | None:
-    """
-    Ejecuta un SOAP BrowseDirectChildren sobre ContentDirectory.
-
-    Devuelve:
-      - lista de elementos DIDL (containers + items)
-      - totalMatches (para paginación)
-    """
     body = (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
@@ -482,13 +353,13 @@ def _soap_browse_direct_children(
         with urlopen(req, timeout=10) as resp:
             raw = resp.read()
     except Exception as exc:  # pragma: no cover
-        _logger.error(f"[DLNA] Error SOAP Browse contra {control_url}: {exc}")
+        _logger.error(f"[DLNA] Error SOAP Browse contra {control_url}: {exc!r}")
         return None
 
     try:
         envelope = ET.fromstring(raw)
     except Exception as exc:  # pragma: no cover
-        _logger.error(f"[DLNA] Respuesta SOAP inválida: {exc}")
+        _logger.error(f"[DLNA] Respuesta SOAP inválida: {exc!r}")
         return None
 
     result_text: str | None = None
@@ -520,7 +391,7 @@ def _soap_browse_direct_children(
         try:
             didl = ET.fromstring(unescaped)
         except Exception as exc:  # pragma: no cover
-            _logger.error(f"[DLNA] No se pudo parsear DIDL-Lite: {exc}")
+            _logger.error(f"[DLNA] No se pudo parsear DIDL-Lite: {exc!r}")
             return None
 
     children = list(didl)
@@ -574,14 +445,7 @@ def _folder_browse_container_score(title: str) -> int:
     if not t:
         return 0
 
-    strong = (
-        "by folder",
-        "browse folders",
-        "examinar carpetas",
-        "carpetas",
-        "por carpeta",
-        "folders",
-    )
+    strong = ("by folder", "browse folders", "examinar carpetas", "carpetas", "por carpeta", "folders")
     for s in strong:
         if t == s or s in t:
             return 100
@@ -621,14 +485,10 @@ def _is_plex_virtual_container_title(title: str) -> bool:
     return any(tok in t for tok in plex_virtual_tokens)
 
 
-def _list_root_containers(
-    device: DLNADevice,
-) -> tuple[list[_DlnaContainer], tuple[str, str] | None]:
+def _list_root_containers(device: DLNADevice) -> tuple[list[_DlnaContainer], tuple[str, str] | None]:
     endpoints = _find_content_directory_endpoints(device.location)
     if endpoints is None:
-        _logger.error(
-            f"[DLNA] El dispositivo '{device.friendly_name}' no expone ContentDirectory."
-        )
+        _logger.error(f"[DLNA] El dispositivo '{device.friendly_name}' no expone ContentDirectory.")
         return [], None
 
     control_url, service_type = endpoints
@@ -686,7 +546,6 @@ def _auto_descend_folder_browse(device: DLNADevice, container: _DlnaContainer) -
 
         best: _DlnaContainer | None = None
         best_score = 0
-
         for c in children:
             score = _folder_browse_container_score(c.title)
             if score > best_score:
@@ -695,14 +554,13 @@ def _auto_descend_folder_browse(device: DLNADevice, container: _DlnaContainer) -
 
         if best is None or best_score <= 0:
             return current
-
         current = best
 
     return current
 
 
 # ============================================================================
-# INTERACCIÓN (SELECCIÓN DE SERVER / CARPETAS)
+# INTERACCIÓN
 # ============================================================================
 
 
@@ -720,27 +578,19 @@ def _ask_dlna_device() -> DLNADevice | None:
         _logger.info(f"      LOCATION: {dev.location}", always=True)
 
     while True:
-        raw = input(
-            f"\nSelecciona un servidor (1-{len(devices)}) o pulsa Enter para cancelar: "
-        ).strip()
+        raw = input(f"\nSelecciona un servidor (1-{len(devices)}) o pulsa Enter para cancelar: ").strip()
         if raw == "":
             _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
         if not raw.isdigit():
-            _logger.warning(
-                "Opción no válida. Debe ser un número (o Enter para cancelar).",
-                always=True,
-            )
+            _logger.warning("Opción no válida. Debe ser un número (o Enter para cancelar).", always=True)
             continue
         num = int(raw)
         if not (1 <= num <= len(devices)):
             _logger.warning("Opción fuera de rango.", always=True)
             continue
         chosen = devices[num - 1]
-        _logger.info(
-            f"\nHas seleccionado: {chosen.friendly_name} ({chosen.host}:{chosen.port})\n",
-            always=True,
-        )
+        _logger.info(f"\nHas seleccionado: {chosen.friendly_name} ({chosen.host}:{chosen.port})\n", always=True)
         return chosen
 
 
@@ -778,31 +628,22 @@ def _select_folders_non_plex(base: _DlnaContainer, device: DLNADevice) -> list[_
             _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
         if raw not in ("0", "1"):
-            _logger.warning(
-                "Opción no válida. Introduce 0 o 1 (o Enter para cancelar).",
-                always=True,
-            )
+            _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
             continue
 
         if raw == "0":
             return [base]
 
         folders = _list_child_containers(device, base.object_id)
-
         if not folders:
-            _logger.error(
-                "[DLNA] No se han encontrado carpetas dentro del contenedor seleccionado.",
-                always=True,
-            )
+            _logger.error("[DLNA] No se han encontrado carpetas dentro del contenedor seleccionado.", always=True)
             return None
 
         _logger.info("\nCarpetas detectadas (Enter cancela):", always=True)
         for idx, c in enumerate(folders, start=1):
             _logger.info(f"  {idx}) {c.title}", always=True)
 
-        raw_sel = input(
-            "Selecciona carpetas separadas por comas (ej: 1,2) o pulsa Enter para cancelar: "
-        ).strip()
+        raw_sel = input("Selecciona carpetas separadas por comas (ej: 1,2) o pulsa Enter para cancelar: ").strip()
         if raw_sel == "":
             _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
@@ -829,10 +670,7 @@ def _select_folders_plex(base: _DlnaContainer, device: DLNADevice) -> list[_Dlna
             _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
         if raw not in ("0", "1"):
-            _logger.warning(
-                "Opción no válida. Introduce 0 o 1 (o Enter para cancelar).",
-                always=True,
-            )
+            _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
             continue
 
         if raw == "0":
@@ -840,7 +678,6 @@ def _select_folders_plex(base: _DlnaContainer, device: DLNADevice) -> list[_Dlna
 
         folders = _list_child_containers(device, base.object_id)
         folders = [c for c in folders if not _is_plex_virtual_container_title(c.title)]
-
         if not folders:
             _logger.error(
                 "[DLNA] No se han encontrado carpetas Plex seleccionables (tras filtrar vistas/servicios).",
@@ -852,9 +689,7 @@ def _select_folders_plex(base: _DlnaContainer, device: DLNADevice) -> list[_Dlna
         for idx, c in enumerate(folders, start=1):
             _logger.info(f"  {idx}) {c.title}", always=True)
 
-        raw_sel = input(
-            "Selecciona carpetas separadas por comas (ej: 1,2) o pulsa Enter para cancelar: "
-        ).strip()
+        raw_sel = input("Selecciona carpetas separadas por comas (ej: 1,2) o pulsa Enter para cancelar: ").strip()
         if raw_sel == "":
             _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
@@ -932,13 +767,7 @@ def _iter_video_items_recursive(device: DLNADevice, root_object_id: str) -> list
         total = 1
 
         while start < total:
-            browse = _soap_browse_direct_children(
-                control_url,
-                service_type,
-                current_id,
-                start,
-                _BROWSE_PAGE_SIZE,
-            )
+            browse = _soap_browse_direct_children(control_url, service_type, current_id, start, _BROWSE_PAGE_SIZE)
             if browse is None:
                 break
 
@@ -971,7 +800,7 @@ def _iter_video_items_recursive(device: DLNADevice, root_object_id: str) -> list
 
 
 # ============================================================================
-# NORMALIZACIÓN PARA PIPELINE (título / archivo)
+# NORMALIZACIÓN PARA PIPELINE (título / file)
 # ============================================================================
 
 
@@ -1017,21 +846,11 @@ def _extract_ext_from_resource_url(resource_url: str) -> str:
 
 
 def _dlna_display_file(library: str, raw_title: str, resource_url: str) -> tuple[str, str]:
-    """
-    Requisito DLNA para reporting:
-      - file (friendly) = "{library}/{Nombre original del registro sin normalizar}{ext}"
-      - file_url        = URL real del servidor
-    """
     ext = _extract_ext_from_resource_url(resource_url)
-
-    base = raw_title.strip()
-    if not base:
-        base = "UNKNOWN"
+    base = raw_title.strip() or "UNKNOWN"
 
     if ext:
-        base_l = base.lower()
-        ext_l = ext.lower()
-        if not base_l.endswith(ext_l):
+        if not base.lower().endswith(ext.lower()):
             base = f"{base}{ext}"
 
     return f"{library}/{base}", resource_url
@@ -1043,12 +862,7 @@ def _dlna_display_file(library: str, raw_title: str, resource_url: str) -> tuple
 
 
 def analyze_dlna_server(device: DLNADevice | None = None) -> None:
-    """
-    Ejecuta el pipeline de análisis usando un servidor DLNA/UPnP.
-    """
     t0 = time.monotonic()
-
-    # Métricas OMDb: resumen “limpio” por ejecución.
     reset_omdb_metrics()
 
     if device is None:
@@ -1057,16 +871,14 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
             return
 
     server_label = f"{device.friendly_name} ({device.host}:{device.port})"
-
     _logger.progress(f"[DLNA] Servidor: {server_label}")
-    _log_debug(f"location={device.location!r}")
+    _logger.debug_ctx("DLNA", f"location={device.location!r}")
 
     roots = _list_video_root_containers(device)
     if not roots:
-        _logger.error("[DLNA] No se han encontrado contenedores raíz de vídeo.")
+        _logger.error("[DLNA] No se han encontrado contenedores raíz de vídeo.", always=True)
         return
 
-    chosen_root: _DlnaContainer
     if len(roots) == 1:
         chosen_root = roots[0]
     else:
@@ -1075,9 +887,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
             _logger.info(f"  {idx}) {c.title}", always=True)
 
         while True:
-            raw = input(
-                f"Selecciona un directorio de vídeo (1-{len(roots)}) o pulsa Enter para cancelar: "
-            ).strip()
+            raw = input(f"Selecciona un directorio de vídeo (1-{len(roots)}) o pulsa Enter para cancelar: ").strip()
             if raw == "":
                 _logger.info("[DLNA] Operación cancelada.", always=True)
                 return
@@ -1095,9 +905,8 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
 
     base = _auto_descend_folder_browse(device, chosen_root)
     if base.object_id != chosen_root.object_id:
-        _log_debug(f"auto_descend: '{chosen_root.title}' -> '{base.title}'")
+        _logger.debug_ctx("DLNA", f"auto_descend: {chosen_root.title!r} -> {base.title!r}")
 
-    selected_containers: list[_DlnaContainer] | None
     if _is_plex_server(device):
         selected_containers = _select_folders_plex(base, device)
     else:
@@ -1112,88 +921,58 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
         if DEBUG_MODE:
             _logger.progress("[DLNA][DEBUG] " + " | ".join(titles))
 
-    # -------------------------------------------------------------------------
-    # Fase 1: descubrir candidatos (scan recursivo)
-    # -------------------------------------------------------------------------
-    candidates: list[tuple[str, str, int | None, str]] = []
-    scan_errors = 0
-
-    # Snapshots/deltas OMDb por contenedor (solo se usan en silent+debug)
-    container_omdb_snapshot_start: dict[str, dict[str, object]] = {}
-    container_omdb_delta_scan: dict[str, dict[str, int]] = {}
-
-    total_containers = len(selected_containers)
-    for idx, container in enumerate(selected_containers, start=1):
-        container_key = container.title or f"<container_{idx}>"
-
-        _logger.progress(
-            f"[DLNA] Escaneando contenedor ({idx}/{total_containers}): {container.title}"
-        )
-
-        if SILENT_MODE and DEBUG_MODE:
-            snap = get_omdb_metrics_snapshot()
-            container_omdb_snapshot_start[container_key] = dict(snap)
-            _log_omdb_metrics(prefix=f"[DLNA][DEBUG] {container_key}: scan:start:")
-
-        try:
-            items = _iter_video_items_recursive(device, container.object_id)
-        except Exception as exc:  # pragma: no cover
-            scan_errors += 1
-            _logger.error(f"[DLNA] Error escaneando '{container.title}': {exc!r}")
-            continue
-
-        _log_debug(f"scan '{container.title}' items={len(items)}")
-
-        for it in items:
-            candidates.append((it.title, it.resource_url, it.size_bytes, container.title))
-
-        if SILENT_MODE and DEBUG_MODE:
-            snap_before = container_omdb_snapshot_start.get(container_key, {})
-            snap_after = get_omdb_metrics_snapshot()
-            delta = _metrics_diff(snap_before, snap_after)
-            container_omdb_delta_scan[container_key] = dict(delta)
-            _log_omdb_metrics(prefix=f"[DLNA][DEBUG] {container_key}: scan:delta:", metrics=delta)
-
-    if not candidates:
-        if scan_errors > 0:
-            _logger.progress(f"[DLNA] No se han encontrado items de vídeo. errors={scan_errors}")
-        else:
-            _logger.progress("[DLNA] No se han encontrado items de vídeo.")
-        return
-
-    total_candidates = len(candidates)
-    _logger.progress(f"[DLNA] Candidatos a analizar: {total_candidates}")
-
-    # -------------------------------------------------------------------------
-    # Fase 2: análisis (ThreadPool controlado) - BARRERA POR CONTENEDOR
-    # -------------------------------------------------------------------------
-    max_workers = int(PLEX_ANALYZE_WORKERS)
-    if max_workers < 1:
-        max_workers = 1
-    if max_workers > 64:
-        max_workers = 64
-
-    omdb_cap = max(4, int(OMDB_HTTP_MAX_CONCURRENCY) * 8)
-    max_workers = min(max_workers, omdb_cap)
+    max_workers = _compute_max_workers(PLEX_ANALYZE_WORKERS)
 
     if SILENT_MODE:
         _logger.progress(
-            f"[DLNA] Analizando con ThreadPool workers={max_workers} (por contenedor) "
+            f"[DLNA] ThreadPool workers={max_workers} (por contenedor) "
             f"(PLEX_ANALYZE_WORKERS={PLEX_ANALYZE_WORKERS}, "
             f"OMDB_HTTP_MAX_CONCURRENCY={OMDB_HTTP_MAX_CONCURRENCY}, "
             f"OMDB_HTTP_MIN_INTERVAL_SECONDS={OMDB_HTTP_MIN_INTERVAL_SECONDS})"
         )
     else:
-        _log_debug(
-            f"ThreadPool workers={max_workers} (por contenedor, cap={omdb_cap} por OMDb limiter) "
-            f"OMDB_HTTP_MIN_INTERVAL_SECONDS={OMDB_HTTP_MIN_INTERVAL_SECONDS}"
+        _logger.debug_ctx(
+            "DLNA",
+            f"ThreadPool workers={max_workers} (por contenedor, cap por OMDb limiter) "
+            f"OMDB_HTTP_MIN_INTERVAL_SECONDS={OMDB_HTTP_MIN_INTERVAL_SECONDS}",
         )
 
-    all_rows: list[dict[str, object]] = []
-    suggestions_rows: list[dict[str, object]] = []
-    analysis_errors = 0
+    # Solo mantenemos en memoria las filas filtradas para ordenarlas al final (si hay).
+    filtered_rows: list[dict[str, object]] = []
 
+    # Contadores (sin all_rows)
+    decisions_count: dict[str, int] = {"KEEP": 0, "MAYBE": 0, "DELETE": 0, "UNKNOWN": 0}
+    total_items_processed = 0
+    total_items_errors = 0
+    scan_errors = 0
+    total_rows_written = 0
+    total_suggestions_written = 0
+
+    container_omdb_delta_scan: dict[str, dict[str, int]] = {}
     container_omdb_delta_analyze: dict[str, dict[str, int]] = {}
+
+    analyze_snapshot_start: dict[str, object] | None = None
+    if SILENT_MODE and DEBUG_MODE:
+        analyze_snapshot_start = dict(get_omdb_metrics_snapshot())
+        _log_omdb_metrics(prefix="[DLNA][DEBUG] analyze: start:")
+
+    def _maybe_print_item_logs(logs: list[str]) -> None:
+        if not logs:
+            return
+        if not SILENT_MODE:
+            for line in logs:
+                _logger.info(line)
+            return
+        if DEBUG_MODE:
+            for line in logs:
+                _logger.info(line, always=True)
+
+    def _tally_decision(row: Mapping[str, object]) -> None:
+        d = row.get("decision")
+        if d in ("KEEP", "MAYBE", "DELETE"):
+            decisions_count[str(d)] += 1
+        else:
+            decisions_count["UNKNOWN"] += 1
 
     def _analyze_one(
         *,
@@ -1201,7 +980,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
         resource_url: str,
         file_size: int | None,
         library: str,
-    ) -> tuple[dict[str, object] | None, dict[str, object] | None, list[str], str, str]:
+    ) -> tuple[dict[str, object] | None, dict[str, object] | None, list[str]]:
         clean_title, extracted_year = _extract_year_from_title(raw_title)
         display_file, file_url = _dlna_display_file(library, raw_title, resource_url)
 
@@ -1220,159 +999,263 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
         )
 
         row, meta_sugg, logs = analyze_movie(movie_input, source_movie=None)
-        return row, meta_sugg, logs, display_file, file_url
 
-    # Snapshot/delta del bloque de análisis global
-    analyze_snapshot_start: dict[str, object] | None = None
-    if SILENT_MODE and DEBUG_MODE:
-        analyze_snapshot_start = dict(get_omdb_metrics_snapshot())
-        _log_omdb_metrics(prefix="[DLNA][DEBUG] analyze: start:")
+        # file “friendly” estable siempre
+        if row:
+            row["file"] = display_file
+            row["file_url"] = file_url  # quedará ignorado por CSV (extrasaction="ignore"), pero útil en memoria
 
-    # Agrupar candidatos por contenedor (library) para poder hacer barrera por grupo
-    candidates_by_container: dict[str, list[tuple[str, str, int | None, str]]] = {}
-    for raw_title, resource_url, file_size, library in candidates:
-        candidates_by_container.setdefault(library, []).append((raw_title, resource_url, file_size, library))
+        return row, meta_sugg, logs
 
-    analyzed_so_far = 0
-    for cont_index, (container_title, items) in enumerate(candidates_by_container.items(), start=1):
-        if SILENT_MODE:
-            _logger.progress(
-                f"[DLNA] ({cont_index}/{len(candidates_by_container)}) Analizando contenedor: {container_title} "
-                f"(items={len(items)})"
-            )
+    # Writers globales (streaming)
+    with open_all_csv_writer(REPORT_ALL_PATH) as all_writer, open_suggestions_csv_writer(METADATA_FIX_PATH) as sugg_writer:
+        # ---------------------------------------------------------------------
+        # NO SILENT: necesitamos total real para (i/total) => materializamos items
+        # ---------------------------------------------------------------------
+        if not SILENT_MODE:
+            candidates_by_container: dict[str, list[tuple[str, str, int | None, str]]] = {}
+            total_candidates = 0
 
-        # start snapshot por contenedor (analysis)
-        cont_snap_start: dict[str, object] | None = None
-        if SILENT_MODE and DEBUG_MODE:
-            cont_snap_start = dict(get_omdb_metrics_snapshot())
-            _log_omdb_metrics(prefix=f"[DLNA][DEBUG] {container_title}: analyze:start:")
-
-        # En modo no-silent mantenemos el progreso por item global (como antes),
-        # pero ahora el procesamiento ocurre por lotes (contenedor).
-        futures: list[
-            Future[tuple[dict[str, object] | None, dict[str, object] | None, list[str], str, str]]
-        ] = []
-
-        with ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(items)))) as executor:
-            for raw_title, resource_url, file_size, library in items:
-                analyzed_so_far += 1
-
-                if not SILENT_MODE:
-                    clean_title_preview, extracted_year_preview = _extract_year_from_title(raw_title)
-                    display_title = raw_title if DEBUG_MODE else clean_title_preview
-                    _logger.info(
-                        _format_item_progress_line(
-                            index=analyzed_so_far,
-                            total=total_candidates,
-                            title=display_title,
-                            year=extracted_year_preview,
-                            file_size_bytes=file_size,
-                        )
-                    )
-
-                if SILENT_MODE and DEBUG_MODE and (analyzed_so_far % _PROGRESS_EVERY_N_ITEMS == 0):
-                    _logger.progress(f"[DLNA][DEBUG] Encolados {analyzed_so_far}/{total_candidates} items...")
-
-                futures.append(
-                    executor.submit(
-                        _analyze_one,
-                        raw_title=raw_title,
-                        resource_url=resource_url,
-                        file_size=file_size,
-                        library=library,
-                    )
-                )
-
-            completed = 0
-            for fut in as_completed(futures):
-                completed += 1
-
-                if SILENT_MODE and DEBUG_MODE and (completed % _PROGRESS_EVERY_N_ITEMS == 0):
-                    _logger.progress(
-                        f"[DLNA][DEBUG] {container_title}: completados {completed}/{len(items)} items..."
-                    )
+            total_containers = len(selected_containers)
+            for idx, container in enumerate(selected_containers, start=1):
+                _logger.progress(f"[DLNA] Escaneando contenedor ({idx}/{total_containers}): {container.title}")
 
                 try:
-                    row, meta_sugg, logs, display_file, file_url = fut.result()
+                    items = _iter_video_items_recursive(device, container.object_id)
                 except Exception as exc:  # pragma: no cover
-                    analysis_errors += 1
-                    _logger.error(f"[DLNA] Error analizando item (future): {exc!r}")
+                    scan_errors += 1
+                    _logger.error(f"[DLNA] Error escaneando '{container.title}': {exc!r}", always=True)
                     continue
 
-                for log in logs:
-                    _logger.info(log)
+                _logger.debug_ctx("DLNA", f"scan {container.title!r} items={len(items)}")
 
-                if row:
-                    row["file_url"] = file_url
-                    row["file"] = display_file
-                    all_rows.append(row)
+                bucket = candidates_by_container.setdefault(container.title, [])
+                for it in items:
+                    bucket.append((it.title, it.resource_url, it.size_bytes, container.title))
+                    total_candidates += 1
 
-                if meta_sugg:
-                    suggestions_rows.append(meta_sugg)
+            if total_candidates == 0:
+                _logger.progress("[DLNA] No se han encontrado items de vídeo.")
+                return
 
-        # delta por contenedor (analysis)
-        if SILENT_MODE and DEBUG_MODE and cont_snap_start is not None:
-            cont_delta = _metrics_diff(cont_snap_start, get_omdb_metrics_snapshot())
-            container_omdb_delta_analyze[container_title] = dict(cont_delta)
-            _log_omdb_metrics(prefix=f"[DLNA][DEBUG] {container_title}: analyze:delta:", metrics=cont_delta)
+            _logger.progress(f"[DLNA] Candidatos a analizar: {total_candidates}")
 
-    t_analyze_elapsed = time.monotonic() - t0
+            analyzed_so_far = 0
+            for container_title, items in candidates_by_container.items():
+                if not items:
+                    continue
+
+                # Orden estable por contenedor
+                future_to_index: dict[
+                    Future[tuple[dict[str, object] | None, dict[str, object] | None, list[str]]],
+                    int,
+                ] = {}
+                results: list[tuple[dict[str, object] | None, dict[str, object] | None, list[str]] | None] = []
+
+                with ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(items)))) as executor:
+                    for raw_title, resource_url, file_size, library in items:
+                        analyzed_so_far += 1
+
+                        clean_title_preview, extracted_year_preview = _extract_year_from_title(raw_title)
+                        display_title = raw_title if DEBUG_MODE else clean_title_preview
+
+                        _logger.info(
+                            _format_item_progress_line(
+                                index=analyzed_so_far,
+                                total=total_candidates,
+                                title=display_title,
+                                year=extracted_year_preview,
+                                file_size_bytes=file_size,
+                            )
+                        )
+
+                        fut = executor.submit(
+                            _analyze_one,
+                            raw_title=raw_title,
+                            resource_url=resource_url,
+                            file_size=file_size,
+                            library=library,
+                        )
+                        results.append(None)
+                        future_to_index[fut] = len(results) - 1
+
+                    for fut in as_completed(future_to_index):
+                        idx = future_to_index[fut]
+                        try:
+                            results[idx] = fut.result()
+                        except Exception as exc:  # pragma: no cover
+                            total_items_errors += 1
+                            _logger.error(f"[DLNA] Error analizando item (future): {exc!r}", always=True)
+                        finally:
+                            total_items_processed += 1
+
+                for res in results:
+                    if res is None:
+                        continue
+                    row, meta_sugg, logs = res
+                    _maybe_print_item_logs(logs)
+
+                    if row:
+                        all_writer.write_row(row)
+                        total_rows_written += 1
+                        _tally_decision(row)
+                        if row.get("decision") in {"DELETE", "MAYBE"}:
+                            filtered_rows.append(dict(row))
+
+                    if meta_sugg:
+                        sugg_writer.write_row(meta_sugg)
+                        total_suggestions_written += 1
+
+        # ---------------------------------------------------------------------
+        # SILENT: streaming por contenedor + métricas por fase
+        # ---------------------------------------------------------------------
+        else:
+            total_containers = len(selected_containers)
+            total_candidates = 0
+            analyzed_so_far = 0
+
+            for idx, container in enumerate(selected_containers, start=1):
+                container_title = container.title
+                container_key = container_title or f"<container_{idx}>"
+
+                _logger.progress(f"[DLNA] Escaneando contenedor ({idx}/{total_containers}): {container_title}")
+
+                scan_snap_start: dict[str, object] | None = None
+                if DEBUG_MODE:
+                    scan_snap_start = dict(get_omdb_metrics_snapshot())
+                    _log_omdb_metrics(prefix=f"[DLNA][DEBUG] {container_key}: scan:start:")
+
+                try:
+                    items = _iter_video_items_recursive(device, container.object_id)
+                except Exception as exc:  # pragma: no cover
+                    scan_errors += 1
+                    _logger.error(f"[DLNA] Error escaneando '{container_title}': {exc!r}", always=True)
+                    continue
+
+                total_candidates += len(items)
+                _logger.debug_ctx("DLNA", f"scan {container_title!r} items={len(items)}")
+
+                if DEBUG_MODE and scan_snap_start is not None:
+                    scan_delta = _metrics_diff(scan_snap_start, get_omdb_metrics_snapshot())
+                    container_omdb_delta_scan[container_key] = dict(scan_delta)
+                    _log_omdb_metrics(prefix=f"[DLNA][DEBUG] {container_key}: scan:delta:", metrics=scan_delta)
+
+                if not items:
+                    continue
+
+                _logger.progress(f"[DLNA] ({idx}/{total_containers}) Analizando contenedor: {container_title} (items={len(items)})")
+
+                analyze_snap_start_container: dict[str, object] | None = None
+                if DEBUG_MODE:
+                    analyze_snap_start_container = dict(get_omdb_metrics_snapshot())
+                    _log_omdb_metrics(prefix=f"[DLNA][DEBUG] {container_key}: analyze:start:")
+
+                with ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(items)))) as executor:
+                    future_to_item_count: dict[
+                        Future[tuple[dict[str, object] | None, dict[str, object] | None, list[str]]],
+                        int,
+                    ] = {}
+
+                    for it in items:
+                        analyzed_so_far += 1
+                        if DEBUG_MODE and (analyzed_so_far % _PROGRESS_EVERY_N_ITEMS == 0):
+                            _logger.progress(f"[DLNA][DEBUG] Progreso: analizados {analyzed_so_far} items...")
+
+                        fut = executor.submit(
+                            _analyze_one,
+                            raw_title=it.title,
+                            resource_url=it.resource_url,
+                            file_size=it.size_bytes,
+                            library=container_title,
+                        )
+                        future_to_item_count[fut] = 1
+
+                    completed = 0
+                    for fut in as_completed(future_to_item_count):
+                        completed += 1
+                        if DEBUG_MODE and (completed % _PROGRESS_EVERY_N_ITEMS == 0):
+                            _logger.progress(f"[DLNA][DEBUG] {container_key}: completados {completed}/{len(items)} items...")
+
+                        try:
+                            row, meta_sugg, logs = fut.result()
+                        except Exception as exc:  # pragma: no cover
+                            total_items_errors += 1
+                            _logger.error(f"[DLNA] Error analizando item (future): {exc!r}", always=True)
+                            total_items_processed += 1
+                            continue
+
+                        _maybe_print_item_logs(logs)
+
+                        if row:
+                            all_writer.write_row(row)
+                            total_rows_written += 1
+                            _tally_decision(row)
+                            if row.get("decision") in {"DELETE", "MAYBE"}:
+                                filtered_rows.append(dict(row))
+
+                        if meta_sugg:
+                            sugg_writer.write_row(meta_sugg)
+                            total_suggestions_written += 1
+
+                        total_items_processed += 1
+
+                if DEBUG_MODE and analyze_snap_start_container is not None:
+                    analyze_delta_container = _metrics_diff(analyze_snap_start_container, get_omdb_metrics_snapshot())
+                    container_omdb_delta_analyze[container_key] = dict(analyze_delta_container)
+                    _log_omdb_metrics(prefix=f"[DLNA][DEBUG] {container_key}: analyze:delta:", metrics=analyze_delta_container)
+
+            if total_candidates == 0 and scan_errors == 0:
+                _logger.progress("[DLNA] No se han encontrado items de vídeo.")
+                return
+
+            _logger.progress(f"[DLNA] Candidatos detectados (streaming): {total_candidates}")
+
+    # =========================================================================
+    # filtered.csv (solo si hay filas) + resumen final
+    # =========================================================================
+    filtered_csv_status = "SKIPPED (0 rows)"
+    filtered_len = 0
+
+    if filtered_rows:
+        filtered = sort_filtered_rows(filtered_rows)
+        filtered_len = len(filtered)
+        with open_filtered_csv_writer_only_if_rows(REPORT_FILTERED_PATH) as fw:
+            for r in filtered:
+                fw.write_row(r)
+        filtered_csv_status = f"OK ({filtered_len} rows)"
+
+    elapsed = time.monotonic() - t0
 
     if SILENT_MODE and DEBUG_MODE and analyze_snapshot_start is not None:
         analyze_delta = _metrics_diff(analyze_snapshot_start, get_omdb_metrics_snapshot())
         _log_omdb_metrics(prefix="[DLNA][DEBUG] analyze: delta:", metrics=analyze_delta)
 
-    if not all_rows:
-        _logger.progress("[DLNA] No se han generado filas de análisis.")
-        return
-
-    # -------------------------------------------------------------------------
-    # Fase 3: filtrado + ordenación + CSVs
-    # -------------------------------------------------------------------------
-    filtered_rows = [r for r in all_rows if r.get("decision") in {"DELETE", "MAYBE"}]
-    filtered_rows = sort_filtered_rows(filtered_rows) if filtered_rows else []
-
-    write_all_csv(REPORT_ALL_PATH, all_rows)
-    write_filtered_csv(REPORT_FILTERED_PATH, filtered_rows)
-    write_suggestions_csv(METADATA_FIX_PATH, suggestions_rows)
-
-    elapsed = time.monotonic() - t0
-
-    # -------------------------------------------------------------------------
-    # Resumen final
-    # -------------------------------------------------------------------------
     if SILENT_MODE:
-        decisions = _count_decisions(all_rows)
-
         _logger.progress(
             "[DLNA] Resumen final: "
             f"server={server_label} containers={len(selected_containers)} "
-            f"candidates={total_candidates} workers={max_workers} time={elapsed:.1f}s | "
-            f"scan_errors={scan_errors} analysis_errors={analysis_errors} | "
-            f"rows={len(all_rows)} (KEEP={decisions['KEEP']} MAYBE={decisions['MAYBE']} "
-            f"DELETE={decisions['DELETE']} UNKNOWN={decisions['UNKNOWN']}) | "
-            f"filtered_rows={len(filtered_rows)} suggestions={len(suggestions_rows)}"
+            f"workers={max_workers} time={elapsed:.1f}s | "
+            f"scan_errors={scan_errors} analysis_errors={total_items_errors} | "
+            f"items={total_items_processed} rows={total_rows_written} "
+            f"(KEEP={decisions_count['KEEP']} MAYBE={decisions_count['MAYBE']} "
+            f"DELETE={decisions_count['DELETE']} UNKNOWN={decisions_count['UNKNOWN']}) | "
+            f"filtered_rows={filtered_len} filtered_csv={filtered_csv_status} "
+            f"suggestions={total_suggestions_written}"
         )
 
         _logger.progress(
             "[DLNA] CSVs: "
-            f"all={REPORT_ALL_PATH} | filtered={REPORT_FILTERED_PATH} | suggestions={METADATA_FIX_PATH}"
+            f"all={REPORT_ALL_PATH} | suggestions={METADATA_FIX_PATH} | filtered={REPORT_FILTERED_PATH}"
         )
 
-        # Resumen global OMDb (solo silent+debug)
         _log_omdb_metrics(prefix="[DLNA][DEBUG] Global:")
 
-        # Ranking (scan) y ranking (analysis) separados para ver dónde se “quema” más
-        _logger.progress("[DLNA][DEBUG] Rankings (scan deltas):")
-        _log_omdb_rankings(container_omdb_delta_scan, min_groups=2)
+        if DEBUG_MODE:
+            if container_omdb_delta_scan:
+                _logger.progress("[DLNA][DEBUG] Rankings (scan deltas):")
+                _log_omdb_rankings(container_omdb_delta_scan, min_groups=2)
+            if container_omdb_delta_analyze:
+                _logger.progress("[DLNA][DEBUG] Rankings (analyze deltas):")
+                _log_omdb_rankings(container_omdb_delta_analyze, min_groups=2)
 
-        _logger.progress("[DLNA][DEBUG] Rankings (analyze deltas):")
-        _log_omdb_rankings(container_omdb_delta_analyze, min_groups=2)
-
-    _logger.info(
-        (
-            f"[DLNA] Análisis completado. CSV completo: {REPORT_ALL_PATH} | "
-            f"CSV filtrado: {REPORT_FILTERED_PATH}"
-        ),
-        always=True,
-    )
+    _logger.info("[DLNA] Análisis completado.", always=True)
