@@ -2,34 +2,57 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Any
+from typing import Any, Final
 
-# Nombre del logger principal (los tests lo usan explícitamente)
-LOGGER_NAME: str = "plex_movies_cleaner"
+# ============================================================================
+# CONFIGURACIÓN GLOBAL
+# ============================================================================
 
-# Logger interno y flag de configuración
-_LOGGER: Any = None  # puede ser logging.Logger o un FakeLogger de tests
+# Nombre del logger principal de la aplicación.
+# ⚠️ IMPORTANTE: los tests lo referencian explícitamente.
+LOGGER_NAME: Final[str] = "plex_movies_cleaner"
+
+# Logger interno cacheado.
+# Puede ser:
+#   - logging.Logger (ejecución real)
+#   - FakeLogger (inyectado por tests)
+_LOGGER: Any = None
+
+# Flag para asegurar inicialización idempotente del logger
 _CONFIGURED: bool = False
 
 
+# ============================================================================
+# UTILIDADES DE CONFIGURACIÓN
+# ============================================================================
+
 def _safe_get_cfg() -> Any | None:
+    """
+    Devuelve el módulo backend.config si ya ha sido importado.
+
+    No lo importamos directamente para:
+    - evitar dependencias circulares
+    - permitir ejecución parcial (tests, herramientas, etc.)
+    """
     return sys.modules.get("backend.config")
 
 
 def _resolve_level_from_config() -> int:
     """
-    Decide el nivel de logging (root) en base a backend.config.
+    Determina el nivel de logging raíz (root) en base a backend.config.
 
-    Prioridad:
-      1) config.LOG_LEVEL (str: "DEBUG"/"INFO"/"WARNING"/"ERROR"/"CRITICAL")
-      2) flags de debug (p.ej. WIKI_DEBUG=True) -> DEBUG
-      3) fallback -> INFO
+    Orden de prioridad:
+      1) LOG_LEVEL explícito (string)
+      2) Flags de debug (WIKI_DEBUG, OMDB_DEBUG, DEBUG, DEBUG_MODE)
+      3) Fallback seguro: INFO
     """
     cfg = _safe_get_cfg()
     if cfg is None:
         return logging.INFO
 
-    # 1) LOG_LEVEL explícito
+    # ------------------------------------------------------------------
+    # 1) LOG_LEVEL explícito (string)
+    # ------------------------------------------------------------------
     try:
         lvl = getattr(cfg, "LOG_LEVEL", None)
     except Exception:
@@ -49,14 +72,21 @@ def _resolve_level_from_config() -> int:
         if mapped is not None:
             return mapped
 
-    # 2) Cualquier flag debug que quieras soportar
+    # ------------------------------------------------------------------
+    # 2) Flags de debug “heredados”
+    # ------------------------------------------------------------------
     def _flag(name: str) -> bool:
         try:
             return bool(getattr(cfg, name, False))
         except Exception:
             return False
 
-    if _flag("WIKI_DEBUG") or _flag("OMDB_DEBUG") or _flag("DEBUG"):
+    if (
+        _flag("WIKI_DEBUG")
+        or _flag("OMDB_DEBUG")
+        or _flag("DEBUG")
+        or _flag("DEBUG_MODE")
+    ):
         return logging.DEBUG
 
     return logging.INFO
@@ -64,63 +94,127 @@ def _resolve_level_from_config() -> int:
 
 def _apply_root_level(level: int) -> None:
     """
-    Aplica nivel al root y a sus handlers (importante en algunos entornos).
+    Aplica el nivel al logger root y a todos sus handlers.
+
+    Esto es necesario porque:
+    - algunos entornos ya crean handlers antes de que lleguemos aquí
+    - cambiar solo el root no siempre actualiza los handlers existentes
     """
     root = logging.getLogger()
     root.setLevel(level)
-    for h in root.handlers:
+    for handler in root.handlers:
         try:
-            h.setLevel(level)
+            handler.setLevel(level)
         except Exception:
             pass
 
 
+def _should_enable_http_debug(cfg: Any | None) -> bool:
+    """
+    Decide si se permite el ruido HTTP de librerías externas.
+
+    Si backend.config define:
+        HTTP_DEBUG = True
+    entonces NO se silencian urllib3 / requests / plexapi.
+
+    Por defecto: False (evitamos spam).
+    """
+    if cfg is None:
+        return False
+    try:
+        return bool(getattr(cfg, "HTTP_DEBUG", False))
+    except Exception:
+        return False
+
+
+def _configure_external_loggers(*, level: int) -> None:
+    """
+    Ajusta el nivel de logging de dependencias ruidosas.
+
+    Objetivo:
+    - Aunque el root esté en DEBUG,
+      evitar que urllib3 / requests / plexapi inunden la consola.
+
+    Excepción:
+    - Si HTTP_DEBUG=True → no tocamos nada.
+    """
+    cfg = _safe_get_cfg()
+    if _should_enable_http_debug(cfg):
+        return
+
+    noisy_loggers = (
+        "urllib3",
+        "urllib3.connectionpool",
+        "requests",
+        "requests.packages.urllib3",
+        "plexapi",
+    )
+
+    for name in noisy_loggers:
+        try:
+            logging.getLogger(name).setLevel(logging.WARNING)
+        except Exception:
+            pass
+
+
+# ============================================================================
+# INICIALIZACIÓN DEL LOGGER
+# ============================================================================
+
 def _ensure_configured() -> Any:
     """
-    Inicializa el logger solo una vez y lo devuelve.
+    Inicializa el sistema de logging una sola vez y devuelve el logger principal.
 
-    - Si `_CONFIGURED` ya es True y `_LOGGER` no es None, devuelve `_LOGGER`
-      tal cual (esto permite a los tests inyectar un FakeLogger).
-    - Si no está configurado, inicializa logging básico y crea el logger
-      con nombre LOGGER_NAME.
+    Comportamiento clave:
+    - Idempotente: puede llamarse muchas veces sin efectos secundarios.
+    - Respeta loggers inyectados por tests.
+    - Reaplica niveles si backend.config cambia dinámicamente.
     """
     global _LOGGER, _CONFIGURED
 
+    # Ya inicializado → solo re-sincronizamos niveles
     if _CONFIGURED and _LOGGER is not None:
-        # OJO: aun así podemos ajustar el nivel si config cambió
         try:
-            _apply_root_level(_resolve_level_from_config())
+            level = _resolve_level_from_config()
+            _apply_root_level(level)
+            _configure_external_loggers(level=level)
         except Exception:
             pass
         return _LOGGER
 
+    # Primera inicialización real
     level = _resolve_level_from_config()
-
     root = logging.getLogger()
+
     if not root.handlers:
+        # Entorno limpio → configuramos logging básico
         logging.basicConfig(
             level=level,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
     else:
-        # Si ya hay handlers (por ejemplo, el entorno), ajustamos el nivel igualmente
+        # Entorno ya configurado (IDE, tests, etc.)
         _apply_root_level(level)
+
+    _configure_external_loggers(level=level)
 
     _LOGGER = logging.getLogger(LOGGER_NAME)
     _CONFIGURED = True
     return _LOGGER
 
 
+# ============================================================================
+# CONTROL DE SILENT MODE
+# ============================================================================
+
 def _should_log(*, always: bool = False) -> bool:
     """
-    Decide si se debe loguear en función de SILENT_MODE.
+    Decide si un mensaje de logging debe emitirse.
 
     Reglas:
-      - Si always=True → siempre True.
-      - Si existe backend.config y tiene SILENT_MODE:
-          devuelve not SILENT_MODE.
-      - Si no existe backend.config en sys.modules, o no tiene SILENT_MODE:
-          devuelve True (por defecto se loguea).
+      - always=True → siempre se emite
+      - SILENT_MODE=True → se suprimen debug/info/warning
+      - error() ignora este mecanismo (ver más abajo)
     """
     if always:
         return True
@@ -138,12 +232,59 @@ def _should_log(*, always: bool = False) -> bool:
 
 
 def get_logger() -> Any:
-    """Devuelve el logger principal, asegurando su configuración previa."""
+    """
+    Devuelve el logger principal de la aplicación.
+
+    Siempre asegura inicialización previa.
+    """
     return _ensure_configured()
 
 
+# ============================================================================
+# PROGRESO / HEARTBEAT (NO LOGGING)
+# ============================================================================
+
+def progress(message: str) -> None:
+    """
+    Emite una línea de progreso SIEMPRE visible.
+
+    Características:
+    - Ignora SILENT_MODE
+    - No usa logging (sin timestamps ni niveles)
+    - Diseñado para feedback estructural:
+        "(1/4) Películas"
+        "Analizando biblioteca X"
+    """
+    try:
+        sys.stdout.write(f"{message}\n")
+        sys.stdout.flush()
+    except Exception:
+        # Nunca debe romper el flujo principal
+        pass
+
+
+def progressf(fmt: str, *args: Any) -> None:
+    """
+    Variante con formateo estilo printf para progreso.
+    """
+    try:
+        msg = fmt % args if args else fmt
+    except Exception:
+        msg = fmt
+    progress(msg)
+
+
+# ============================================================================
+# API PÚBLICA DE LOGGING
+# ============================================================================
+
 def debug(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
-    """Debug, sujeto a SILENT_MODE salvo que always=True."""
+    """
+    Logging DEBUG.
+
+    - Respeta SILENT_MODE
+    - always=True fuerza emisión
+    """
     if not _should_log(always=always):
         return
     log = _ensure_configured()
@@ -152,7 +293,12 @@ def debug(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
 
 
 def info(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
-    """Info, sujeto a SILENT_MODE salvo que always=True."""
+    """
+    Logging INFO.
+
+    - Respeta SILENT_MODE
+    - always=True fuerza emisión
+    """
     if not _should_log(always=always):
         return
     log = _ensure_configured()
@@ -161,7 +307,12 @@ def info(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
 
 
 def warning(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
-    """Warning, sujeto a SILENT_MODE salvo que always=True."""
+    """
+    Logging WARNING.
+
+    - Respeta SILENT_MODE
+    - always=True fuerza emisión
+    """
     if not _should_log(always=always):
         return
     log = _ensure_configured()
@@ -171,10 +322,11 @@ def warning(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
 
 def error(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
     """
-    Error: **siempre** se loguea.
+    Logging ERROR.
 
-    - Ignora SILENT_MODE (siempre se escribe).
-    - Acepta `always` solo por compatibilidad con tests, pero no lo usa.
+    - SIEMPRE se emite
+    - Ignora SILENT_MODE
+    - `always` se acepta solo por compatibilidad con tests
     """
     log = _ensure_configured()
     kwargs.pop("always", None)
