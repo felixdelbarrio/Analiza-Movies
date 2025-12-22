@@ -5,14 +5,24 @@ analiza.py
 
 Punto de entrada unificado para análisis de películas.
 
-Reglas de consola:
-  - Menús y prompts deben ser visibles SIEMPRE (son interacción).
-  - SILENT_MODE=True:
-      - Menús minimalistas
-      - Listas DLNA minimalistas (solo nombre), con detalles en DEBUG_MODE
-      - Señales mínimas de estado con logger.progress()
-  - DEBUG_MODE=True:
-      - Contexto extra útil sin saturar
+Este módulo es “UI/CLI” puro: menús, selección de origen y arranque de orquestadores.
+No debe hacer trabajo pesado de red/IO salvo el “discover” de DLNA cuando el usuario
+elige esa ruta. 
+
+Reglas de consola (alineadas con backend/logger.py):
+- Menús y prompts deben ser visibles SIEMPRE (interacción):
+    * usar _logger.info(..., always=True) para texto de menú y errores de input
+- SILENT_MODE=True:
+    * minimizar texto no esencial
+    * usar _logger.progress(...) como “señal de estado” (inicio, modo, fin)
+    * listados DLNA minimalistas (solo nombre); detalles solo si DEBUG_MODE
+- DEBUG_MODE=True:
+    * contexto extra útil sin saturar (p.ej. nº de dispositivos detectados)
+    * para debug contextual, preferir _logger.debug_ctx("ANALYZE", "...") si existe
+
+Notas:
+- `analyze_all_libraries()` y `analyze_dlna_server()` ya gestionan su propio progreso
+  y reportes finales. Aquí solo los invocamos y mostramos el “marco” (inicio/fin).
 """
 
 from typing import Literal
@@ -30,16 +40,17 @@ def _ask_source() -> Choice:
     """
     Pregunta al usuario el origen de datos a analizar.
 
-    SILENT_MODE=True:
-      - Prompt minimalista para reducir ruido.
+    Reglas:
+    - Debe ser visible siempre (es un prompt).
+    - SILENT_MODE=True: prompt minimalista.
     """
     if SILENT_MODE:
         prompt = "1) Plex\n2) DLNA\n> "
     else:
         prompt = (
-            "¿Qué origen quieres analizar?\n"
-            "  1) Plex\n"
-            "  2) DLNA\n"
+            "¿Qué origen quieres ejecutar?\n"
+            "  1) Plex (analizar)\n"
+            "  2) DLNA (analizar)\n"
             "Selecciona una opción (1/2): "
         )
 
@@ -48,20 +59,23 @@ def _ask_source() -> Choice:
         if answer in ("1", "2"):
             return answer  # type: ignore[return-value]
 
+        # Mensaje visible siempre, independientemente de SILENT_MODE.
         if SILENT_MODE:
-            _logger.info("Opción no válida (usa 1 o 2).", always=True)
+            _logger.info("Opción no válida (usa 1 ó 2).", always=True)
         else:
-            _logger.info("Opción no válida. Introduce 1 o 2.", always=True)
+            _logger.info("Opción no válida. Introduce 1 ó 2.", always=True)
 
 
 def _select_dlna_device() -> DLNADevice | None:
     """
-    Descubre servidores DLNA en la red, los lista numerados y permite seleccionar uno.
+    Descubre servidores DLNA/UPnP en la red, los lista y permite seleccionar uno.
 
-    SILENT_MODE=True:
-      - Mensajes más cortos
-      - Lista minimalista: idx) friendly_name
-      - Host/port + LOCATION solo en DEBUG_MODE
+    Reglas:
+    - Listado/prompt visible SIEMPRE (interacción).
+    - SILENT_MODE=True:
+        * textos más cortos
+        * lista minimalista: idx) friendly_name
+        * host/port y LOCATION solo en DEBUG_MODE
     """
     if SILENT_MODE:
         _logger.info("\nBuscando servidores DLNA/UPnP...\n", always=True)
@@ -118,8 +132,13 @@ def main() -> None:
     """
     Punto de entrada principal.
 
-    SILENT_MODE=True:
-      - Banner mínimo + modo seleccionado + finalización
+    Responsabilidades:
+    - Mostrar “marco” de ejecución (inicio, modo, fin).
+    - En DLNA, descubrir/seleccionar servidor antes de analizar.
+
+    Consola:
+    - progress() para estado (siempre visible, sin timestamps).
+    - info(always=True) para interacción (menús/errores/prompt context).
     """
     _logger.progress("[AnalizaMovies] Inicio")
 
