@@ -34,6 +34,8 @@ def _parse_votes_by_year(raw: str) -> list[tuple[int, int]]:
             continue
 
     return sorted(table, key=lambda x: x[0])
+
+
 def get_votes_threshold_for_year(year: int | None) -> int:
     if not IMDB_VOTES_BY_YEAR:
         return IMDB_KEEP_MIN_VOTES
@@ -51,6 +53,8 @@ def get_votes_threshold_for_year(year: int | None) -> int:
             return votes_min
 
     return IMDB_VOTES_BY_YEAR[-1][1]
+
+
 ############################################################
 # 🔎 Funciones auxiliares para gestión del entorno
 ############################################################
@@ -107,6 +111,38 @@ _raw_exclude_plex: str = os.getenv("EXCLUDE_PLEX_LIBRARIES", "")
 EXCLUDE_PLEX_LIBRARIES: list[str] = [
     x.strip() for x in _raw_exclude_plex.split(",") if x.strip()
 ]
+
+############################################################
+# ⚡ PERFORMANCE (ThreadPool / Paralelismo controlado)
+############################################################
+# Analiza películas en paralelo (I/O bound: Plex + OMDb + Wiki).
+#
+# - PLEX_ANALYZE_WORKERS controla el tamaño del ThreadPool para analiza_plex.py.
+# - Ajuste recomendado:
+#     * 4-8 para NAS / redes lentas / OMDb muy limitado
+#     * 8-16 para PC razonable + red estable
+# - Límite defensivo para evitar configuraciones peligrosas:
+#     * mínimo 1
+#     * máximo 64
+#
+# Puedes sobrescribirlo desde .env:
+#   PLEX_ANALYZE_WORKERS=8
+_PLEX_ANALYZE_WORKERS_RAW: int = _get_env_int("PLEX_ANALYZE_WORKERS", 8)
+if _PLEX_ANALYZE_WORKERS_RAW < 1:
+    _logger.warning(
+        "PLEX_ANALYZE_WORKERS < 1; forcing to 1",
+        always=True,
+    )
+    PLEX_ANALYZE_WORKERS: int = 1
+elif _PLEX_ANALYZE_WORKERS_RAW > 64:
+    _logger.warning(
+        "PLEX_ANALYZE_WORKERS too high; capping to 64",
+        always=True,
+    )
+    PLEX_ANALYZE_WORKERS = 64
+else:
+    PLEX_ANALYZE_WORKERS = _PLEX_ANALYZE_WORKERS_RAW
+
 ############################################################
 # 🔎  BUSQUEDAS EN OMDB
 ############################################################
@@ -135,6 +171,69 @@ WIKI_FALLBACK_LANGUAGE: str = os.getenv("WIKI_FALLBACK_LANGUAGE", "en")
 # Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
 # WIKI_DEBUG=false
 WIKI_DEBUG: bool = _get_env_bool("WIKI_DEBUG", False)
+############################################################
+# ⚡ OMDB + THREADPOOL: LIMITADOR GLOBAL (suaviza picos)
+############################################################
+# Cuando activamos paralelismo (ThreadPool), varios hilos pueden intentar llamar a OMDb
+# a la vez. Esto puede provocar:
+#   - picos de tráfico
+#   - más probabilidad de rate-limit / 429
+#
+# Para evitarlo, se definen 2 parámetros globales (usados por omdb_client):
+#
+# 1) OMDB_HTTP_MAX_CONCURRENCY:
+#    - Nº máximo de llamadas HTTP a OMDb en paralelo (semaforo global).
+#    - Default: 2 (conservador y suele funcionar bien incluso con planes limitados).
+#
+# 2) OMDB_HTTP_MIN_INTERVAL_SECONDS:
+#    - Intervalo mínimo global entre llamadas HTTP.
+#    - Default: 0.10s (suaviza bursts sin penalizar demasiado).
+#
+# Puedes sobrescribirlos desde .env:
+#   OMDB_HTTP_MAX_CONCURRENCY=2
+#   OMDB_HTTP_MIN_INTERVAL_SECONDS=0.10
+_OMDB_HTTP_MAX_CONCURRENCY_RAW: int = _get_env_int("OMDB_HTTP_MAX_CONCURRENCY", 2)
+if _OMDB_HTTP_MAX_CONCURRENCY_RAW < 1:
+    _logger.warning(
+        "OMDB_HTTP_MAX_CONCURRENCY < 1; forcing to 1",
+        always=True,
+    )
+    OMDB_HTTP_MAX_CONCURRENCY: int = 1
+elif _OMDB_HTTP_MAX_CONCURRENCY_RAW > 64:
+    _logger.warning(
+        "OMDB_HTTP_MAX_CONCURRENCY too high; capping to 64",
+        always=True,
+    )
+    OMDB_HTTP_MAX_CONCURRENCY = 64
+else:
+    OMDB_HTTP_MAX_CONCURRENCY = _OMDB_HTTP_MAX_CONCURRENCY_RAW
+
+_OMDB_HTTP_MIN_INTERVAL_SECONDS_RAW: float = _get_env_float(
+    "OMDB_HTTP_MIN_INTERVAL_SECONDS",
+    0.10,
+)
+if _OMDB_HTTP_MIN_INTERVAL_SECONDS_RAW < 0.0:
+    _logger.warning(
+        "OMDB_HTTP_MIN_INTERVAL_SECONDS < 0; forcing to 0.0",
+        always=True,
+    )
+    OMDB_HTTP_MIN_INTERVAL_SECONDS: float = 0.0
+else:
+    OMDB_HTTP_MIN_INTERVAL_SECONDS = _OMDB_HTTP_MIN_INTERVAL_SECONDS_RAW
+
+############################################################
+# 🔎  BUSQUEDAS EN WIKI
+############################################################
+# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
+# WIKI_LANGUAGE=es
+WIKI_LANGUAGE: str = os.getenv("WIKI_LANGUAGE", "es")
+# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
+# WIKI_FALLBACK_LANGUAGE=en
+WIKI_FALLBACK_LANGUAGE: str = os.getenv("WIKI_FALLBACK_LANGUAGE", "en")
+# Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
+# WIKI_DEBUG=false
+WIKI_DEBUG: bool = _get_env_bool("WIKI_DEBUG", False)
+
 ############################################################
 # 🎬 1) Scoring bayesiano (regla principal)
 ############################################################
@@ -168,7 +267,7 @@ RATING_MIN_TITLES_FOR_AUTO: int = _get_env_int("RATING_MIN_TITLES_FOR_AUTO", 300
 
 # Formato: año_límite:votos-mínimos
 # Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
-# IMDB_VOTES_BY_YEAR=1980:500,2000:2000,2010:5000,9999:10000 
+# IMDB_VOTES_BY_YEAR=1980:500,2000:2000,2010:5000,9999:10000
 _IMDB_VOTES_BY_YEAR_RAW: str = os.getenv(
     "IMDB_VOTES_BY_YEAR",
     "1980:500,2000:2000,2010:5000,9999:10000",
@@ -176,9 +275,9 @@ _IMDB_VOTES_BY_YEAR_RAW: str = os.getenv(
 
 IMDB_VOTES_BY_YEAR: list[tuple[int, int]] = _parse_votes_by_year(_IMDB_VOTES_BY_YEAR_RAW)
 
-
 IMDB_KEEP_MIN_RATING: float = _get_env_float("IMDB_KEEP_MIN_RATING", 5.7)
 IMDB_DELETE_MAX_RATING: float = _get_env_float("IMDB_DELETE_MAX_RATING", 5.5)
+IMDB_KEEP_MIN_VOTES: int = _get_env_int("IMDB_KEEP_MIN_VOTES", 30000)
 
 ############################################################
 # 3) Misidentificación / títulos sospechosos
@@ -187,7 +286,6 @@ IMDB_DELETE_MAX_RATING: float = _get_env_float("IMDB_DELETE_MAX_RATING", 5.5)
 # Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
 # IMDB_RATING_LOW_THRESHOLD=3.0
 IMDB_RATING_LOW_THRESHOLD: float = _get_env_float("IMDB_RATING_LOW_THRESHOLD", 3.0)
-
 
 # Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
 # RT_RATING_LOW_THRESHOLD=20
@@ -200,7 +298,6 @@ RT_RATING_LOW_THRESHOLD: int = _get_env_int("RT_RATING_LOW_THRESHOLD", 20)
 # Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
 # IMDB_MIN_VOTES_FOR_KNOWN=100
 IMDB_MIN_VOTES_FOR_KNOWN: int = _get_env_int("IMDB_MIN_VOTES_FOR_KNOWN", 100)
-
 
 ############################################################
 # 5) 🧠 ROTTEN TOMATOES : PARÁMETROS DE CLASIFICACIÓN (el público manda)
@@ -226,10 +323,10 @@ RT_DELETE_MAX_SCORE: int = _get_env_int("RT_DELETE_MAX_SCORE", 50)
 # 6) 🧠 METACRITIC : (refuerzo secundario)
 ############################################################
 # Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
-#METACRITIC_KEEP_MIN_SCORE=70
+# METACRITIC_KEEP_MIN_SCORE=70
 METACRITIC_KEEP_MIN_SCORE: int = _get_env_int("METACRITIC_KEEP_MIN_SCORE", 70)
 # Podemos sacar esta variable a .evn para permitir cambio en configuración por usuario
-#METACRITIC_DELETE_MAX_SCORE=40
+# METACRITIC_DELETE_MAX_SCORE=40
 METACRITIC_DELETE_MAX_SCORE: int = _get_env_int("METACRITIC_DELETE_MAX_SCORE", 40)
 
 ############################################################
@@ -281,6 +378,14 @@ REPORT_FILTERED_PATH: Final[str] = os.path.join(REPORTS_DIR, REPORT_FILTERED_FIL
 METADATA_FIX_PATH: Final[str] = os.path.join(REPORTS_DIR, METADATA_FIX_FILENAME)
 
 ############################################################
+# ⚙️ MODO DE EJECUCIÓN
+############################################################
+# IMPORTANTE: se definen aquí para que el logger pueda consultarlos
+# durante la carga de config (por ejemplo en warnings de parseo).
+DEBUG_MODE: bool = _get_env_bool("DEBUG_MODE", False)
+SILENT_MODE: bool = _get_env_bool("SILENT_MODE", False)
+
+############################################################
 # VARIABLES PARA EL DASHBOARD
 # 🧹 BORRADO SEGURO
 ############################################################
@@ -324,6 +429,9 @@ _log_config_debug("DEBUG BASEURL", BASEURL)
 _log_config_debug("DEBUG PLEX_PORT", PLEX_PORT)
 _log_config_debug("DEBUG TOKEN", "****" if PLEX_TOKEN else None)
 _log_config_debug("DEBUG EXCLUDE_PLEX_LIBRARIES", EXCLUDE_PLEX_LIBRARIES)
+_log_config_debug("DEBUG PLEX_ANALYZE_WORKERS", PLEX_ANALYZE_WORKERS)
+_log_config_debug("DEBUG OMDB_HTTP_MAX_CONCURRENCY", OMDB_HTTP_MAX_CONCURRENCY)
+_log_config_debug("DEBUG OMDB_HTTP_MIN_INTERVAL_SECONDS", OMDB_HTTP_MIN_INTERVAL_SECONDS)
 _log_config_debug("DEBUG REPORTS_DIR", REPORTS_DIR)
 _log_config_debug("DEBUG REPORT_ALL_PATH", REPORT_ALL_PATH)
 _log_config_debug("DEBUG REPORT_FILTERED_PATH", REPORT_FILTERED_PATH)
