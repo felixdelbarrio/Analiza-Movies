@@ -179,7 +179,7 @@ IMDB_VOTES_BY_YEAR: list[tuple[int, int]] = _parse_votes_by_year(_IMDB_VOTES_BY_
 
 IMDB_KEEP_MIN_RATING: float = _get_env_float("IMDB_KEEP_MIN_RATING", 5.7)
 IMDB_DELETE_MAX_RATING: float = _get_env_float("IMDB_DELETE_MAX_RATING", 5.5)
-
+IMDB_KEEP_MIN_VOTES: int = _get_env_int("IMDB_KEEP_MIN_VOTES", 30000)
 ############################################################
 # 3) Misidentificación / títulos sospechosos
 ############################################################
