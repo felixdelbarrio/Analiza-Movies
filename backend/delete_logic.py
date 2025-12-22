@@ -1,9 +1,95 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+import os
+from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import Any
 
 from backend import logger as _logger
+from backend.config import (
+    DELETE_DRY_RUN,
+    DELETE_REQUIRE_CONFIRM,
+    REPORT_FILTERED_PATH,
+    SILENT_MODE,
+)
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+
+def _as_rows_iter(rows: object) -> Iterable[Mapping[str, Any]]:
+    """
+    Normaliza el input a un iterable de mappings.
+
+    Acepta:
+      - list[dict]
+      - iterable de dict-like
+      - pandas.DataFrame (si está disponible)
+    """
+    if rows is None:
+        return []
+
+    # Pandas DataFrame -> records
+    try:
+        import pandas as pd  # type: ignore[import-not-found]
+
+        if isinstance(rows, pd.DataFrame):
+            return rows.to_dict(orient="records")
+    except Exception:
+        pass
+
+    if isinstance(rows, Mapping):
+        return [rows]
+
+    if isinstance(rows, (list, tuple)):
+        return rows
+
+    if isinstance(rows, Iterable) and not isinstance(rows, (str, bytes)):
+        return rows  # type: ignore[return-value]
+
+    return []
+
+
+def _safe_path_from_row(row: Mapping[str, Any]) -> Path | None:
+    """
+    Extrae y normaliza la ruta del fichero desde una fila.
+
+    Espera columna:
+      - file (ruta)
+    """
+    raw = row.get("file")
+    if raw is None:
+        return None
+
+    s = str(raw).strip()
+    if not s:
+        return None
+
+    # Nota: En DLNA, "library/title.ext" NO será ruta real; eso se filtrará por exists().
+    try:
+        p = Path(s).expanduser()
+    except Exception:
+        return None
+
+    return p
+
+
+def _is_probably_safe_file(path: Path) -> bool:
+    """
+    Validación conservadora:
+    - Debe existir
+    - Debe ser fichero (no directorio)
+    """
+    try:
+        return path.exists() and path.is_file()
+    except Exception:
+        return False
+
+
+# ============================================================================
+# API principal usada por el dashboard
+# ============================================================================
 
 
 def delete_files_from_rows(
@@ -11,110 +97,187 @@ def delete_files_from_rows(
     delete_dry_run: bool,
 ) -> tuple[int, int, list[str]]:
     """
-    Borra físicamente archivos según las rutas de la columna 'file'.
+    Borra físicamente archivos según las filas seleccionadas.
 
-    Parámetros:
-      - rows: DataFrame con al menos columnas 'file' y 'title', o bien
-              cualquier iterable de objetos tipo dict/Series con esas claves.
-      - delete_dry_run:
-          * True  -> solo log, NO borra nada.
-          * False -> borra de verdad.
+    Input:
+      - rows: list[dict] / iterable dict-like / pandas.DataFrame
+      - delete_dry_run: si True, NO borra; solo simula.
 
-    Devuelve:
-      - num_ok: número de borrados correctos.
-      - num_error: número de errores al borrar.
-      - logs: lista de mensajes de log.
+    Output:
+      - (ok, err, logs)
+
+    Notas:
+    - Esta función NO pregunta confirmación (eso es responsabilidad del caller/UI).
+    - Filtra filas que no apunten a ficheros reales.
     """
-    num_ok = 0
-    num_error = 0
     logs: list[str] = []
+    ok = 0
+    err = 0
 
-    # Soportamos tanto pandas.DataFrame (rows.iterrows()) como un iterable genérico
-    iterator: Iterable[object] | None = None
+    it = _as_rows_iter(rows)
 
-    try:
-        import pandas as _pd  # import local para no requerir pandas al importar el módulo
+    for i, row_obj in enumerate(it, start=1):
+        if not isinstance(row_obj, Mapping):
+            err += 1
+            logs.append(f"[DELETE] row#{i}: formato inválido (no mapping): {type(row_obj)}")
+            continue
 
-        if isinstance(rows, _pd.DataFrame):
-            iterator = (row for _, row in rows.iterrows())
-    except Exception:
-        iterator = None
+        path = _safe_path_from_row(row_obj)
+        title = str(row_obj.get("title") or "").strip()
 
-    if iterator is None:
-        if isinstance(rows, Iterable):
-            iterator = rows
-        else:
-            # Coincide con el comportamiento previo: iter(rows) habría lanzado TypeError igualmente
-            raise TypeError("rows must be a pandas.DataFrame or an iterable of row-like objects")
+        if path is None:
+            err += 1
+            logs.append(f"[DELETE] row#{i}: sin 'file' válido (title={title!r})")
+            continue
 
-    for row in iterator:
-        # row puede ser una pandas.Series (tiene .get) o un dict-like
-        file_path: object | None
-        title: object | None
-
-        # file
+        # Resolver (sin obligar: algunos paths pueden ser relativos)
         try:
-            if hasattr(row, "get"):
-                file_path = row.get("file")  # type: ignore[call-arg]
-            else:
-                file_path = row["file"]  # type: ignore[index]
+            resolved = path.expanduser().resolve()
         except Exception:
-            file_path = None
+            resolved = path
 
-        # title
-        try:
-            if hasattr(row, "get"):
-                title = row.get("title")  # type: ignore[call-arg]
-            else:
-                # Puede fallar si row no soporta indexado por clave; lo capturamos abajo.
-                title = row["title"]  # type: ignore[index]
-        except Exception:
-            title = None
-
-        title_str = str(title) if title is not None else "<no title>"
-
-        if not file_path:
-            msg = f"[SKIP] {title_str} -> sin ruta de archivo"
-            _logger.info(msg)
-            logs.append(msg)
-            continue
-
-        try:
-            p = Path(str(file_path)).resolve()
-        except Exception as exc:
-            msg = f"[SKIP] {title_str} -> ruta inválida: {file_path} ({exc})"
-            _logger.warning(msg)
-            logs.append(msg)
-            continue
-
-        if not p.exists():
-            msg = f"[SKIP] {title_str} -> archivo no existe: {p}"
-            _logger.info(msg)
-            logs.append(msg)
-            continue
-
-        if not p.is_file():
-            msg = f"[SKIP] {title_str} -> no es un fichero: {p}"
-            _logger.warning(msg)
-            logs.append(msg)
+        if not _is_probably_safe_file(resolved):
+            # No lo contamos como error duro: normalmente serán filas DLNA o paths no montados.
+            logs.append(f"[DELETE] row#{i}: skip (no existe/no es fichero): {resolved} (title={title!r})")
             continue
 
         if delete_dry_run:
-            msg = f"[DRY RUN] {title_str} -> NO se borra: {p}"
-            _logger.info(msg)
-            logs.append(msg)
+            ok += 1
+            logs.append(f"[DELETE][DRY] would delete: {resolved} (title={title!r})")
             continue
 
         try:
-            p.unlink()
-            msg = f"[OK] BORRADO {title_str} -> {p}"
-            _logger.info(msg)
-            logs.append(msg)
-            num_ok += 1
+            os.remove(resolved)
+            ok += 1
+            logs.append(f"[DELETE] deleted: {resolved} (title={title!r})")
         except Exception as exc:
-            msg = f"[ERROR] {title_str}: {exc}"
-            _logger.error(msg)
-            logs.append(msg)
-            num_error += 1
+            err += 1
+            logs.append(f"[DELETE] ERROR deleting {resolved} (title={title!r}): {exc!r}")
 
-    return num_ok, num_error, logs
+    return ok, err, logs
+
+
+# ============================================================================
+# CLI helper (no dashboard): borrar desde report_filtered.csv
+# ============================================================================
+
+
+def _read_filtered_rows(csv_path: str) -> list[dict[str, Any]]:
+    """
+    Lee el CSV filtrado y devuelve lista de dicts.
+
+    - Intenta pandas si está disponible.
+    - Fallback a csv.DictReader si pandas no existe.
+    """
+    p = Path(csv_path)
+    if not p.exists():
+        return []
+
+    # 1) pandas (si existe)
+    try:
+        import pandas as pd  # type: ignore[import-not-found]
+
+        df = pd.read_csv(p, dtype=str, keep_default_na=False)
+        return df.to_dict(orient="records")
+    except Exception:
+        pass
+
+    # 2) fallback estándar
+    import csv
+
+    out: list[dict[str, Any]] = []
+    with p.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for r in reader:
+            out.append(dict(r))
+    return out
+
+
+def _normalize_rows_for_delete(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Reduce filas a claves mínimas:
+      - file
+      - title
+    """
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        out.append(
+            {
+                "file": r.get("file", ""),
+                "title": r.get("title", ""),
+            }
+        )
+    return out
+
+
+def _count_existing_files(rows: Iterable[dict[str, Any]]) -> int:
+    """
+    Cuenta cuántas filas apuntan a ficheros existentes.
+    """
+    n = 0
+    for r in rows:
+        raw = str(r.get("file") or "").strip()
+        if not raw:
+            continue
+        try:
+            p = Path(raw).expanduser().resolve()
+        except Exception:
+            continue
+        if _is_probably_safe_file(p):
+            n += 1
+    return n
+
+
+def run_delete_from_report_filtered(
+    *,
+    csv_path: str = REPORT_FILTERED_PATH,
+    delete_dry_run: bool | None = None,
+    require_confirm: bool | None = None,
+) -> None:
+    """
+    Ejecuta borrado (o dry-run) a partir del CSV filtrado.
+
+    - Prompt SIEMPRE visible (progress + input).
+    - Si no hay filas, informa y sale.
+    - delete_dry_run/require_confirm por defecto vienen de config.py.
+    """
+    dry = DELETE_DRY_RUN if delete_dry_run is None else bool(delete_dry_run)
+    confirm = DELETE_REQUIRE_CONFIRM if require_confirm is None else bool(require_confirm)
+
+    _logger.progress("[DELETE] Inicio")
+
+    rows_raw = _read_filtered_rows(csv_path)
+    if not rows_raw:
+        _logger.progress(f"[DELETE] No hay filas en '{csv_path}' (o no existe).")
+        return
+
+    rows = _normalize_rows_for_delete(rows_raw)
+    existing = _count_existing_files(rows)
+
+    mode = "DRY_RUN" if dry else "REAL_DELETE"
+    _logger.progress(f"[DELETE] Fuente: {csv_path}")
+    _logger.progress(f"[DELETE] Filas: {len(rows)} | ficheros existentes: {existing} | modo={mode}")
+
+    if existing == 0:
+        _logger.progress("[DELETE] Nada que borrar (no se detectan ficheros reales en disco).")
+        return
+
+    if confirm:
+        _logger.progress(
+            "[DELETE] Confirmación requerida.\n"
+            "  - Escribe 'DELETE' para continuar\n"
+            "  - Enter para cancelar"
+        )
+        ans = input("> ").strip()
+        if ans != "DELETE":
+            _logger.progress("[DELETE] Cancelado por el usuario.")
+            return
+
+    num_ok, num_err, logs = delete_files_from_rows(rows, delete_dry_run=dry)
+
+    # En SILENT_MODE evitamos spam
+    if not SILENT_MODE:
+        for line in logs:
+            _logger.info(line)
+
+    _logger.progress(f"[DELETE] Fin | ok={num_ok} err={num_err} dry_run={dry}")
