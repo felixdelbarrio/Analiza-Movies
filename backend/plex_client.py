@@ -1,29 +1,81 @@
 # backend/plex_client.py
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple
+"""
+backend/plex_client.py
 
-from plexapi.server import PlexServer
+Cliente ligero para Plex (plexapi) + helpers de extracción defensiva.
 
-from backend.config import BASEURL, PLEX_TOKEN, PLEX_PORT, EXCLUDE_PLEX_LIBRARIES
+Filosofía de logs (alineada con el proyecto):
+- SILENT_MODE=True:
+    * no spamear info normal
+    * solo avisos realmente relevantes con always=True
+    * si DEBUG_MODE=True, permitir señales pequeñas (progress)
+- SILENT_MODE=False:
+    * info normal para pasos visibles (conectar, saltar librerías, etc.)
+- Este módulo NO debe imprimir dumps grandes ni stacktraces; se deja al caller.
+
+Notas:
+- PlexServer y objetos de plexapi no tienen tipado estricto aquí; usamos object y
+  accesos via getattr defensivos.
+"""
+
+from collections.abc import Sequence
+from typing import cast
+
+from plexapi.server import PlexServer  # type: ignore[import-not-found]
+
 from backend import logger as _logger
+from backend.config import BASEURL, DEBUG_MODE, EXCLUDE_PLEX_LIBRARIES, PLEX_PORT, PLEX_TOKEN, SILENT_MODE
 
 
 # ============================================================
-#                  LOGGING CONTROLADO
+#                  LOGGING CONTROLADO POR MODOS
 # ============================================================
 
 
-def _log(msg: str) -> None:
-    """Logea vía logger central con fallback ligero.
-
-    Delegamos en el logger central; si por alguna razón fallara,
-    hacemos un print directo para no perder información.
+def _log(msg: object) -> None:
     """
+    Log normal:
+    - En SILENT_MODE, el logger central normalmente silencia info.
+    - Fallback a print solo si no estamos en silent.
+    """
+    text = str(msg)
     try:
-        _logger.info(msg)
+        _logger.info(text)
     except Exception:
-        print(msg)
+        if not SILENT_MODE:
+            print(text)
+
+
+def _log_always(msg: object) -> None:
+    """Log siempre visible incluso en SILENT_MODE (always=True)."""
+    text = str(msg)
+    try:
+        _logger.warning(text, always=True)
+    except Exception:
+        print(text)
+
+
+def _log_debug(msg: object) -> None:
+    """
+    Debug contextual:
+    - DEBUG_MODE=False: no hace nada
+    - DEBUG_MODE=True:
+        * SILENT_MODE=True: progress (señales mínimas)
+        * SILENT_MODE=False: info normal
+    """
+    if not DEBUG_MODE:
+        return
+    text = str(msg)
+    try:
+        if SILENT_MODE:
+            _logger.progress(f"[PLEX][DEBUG] {text}")
+        else:
+            _logger.info(f"[PLEX][DEBUG] {text}")
+    except Exception:
+        if not SILENT_MODE:
+            print(text)
 
 
 # ============================================================
@@ -33,59 +85,80 @@ def _log(msg: str) -> None:
 
 def _build_plex_base_url() -> str:
     """
-    Construye la URL base para Plex a partir de BASEURL (host sin puerto)
-    y PLEX_PORT.
+    Construye la URL base para Plex a partir de BASEURL (host sin puerto) y PLEX_PORT.
 
     Ejemplo:
         BASEURL = "http://192.168.1.10"
         PLEX_PORT = 32400
-        → "http://192.168.1.10:32400"
+        -> "http://192.168.1.10:32400"
     """
-    if not BASEURL:
+    if not BASEURL or not str(BASEURL).strip():
         raise RuntimeError("BASEURL no está definido en el entorno (.env)")
-
-    base = BASEURL.rstrip("/")  # por si viene con barra final
-    return f"{base}:{PLEX_PORT}"
+    base = str(BASEURL).rstrip("/")
+    return f"{base}:{int(PLEX_PORT)}"
 
 
 def connect_plex() -> PlexServer:
-    """Crea y devuelve una instancia de `PlexServer` usando la configuración.
+    """
+    Crea y devuelve una instancia de PlexServer usando la configuración.
 
-    Lanza RuntimeError si faltan variables de entorno o si la conexión falla.
+    Reglas:
+    - Si faltan BASEURL/PLEX_TOKEN -> RuntimeError (determinístico).
+    - Si falla la conexión -> se re-lanza la excepción para que el caller decida.
     """
     if not BASEURL or not PLEX_TOKEN:
         raise RuntimeError("Faltan BASEURL o PLEX_TOKEN en el .env")
 
     base_url = _build_plex_base_url()
-    _log(f"Conectando a Plex en {base_url} ...")
+
+    # En SILENT no queremos ruido, pero esta señal suele ser útil si DEBUG.
+    if DEBUG_MODE:
+        _log_debug(f"Connecting to Plex at {base_url}")
+
     try:
         plex = PlexServer(base_url, PLEX_TOKEN)
-    except Exception as e:
-        _log(f"ERROR conectando a Plex: {e}")
+    except Exception as exc:
+        _log_always(f"[PLEX] ERROR conectando a Plex ({base_url}): {exc!r}")
         raise
-    _log("Conectado a Plex.")
+
+    if not SILENT_MODE:
+        _log(f"[PLEX] Conectado a Plex: {base_url}")
+    else:
+        if DEBUG_MODE:
+            _log_debug("Connected")
+
     return plex
 
 
 def get_libraries_to_analyze(plex: PlexServer) -> list[object]:
-    """Devuelve la lista de bibliotecas de Plex a analizar.
+    """
+    Devuelve la lista de bibliotecas de Plex a analizar, excluyendo las de
+    EXCLUDE_PLEX_LIBRARIES.
 
-    Filtra aquellas cuyo título esté incluido en
-    `EXCLUDE_PLEX_LIBRARIES` definido en `backend.config`.
+    Nota:
+    - Devolvemos list[object] por tipado laxo de plexapi.
     """
     libraries: list[object] = []
+
     try:
         sections = plex.library.sections()
     except Exception as exc:  # pragma: no cover
-        _log(f"ERROR obteniendo secciones de Plex: {exc}")
+        _log_always(f"[PLEX] ERROR obteniendo secciones de Plex: {exc!r}")
         return libraries
 
     for section in sections:
-        name = getattr(section, "title", "") or ""
+        name_obj = getattr(section, "title", "")
+        name = name_obj if isinstance(name_obj, str) else ""
         if name in EXCLUDE_PLEX_LIBRARIES:
-            _log(f"Saltando biblioteca Plex excluida: {name}")
+            if not SILENT_MODE:
+                _log(f"[PLEX] Saltando biblioteca excluida: {name}")
+            else:
+                _log_debug(f"Skipping excluded library: {name}")
             continue
         libraries.append(section)
+
+    if DEBUG_MODE:
+        _log_debug(f"Libraries selected: {len(libraries)} (excluded={len(EXCLUDE_PLEX_LIBRARIES)})")
 
     return libraries
 
@@ -95,45 +168,51 @@ def get_libraries_to_analyze(plex: PlexServer) -> list[object]:
 # ============================================================
 
 
-def get_movie_file_info(movie: Any) -> Tuple[Optional[str], Optional[int]]:
-    """Devuelve (ruta_principal, tamaño_total_en_bytes) para una película de Plex.
+def get_movie_file_info(movie: object) -> tuple[str | None, int | None]:
+    """
+    Devuelve (ruta_principal, tamaño_total_en_bytes) para una película de Plex.
 
     Reglas:
-      - Si no hay media o parts válidos → (None, None).
+      - Si no hay media o parts válidos -> (None, None).
       - La ruta devuelta es el `file` del primer part válido encontrado.
       - El tamaño es la suma de los tamaños (`size`) de todos los parts válidos.
-
-    Es defensiva: si la estructura del objeto Plex cambia o faltan atributos,
-    devuelve (None, None) en lugar de lanzar excepción.
+      - Defensiva: nunca lanza; retorna (None, None) en caso de estructura rara.
     """
     try:
         media_seq = getattr(movie, "media", None)
-        if not media_seq:
+        if not isinstance(media_seq, Sequence) or not media_seq:
             return None, None
 
-        best_path: Optional[str] = None
+        best_path: str | None = None
         total_size: int = 0
+        size_seen: bool = False
 
         for media in media_seq:
             parts = getattr(media, "parts", None) or []
-            for part in parts:
-                file_path = getattr(part, "file", None)
-                size_attr = getattr(part, "size", None)
+            if not isinstance(parts, Sequence):
+                continue
 
-                if isinstance(file_path, str) and file_path and isinstance(size_attr, int):
-                    if best_path is None:
-                        best_path = file_path
-                    total_size += size_attr
+            for part in parts:
+                file_path_obj = getattr(part, "file", None)
+                size_obj = getattr(part, "size", None)
+
+                file_path = file_path_obj if isinstance(file_path_obj, str) and file_path_obj.strip() else None
+                size_val = size_obj if isinstance(size_obj, int) and size_obj > 0 else None
+
+                if file_path and best_path is None:
+                    best_path = file_path
+
+                if size_val is not None:
+                    total_size += size_val
+                    size_seen = True
 
         if best_path is None:
             return None, None
 
-        # Si por alguna razón total_size quedó en 0 (partes raras),
-        # mejor devolver None en size.
-        return best_path, total_size if total_size > 0 else None
+        return best_path, (total_size if (size_seen and total_size > 0) else None)
 
-    except Exception as e:
-        _log(f"ERROR obteniendo info de archivo para película Plex: {e}")
+    except Exception as exc:
+        _log_debug(f"get_movie_file_info failed: {exc!r}")
         return None, None
 
 
@@ -142,47 +221,48 @@ def get_movie_file_info(movie: Any) -> Tuple[Optional[str], Optional[int]]:
 # ============================================================
 
 
-def get_imdb_id_from_plex_guid(guid: str) -> Optional[str]:
-    """Intenta extraer un imdb_id (tt1234567) desde un guid de Plex.
+def get_imdb_id_from_plex_guid(guid: str) -> str | None:
+    """
+    Intenta extraer un imdb_id (tt1234567) desde un guid de Plex.
 
-    Ejemplos de guid típico:
+    Ejemplos:
         'com.plexapp.agents.imdb://tt0111161?lang=en'
         'com.plexapp.agents.themoviedb://12345?lang=en'
     """
-    if "imdb://" not in guid:
+    if not isinstance(guid, str) or "imdb://" not in guid:
         return None
 
     try:
         after = guid.split("imdb://", 1)[1]
-        imdb_id = after.split("?", 1)[0]
+        imdb_id = after.split("?", 1)[0].strip()
         return imdb_id or None
     except Exception:
         return None
 
 
-def get_imdb_id_from_movie(movie: Any) -> Optional[str]:
+def get_imdb_id_from_movie(movie: object) -> str | None:
     """
-    Intenta obtener un imdb_id (tt...) usando toda la información de Plex:
+    Intenta obtener un imdb_id (tt...) usando información de Plex:
 
-    1) Recorre movie.guids para buscar tt...
-    2) Si no encuentra nada, cae al guid principal (movie.guid).
+    1) Recorre movie.guids (si existe).
+    2) Fallback: guid principal (movie.guid).
     """
-    # 1) Revisar todos los GUIDs individuales
     try:
         guids = getattr(movie, "guids", None) or []
-        for g in guids:
-            gid = getattr(g, "id", None)
-            if isinstance(gid, str):
-                imdb_id = get_imdb_id_from_plex_guid(gid)
-                if imdb_id:
-                    return imdb_id
+        if isinstance(guids, Sequence):
+            for g in guids:
+                gid = getattr(g, "id", None)
+                if isinstance(gid, str):
+                    imdb_id = get_imdb_id_from_plex_guid(gid)
+                    if imdb_id:
+                        return imdb_id
     except Exception:
         pass
 
-    # 2) Fallback: guid principal
-    guid = getattr(movie, "guid", None)
-    if isinstance(guid, str):
-        return get_imdb_id_from_plex_guid(guid or "")
+    guid_main = getattr(movie, "guid", None)
+    if isinstance(guid_main, str):
+        return get_imdb_id_from_plex_guid(guid_main)
+
     return None
 
 
@@ -191,19 +271,19 @@ def get_imdb_id_from_movie(movie: Any) -> Optional[str]:
 # ============================================================
 
 
-def get_best_search_title(movie: Any) -> str:
-    """Devuelve el mejor título estimado para buscar en OMDb.
+def get_best_search_title(movie: object) -> str:
+    """
+    Devuelve el mejor título estimado para buscar en OMDb.
 
     Preferimos `originalTitle` si existe y no está vacío, luego `title`.
-    Siempre devolvemos una cadena (posiblemente vacía) para evitar
-    excepciones en código que llama a esta función.
+    Siempre devolvemos una cadena (posiblemente vacía).
     """
-    title = getattr(movie, "originalTitle", None)
-    if isinstance(title, str) and title.strip():
-        return title.strip()
+    title_obj = getattr(movie, "originalTitle", None)
+    if isinstance(title_obj, str) and title_obj.strip():
+        return title_obj.strip()
 
-    fallback = getattr(movie, "title", None)
-    if isinstance(fallback, str):
-        return fallback.strip()
+    fallback_obj = getattr(movie, "title", None)
+    if isinstance(fallback_obj, str):
+        return fallback_obj.strip()
 
     return ""
