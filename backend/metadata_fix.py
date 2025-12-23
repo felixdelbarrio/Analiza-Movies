@@ -5,153 +5,107 @@ backend/metadata_fix.py
 
 Generación de sugerencias de corrección de metadata (Plex) basadas en OMDb.
 
-Este módulo NO aplica cambios en Plex; solo construye una fila (row) que luego
-se exporta a CSV (metadata_fix.csv) para revisión/aplicación posterior.
+Este módulo **NO aplica cambios en Plex**. Solo construye una fila (row) que luego
+se exporta a CSV (metadata_fix.csv) para revisión / aplicación posterior.
 
-Regla de idioma (importante):
-- Si el contexto es Español (ES), evitamos sugerir cambio de título cuando:
-    * el título ACTUAL parece español, y
-    * OMDb propone un título distinto (normalmente en inglés).
-  Motivo: muchos catálogos en ES prefieren mantener el título localizado.
-- Si el título actual ya parece inglés (aunque el contexto sea ES),
-  permitimos sugerir new_title para corregir normalizaciones raras / inconsistencias.
-- El cambio de año (new_year) se sugiere siempre que difiera (si ambos son parseables).
+✅ Mejora aplicada: “consumiendo helpers centralizados”
+------------------------------------------------------
+Este módulo NO implementa heurísticas de idioma por su cuenta.
+Consume helpers centralizados en movie_input.py:
 
-Filosofía de logs (alineada con backend/logger.py):
-- SILENT_MODE=True:
-    - No se emite ruido normal (info/warn).
-    - En DEBUG_MODE=True se permiten trazas mínimas y útiles (progress).
-- SILENT_MODE=False:
-    - info/warn/error visibles de forma normal.
-    - DEBUG_MODE=True añade mensajes de diagnóstico (info con prefijo).
+- normalize_title_for_lookup(...)
+- detect_context_language_code(...)
+- should_skip_new_title_suggestion(...)
+
+Con esto:
+- Evitamos duplicación.
+- Mantenemos una política consistente en todo el proyecto.
+- La regla multi-idioma está en un único sitio.
+
+🪵 Logs 100% alineados con backend/logger.py
+-------------------------------------------
+- No hacemos “policy propia” ni introspección de backend.config.
+- Usamos el logger central:
+    - _logger.debug_ctx("METADATA", ...) para debug contextual.
+    - _logger.info / _logger.warning / _logger.error cuando procede.
+- Si DEBUG_MODE es False, debug_ctx ya será no-op (según vuestra implementación).
+- En SILENT_MODE el logger central ya decide qué imprimir.
+
+Tipado
+------
+- Sin Any explícito.
+- Salida: dict[str, object] listo para CSV, o None si no hay sugerencias.
 """
 
 import json
 from collections.abc import Mapping
 
 from backend import logger as _logger
-from backend.movie_input import MovieInput, normalize_title_for_lookup
-from backend.movie_input import guess_spanish_from_title_or_path
-
-
-# ============================================================================
-# Logging controlado por modos (sin forzar imports circulares)
-# ============================================================================
-
-def _safe_get_cfg():
-    """Devuelve backend.config si ya está importado (evita dependencias circulares)."""
-    import sys
-    return sys.modules.get("backend.config")
-
-
-def _is_silent_mode() -> bool:
-    cfg = _safe_get_cfg()
-    if cfg is None:
-        return False
-    try:
-        return bool(getattr(cfg, "SILENT_MODE", False))
-    except Exception:
-        return False
-
-
-def _is_debug_mode() -> bool:
-    cfg = _safe_get_cfg()
-    if cfg is None:
-        return False
-    try:
-        return bool(getattr(cfg, "DEBUG_MODE", False))
-    except Exception:
-        return False
-
-
-def _log_info(msg: str) -> None:
-    """Info normal: respetando SILENT_MODE."""
-    if _is_silent_mode():
-        return
-    try:
-        _logger.info(msg)
-    except Exception:
-        print(msg)
-
-
-def _log_warning(msg: str) -> None:
-    """Warning normal: respetando SILENT_MODE."""
-    if _is_silent_mode():
-        return
-    try:
-        _logger.warning(msg)
-    except Exception:
-        print(msg)
-
-
-def _log_error(msg: str) -> None:
-    """Error: en tu logger suele ser siempre visible, pero aquí no forzamos always."""
-    try:
-        _logger.error(msg)
-    except Exception:
-        print(msg)
-
-
-def _log_debug(msg: str) -> None:
-    """
-    Debug contextual:
-    - DEBUG_MODE=False → no hace nada.
-    - DEBUG_MODE=True:
-        * SILENT_MODE=True: progress (señales mínimas).
-        * SILENT_MODE=False: info normal.
-    """
-    if not _is_debug_mode():
-        return
-
-    text = str(msg)
-    try:
-        if _is_silent_mode():
-            _logger.progress(f"[METADATA][DEBUG] {text}")
-        else:
-            _logger.info(f"[METADATA][DEBUG] {text}")
-    except Exception:
-        if not _is_silent_mode():
-            print(text)
-
+from backend.movie_input import (
+    MovieInput,
+    detect_context_language_code,
+    normalize_title_for_lookup,
+    should_skip_new_title_suggestion,
+)
 
 # ============================================================================
-# Helpers
+# Helpers defensivos
 # ============================================================================
+
 
 def _normalize_year(year: object | None) -> int | None:
     """
     Normaliza un año posible (int/str) a int o None.
+
+    OMDb Year puede venir como:
+      - "1994"
+      - "1994–1998"
+      - "N/A"
+
+    Aceptamos rango razonable para cine (1800..2200) por robustez.
     """
     if year is None:
         return None
+
     try:
-        return int(str(year).strip())
-    except (TypeError, ValueError):
+        s = str(year).strip()
+    except Exception:
+        return None
+
+    if not s or s.upper() == "N/A":
+        return None
+
+    # "1994–1998" / "1994-1998" -> 1994
+    if len(s) >= 4 and s[:4].isdigit():
+        y = int(s[:4])
+        return y if 1800 <= y <= 2200 else None
+
+    # fallback: entero completo
+    try:
+        y2 = int(s)
+        return y2 if 1800 <= y2 <= 2200 else None
+    except Exception:
         return None
 
 
-def _is_spanish_context(movie_input: MovieInput) -> bool:
+def _get_display_title_year(movie_input: MovieInput) -> tuple[str, object | None]:
     """
-    Determina si el contexto del item sugiere "catálogo en Español".
-
-    Prioridad:
-    1) Plex: movie_input.extra["library_language"] (si existe).
-    2) Heurística por título/path (DLNA/local/otros).
-
-    Returns:
-        True si el contexto parece ES, False en caso contrario.
+    En Plex queremos comparar contra lo que “ve el usuario”:
+    - extra.display_title / extra.display_year si están
+    - si no, movie_input.title / movie_input.year
     """
-    lang = movie_input.extra.get("library_language")
-    if isinstance(lang, str) and lang.strip():
-        l = lang.strip().lower()
-        return bool(l.startswith("es") or l.startswith("spa"))
+    dt = movie_input.extra.get("display_title")
+    dy = movie_input.extra.get("display_year")
 
-    return guess_spanish_from_title_or_path(movie_input.title, movie_input.file_path)
+    title = dt if isinstance(dt, str) and dt.strip() else (movie_input.title or "")
+    year_obj: object | None = dy if dy is not None else movie_input.year
+    return title, year_obj
 
 
 # ============================================================================
 # API pública
 # ============================================================================
+
 
 def generate_metadata_suggestions_row(
     movie_input: MovieInput,
@@ -160,11 +114,9 @@ def generate_metadata_suggestions_row(
     """
     Genera una fila de sugerencias de metadata para Plex.
 
-    Regla:
-      - En contexto ES:
-          * si el título actual parece español, NO sugerimos new_title
-            aunque OMDb difiera.
-          * si el título actual ya parece inglés, sí permitimos sugerir new_title.
+    Reglas:
+      - new_title se sugiere si difiere, salvo bloqueo por política multi-idioma:
+          should_skip_new_title_suggestion(...)
       - new_year se sugiere si difiere y ambos años son válidos.
 
     Args:
@@ -177,58 +129,53 @@ def generate_metadata_suggestions_row(
     if not omdb_data:
         return None
 
-    # En Plex queremos comparar contra lo que ve el usuario:
-    plex_title = movie_input.extra.get("display_title") or movie_input.title
-    plex_year = movie_input.extra.get("display_year") or movie_input.year
-
-    plex_title_str = plex_title if isinstance(plex_title, str) else movie_input.title
-    plex_year_val = plex_year if isinstance(plex_year, int) else movie_input.year
-
+    plex_title, plex_year_obj = _get_display_title_year(movie_input)
     library = movie_input.library
     plex_guid = movie_input.plex_guid
 
     omdb_title_obj = omdb_data.get("Title")
     omdb_year_obj = omdb_data.get("Year")
 
-    omdb_title = omdb_title_obj if isinstance(omdb_title_obj, str) else None
+    omdb_title = omdb_title_obj if isinstance(omdb_title_obj, str) else ""
 
-    # Normalización para comparar "equivalencia" (sin tildes/puntuación/espacios raros)
-    n_plex_title = normalize_title_for_lookup(plex_title_str) if plex_title_str else ""
+    # Normalización para comparar equivalencia (misma convención del proyecto)
+    n_plex_title = normalize_title_for_lookup(plex_title) if plex_title else ""
     n_omdb_title = normalize_title_for_lookup(omdb_title) if omdb_title else ""
 
-    n_plex_year = _normalize_year(plex_year_val)
+    n_plex_year = _normalize_year(plex_year_obj)
     n_omdb_year = _normalize_year(omdb_year_obj)
 
     title_diff = bool(n_plex_title and n_omdb_title and n_plex_title != n_omdb_title)
-    year_diff = (
-        n_plex_year is not None
-        and n_omdb_year is not None
-        and n_plex_year != n_omdb_year
-    )
+    year_diff = bool(n_plex_year is not None and n_omdb_year is not None and n_plex_year != n_omdb_year)
 
     if not title_diff and not year_diff:
         return None
 
-    # Regla idioma (fina)
-    # En contexto ES, bloqueamos new_title solo si el título actual parece español.
-    if _is_spanish_context(movie_input) and title_diff and omdb_title:
-        title_current = plex_title_str or ""
-        if guess_spanish_from_title_or_path(title_current, movie_input.file_path):
-            _log_debug(
-                "Skip new_title suggestion (ES context + ES title) | "
-                f"{library} / {plex_title_str!r} -> {omdb_title!r}"
+    # Política multi-idioma: NO sugerimos "des-localizar" títulos por accidente.
+    if title_diff and omdb_title:
+        ctx_lang = detect_context_language_code(movie_input)
+        if should_skip_new_title_suggestion(
+            context_lang=ctx_lang,
+            current_title=plex_title,
+            omdb_title=omdb_title,
+        ):
+            _logger.debug_ctx(
+                "METADATA",
+                "Skip new_title suggestion (localized context/title vs OMDb) | "
+                f"ctx_lang={ctx_lang} | {library} / {plex_title!r} -> {omdb_title!r}",
             )
             title_diff = False
 
     suggestions: dict[str, object] = {}
-    if title_diff and omdb_title is not None:
+    if title_diff and omdb_title:
         suggestions["new_title"] = omdb_title
-    if year_diff:
+    if year_diff and n_omdb_year is not None:
         suggestions["new_year"] = n_omdb_year
 
     if not suggestions:
         return None
 
+    # Acción humana para CSV
     if "new_title" in suggestions and "new_year" in suggestions:
         action = "Fix title & year"
     elif "new_title" in suggestions:
@@ -239,13 +186,13 @@ def generate_metadata_suggestions_row(
     row: dict[str, object] = {
         "plex_guid": plex_guid,
         "library": library,
-        "plex_title": plex_title_str,
-        "plex_year": plex_year_val,
+        "plex_title": plex_title,
+        "plex_year": plex_year_obj,  # valor original (humano)
         "omdb_title": omdb_title_obj,
         "omdb_year": omdb_year_obj,
         "action": action,
         "suggestions_json": json.dumps(suggestions, ensure_ascii=False, separators=(",", ":")),
     }
 
-    _log_debug(f"Generated metadata suggestion | {library} / {plex_title_str}: {suggestions}")
+    _logger.debug_ctx("METADATA", f"Generated metadata suggestion | {library} / {plex_title}: {suggestions}")
     return row

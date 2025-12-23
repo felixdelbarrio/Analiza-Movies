@@ -1,33 +1,41 @@
 from __future__ import annotations
 
 """
-analiza.py
+backend/analiza.py
 
-Punto de entrada unificado para análisis de películas.
+Punto de entrada unificado (CLI) para análisis de películas.
 
-Este módulo es “UI/CLI” puro: menús, selección de origen y arranque de orquestadores.
-No debe hacer trabajo pesado de red/IO salvo el “discover” de DLNA cuando el usuario
-elige esa ruta. 
+Este módulo es “UI/CLI puro”:
+- Presenta menús y recoge inputs del usuario.
+- Decide el origen (Plex o DLNA).
+- En ruta DLNA: hace *discover* y selección de servidor (interacción).
+- Arranca los orquestadores (Plex/DLNA), que ya gestionan:
+    * concurrencia
+    * progreso por item
+    * escritura de CSVs
+    * resumen final
 
-Reglas de consola (alineadas con backend/logger.py):
-- Menús y prompts deben ser visibles SIEMPRE (interacción):
-    * usar _logger.info(..., always=True) para texto de menú y errores de input
+Reglas de consola (alineado con backend/logger.py)
+-------------------------------------------------
+- Menús, prompts y validación de input: SIEMPRE visibles
+    -> usar logger.info(..., always=True)
+- Estado global (inicio / modo / fin) sin “spam”:
+    -> usar logger.progress(...)
+- Debug contextual:
+    -> usar logger.debug_ctx("ANALYZE", "...") (ya respeta DEBUG_MODE/SILENT_MODE)
+
+Comportamiento en modos
+-----------------------
 - SILENT_MODE=True:
-    * minimizar texto no esencial
-    * usar _logger.progress(...) como “señal de estado” (inicio, modo, fin)
-    * listados DLNA minimalistas (solo nombre); detalles solo si DEBUG_MODE
+    * prompts minimalistas
+    * listados DLNA cortos (solo nombre) salvo DEBUG_MODE
 - DEBUG_MODE=True:
-    * contexto extra útil sin saturar (p.ej. nº de dispositivos detectados)
-    * para debug contextual, preferir _logger.debug_ctx("ANALYZE", "...") si existe
-
-Notas:
-- `analyze_all_libraries()` y `analyze_dlna_server()` ya gestionan su propio progreso
-  y reportes finales. Aquí solo los invocamos y mostramos el “marco” (inicio/fin).
+    * señales extra útiles (p.ej. nº de dispositivos DLNA detectados)
 """
 
 from typing import Literal
 
-from backend import logger as _logger
+from backend import logger as logger
 from backend.analiza_dlna import analyze_dlna_server
 from backend.analiza_plex import analyze_all_libraries
 from backend.config import DEBUG_MODE, SILENT_MODE
@@ -36,13 +44,18 @@ from backend.dlna_discovery import DLNADevice, discover_dlna_devices
 Choice = Literal["1", "2"]
 
 
+# ============================================================================
+# Menús / Input handling
+# ============================================================================
+
 def _ask_source() -> Choice:
     """
-    Pregunta al usuario el origen de datos a analizar.
+    Pregunta al usuario el origen a analizar.
 
     Reglas:
-    - Debe ser visible siempre (es un prompt).
-    - SILENT_MODE=True: prompt minimalista.
+    - Visible siempre: es interacción.
+    - Validación defensiva: solo acepta "1" o "2".
+    - SILENT_MODE: prompt compacto.
     """
     if SILENT_MODE:
         prompt = "1) Plex\n2) DLNA\n> "
@@ -59,111 +72,109 @@ def _ask_source() -> Choice:
         if answer in ("1", "2"):
             return answer  # type: ignore[return-value]
 
-        # Mensaje visible siempre, independientemente de SILENT_MODE.
-        if SILENT_MODE:
-            _logger.info("Opción no válida (usa 1 ó 2).", always=True)
-        else:
-            _logger.info("Opción no válida. Introduce 1 ó 2.", always=True)
+        # Siempre visible (aunque SILENT_MODE=True)
+        logger.info("Opción no válida (usa 1 ó 2).", always=True)
+
+
+def _format_device_line(dev: DLNADevice) -> str:
+    """
+    Formatea una línea para el listado de dispositivos DLNA.
+
+    - SILENT_MODE: solo nombre (lista minimalista)
+    - No SILENT: nombre + host:port
+    """
+    if SILENT_MODE:
+        return dev.friendly_name
+    return f"{dev.friendly_name} ({dev.host}:{dev.port})"
 
 
 def _select_dlna_device() -> DLNADevice | None:
     """
-    Descubre servidores DLNA/UPnP en la red, los lista y permite seleccionar uno.
+    Descubre servidores DLNA/UPnP en la red y permite seleccionar uno.
 
-    Reglas:
-    - Listado/prompt visible SIEMPRE (interacción).
-    - SILENT_MODE=True:
-        * textos más cortos
-        * lista minimalista: idx) friendly_name
-        * host/port y LOCATION solo en DEBUG_MODE
+    UX / logging:
+    - Texto de interacción siempre visible.
+    - SILENT_MODE: listado minimalista; detalles solo si DEBUG_MODE.
+    - Al cancelar (Enter), devuelve None.
     """
-    if SILENT_MODE:
-        _logger.info("\nBuscando servidores DLNA/UPnP...\n", always=True)
-    else:
-        _logger.info("\nBuscando servidores DLNA/UPnP en la red...\n", always=True)
+    logger.info("\nBuscando servidores DLNA/UPnP...\n", always=True)
 
     devices = discover_dlna_devices()
 
     if not devices:
-        _logger.info("No se han encontrado servidores DLNA/UPnP.", always=True)
+        logger.info("No se han encontrado servidores DLNA/UPnP.", always=True)
         return None
 
     if SILENT_MODE and DEBUG_MODE:
-        _logger.progress(f"[DLNA][DEBUG] Dispositivos detectados: {len(devices)}")
+        logger.progress(f"[DLNA][DEBUG] Dispositivos detectados: {len(devices)}")
 
-    _logger.info("Servidores DLNA/UPnP encontrados:\n", always=True)
+    logger.info("Servidores DLNA/UPnP encontrados:\n", always=True)
     for idx, dev in enumerate(devices, start=1):
-        if SILENT_MODE:
-            _logger.info(f"  {idx}) {dev.friendly_name}", always=True)
-            if DEBUG_MODE:
-                _logger.info(f"      {dev.host}:{dev.port}", always=True)
-                _logger.info(f"      LOCATION: {dev.location}", always=True)
-        else:
-            _logger.info(f"  {idx}) {dev.friendly_name} ({dev.host}:{dev.port})", always=True)
-            _logger.info(f"      LOCATION: {dev.location}", always=True)
+        logger.info(f"  {idx}) {_format_device_line(dev)}", always=True)
+        if DEBUG_MODE:
+            # Contexto adicional solo en debug (útil para diagnosticar)
+            if SILENT_MODE:
+                logger.info(f"      {dev.host}:{dev.port}", always=True)
+            logger.info(f"      LOCATION: {dev.location}", always=True)
 
     while True:
         raw = input(f"\nServidor (1-{len(devices)}) o Enter cancela: ").strip()
 
         if raw == "":
-            _logger.info("Cancelado.", always=True)
+            logger.info("Cancelado.", always=True)
             return None
 
         if raw.isdigit():
             num = int(raw)
             if 1 <= num <= len(devices):
                 chosen = devices[num - 1]
-                if SILENT_MODE:
-                    _logger.info(f"OK: {chosen.friendly_name}\n", always=True)
-                    if DEBUG_MODE:
-                        _logger.info(f"    {chosen.host}:{chosen.port}", always=True)
-                        _logger.info(f"    LOCATION: {chosen.location}\n", always=True)
-                else:
-                    _logger.info(
-                        f"OK: {chosen.friendly_name} ({chosen.host}:{chosen.port})\n",
-                        always=True,
-                    )
+                logger.info(f"OK: {chosen.friendly_name}", always=True)
+                if DEBUG_MODE:
+                    logger.info(f"    {chosen.host}:{chosen.port}", always=True)
+                    logger.info(f"    LOCATION: {chosen.location}", always=True)
+                logger.info("", always=True)
                 return chosen
 
-        _logger.info(f"Opción no válida (1-{len(devices)} o Enter).", always=True)
+        logger.info(f"Opción no válida (1-{len(devices)} o Enter).", always=True)
 
+
+# ============================================================================
+# Entry-point
+# ============================================================================
 
 def main() -> None:
     """
-    Punto de entrada principal.
+    Entry-point principal.
 
     Responsabilidades:
-    - Mostrar “marco” de ejecución (inicio, modo, fin).
-    - En DLNA, descubrir/seleccionar servidor antes de analizar.
-
-    Consola:
-    - progress() para estado (siempre visible, sin timestamps).
-    - info(always=True) para interacción (menús/errores/prompt context).
+    - Mostrar marco global (inicio / modo / fin).
+    - Encapsular la UX (menú + selección DLNA).
+    - Invocar orquestadores que realizan el trabajo pesado.
     """
-    _logger.progress("[AnalizaMovies] Inicio")
+    logger.progress("[AnalizaMovies] Inicio")
 
+    # Contexto de modo (compacto)
     if SILENT_MODE:
-        if DEBUG_MODE:
-            _logger.progress("[AnalizaMovies][DEBUG] SILENT_MODE=True DEBUG_MODE=True")
-        else:
-            _logger.progress("[AnalizaMovies] SILENT_MODE=True")
+        logger.progress("[AnalizaMovies] SILENT_MODE=True" + (" DEBUG_MODE=True" if DEBUG_MODE else ""))
+    elif DEBUG_MODE:
+        logger.debug_ctx("ANALYZE", "SILENT_MODE=False DEBUG_MODE=True")
 
     choice = _ask_source()
 
     if choice == "1":
-        _logger.progress("[AnalizaMovies] Modo: Plex")
+        logger.progress("[AnalizaMovies] Modo: Plex")
         analyze_all_libraries()
-        _logger.progress("[AnalizaMovies] Fin (Plex)")
+        logger.progress("[AnalizaMovies] Fin (Plex)")
         return
 
-    _logger.progress("[AnalizaMovies] Modo: DLNA")
+    logger.progress("[AnalizaMovies] Modo: DLNA")
     device = _select_dlna_device()
     if device is None:
-        _logger.progress("[AnalizaMovies] Fin (DLNA cancelado)")
+        logger.progress("[AnalizaMovies] Fin (DLNA cancelado)")
         return
 
     analyze_dlna_server(device)
-    _logger.progress("[AnalizaMovies] Fin (DLNA)")
+    logger.progress("[AnalizaMovies] Fin (DLNA)")
 
 
 if __name__ == "__main__":

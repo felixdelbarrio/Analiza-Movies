@@ -3,62 +3,68 @@ from __future__ import annotations
 """
 backend/analyze_input_core.py
 
-Core genérico de análisis para una película, independiente del origen
+Core genérico de análisis para una película (MovieInput), independiente del origen
 (Plex, DLNA, fichero local, etc.).
 
-Qué hace (flow):
-1) Obtiene datos OMDb mediante una función inyectada (`fetch_omdb`).
-2) Extrae señales normalizadas (IMDb rating/votes, RottenTomatoes score) desde el
-   payload OMDb con `extract_ratings_from_omdb`.
-3) Calcula la decisión KEEP/MAYBE/DELETE/UNKNOWN mediante `scoring.compute_scoring`
-   y captura el score bayesiano (`imdb_bayes`) si está disponible.
-4) Ejecuta `decision_logic.detect_misidentified` para producir un
-   `misidentified_hint` cuando hay sospechas de identificación incorrecta.
+Principios de diseño
+--------------------
+Este módulo está diseñado para ser:
+- Puro y testeable:
+    * No hace IO de disco.
+    * No hace red directamente (inyecta fetch_omdb).
+    * No escribe caches.
+    * No hace logging por defecto (solo trazas si se inyecta callback).
+- Defensivo:
+    * Nunca debe lanzar por un problema de instrumentación, parseo o scoring.
+    * Normaliza decisiones y reason.
+- Performante:
+    * “Lazy OMDb” en 2 fases para evitar llamadas innecesarias.
 
-Principios de diseño:
-- Pureza / testabilidad:
-  - No hace I/O de ficheros.
-  - No hace llamadas de red directamente.
-  - No escribe en caches ni en disco.
-  - No hace logging “por defecto”.
-- Robustez:
-  - Cualquier fallo en OMDb / ratings / scoring / misidentified se degrada a un
-    resultado razonable (UNKNOWN) y el core NO rompe el pipeline.
-  - La instrumentación nunca puede romper el análisis.
-- Instrumentación opcional:
-  - Permite inyectar `analysis_trace` (callback) para que capas superiores registren
-    trazas en modo DEBUG, sin acoplar este core a backend.logger.
+Lazy OMDb (2 fases)
+-------------------
+Fase A (barata):
+- Calcula scoring SIN ratings (IMDB/RT/votes None).
+- Si la decisión es fuerte (KEEP/DELETE) se evita OMDb.
 
-Filosofía de logs (alineada con lo trabajado):
-- El core no conoce SILENT_MODE/DEBUG_MODE: solo emite trazas si le inyectan
-  un callback.
-- Las trazas se mantienen pequeñas:
-  - truncadas
-  - sin dumps de JSON
-  - sin “reason” completo si es largo
+Fase B (cara):
+- Solo si la decisión es MAYBE/UNKNOWN:
+    * llama a fetch_omdb(title, year)
+    * extrae ratings
+    * recalcula scoring con señales reales
+    * si hay OMDb, ejecuta detect_misidentified()
 
-Este módulo devuelve un `AnalysisRow` (TypedDict) con campos mínimos.
-Capas superiores (p.ej. collection_analysis.py) enriquecen esa fila con:
-- file_url, poster_url, trailer_url, omdb_json, wikidata_id, etc.
+Instrumentación / trazas
+------------------------
+- El core no conoce DEBUG_MODE/SILENT_MODE.
+- Si se pasa analysis_trace(line), emitimos trazas cortas (truncadas).
+- Las trazas nunca rompen el análisis (try/except).
+
+Salida
+------
+Devuelve un AnalysisRow (dict minimalista). Capas superiores enriquecen:
+- poster_url, trailer_url, omdb_json, wiki ids, etc.
 """
 
 from collections.abc import Callable, Mapping
-from typing import TypedDict
+from typing import Final, TypedDict
 
 from backend.decision_logic import detect_misidentified
 from backend.movie_input import MovieInput
 from backend.omdb_client import extract_ratings_from_omdb
 from backend.scoring import compute_scoring
 
+# ============================================================================
+# Tipos públicos
+# ============================================================================
+
 
 class AnalysisRow(TypedDict, total=False):
     """
-    Contrato de salida mínimo del core genérico.
+    Contrato de salida mínimo del core.
 
     NOTA:
-    - Este dict se considera “base row”.
-    - Los orquestadores (Plex/DLNA/colección) pueden sobrescribir campos como
-      title/year/file si quieren mostrar el “display_title” del origen, etc.
+    - Es “base row”. Capas superiores pueden sobrescribir title/year/file
+      para representar mejor el “display” (p.ej. título real de Plex).
     """
 
     # Identidad básica
@@ -72,54 +78,144 @@ class AnalysisRow(TypedDict, total=False):
     imdb_bayes: float | None  # puntuación bayesiana final (exportable)
     rt_score: int | None
     imdb_votes: int | None
-    plex_rating: float | None  # puede venir inyectado desde capas Plex
+    plex_rating: float | None
 
     # Resultado
     decision: str
     reason: str
     misidentified_hint: str
 
-    # Archivo (friendly path) y tamaño (si se conoce)
+    # Archivo y tamaño
     file: str
     file_size_bytes: int | None
 
     # Pista de imdb_id (si el origen lo trae)
     imdb_id_hint: str
 
+    # Meta opcional (útil para debugging aguas arriba; no rompe compatibilidad)
+    used_omdb: bool
+    omdb_keys_count: int
 
-# Función inyectada para consultar OMDb (normalmente cacheada en omdb_client)
+
+# Callable inyectada para consultar OMDb (normalmente cacheada + throttling).
 FetchOmdbCallable = Callable[[str, int | None], Mapping[str, object]]
 
-# Callback opcional de trazas (instrumentación).
-# Diseñado para que collection_analysis lo conecte a su _append_log/_log_debug con caps.
+# Callback opcional de trazas (core -> orquestador -> logger.debug_ctx/progress).
 TraceCallable = Callable[[str], None]
 
-# Decisiones válidas esperadas por el resto del pipeline
-_VALID_DECISIONS: set[str] = {"KEEP", "MAYBE", "DELETE", "UNKNOWN"}
+# ============================================================================
+# Constantes internas (truncado y normalización)
+# ============================================================================
+
+_VALID_DECISIONS: Final[set[str]] = {"KEEP", "MAYBE", "DELETE", "UNKNOWN"}
+
+_TRACE_LINE_MAX_CHARS: Final[int] = 220
+_TRACE_REASON_MAX_CHARS: Final[int] = 140
+
+# Para no “ensuciar” reason con strings enormes o payloads inesperados.
+_REASON_FALLBACK: Final[str] = "scoring did not provide a usable reason"
 
 
-# ---------------------------------------------------------------------------
-# Helpers internos (sin dependencias externas, defensivos)
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Helpers defensivos
+# ============================================================================
 
-_TRACE_LINE_MAX_CHARS: int = 220
-_TRACE_REASON_MAX_CHARS: int = 120
-
-
-def _clip(s: str, max_len: int) -> str:
-    """Trunca strings para evitar trazas enormes (títulos raros, errores gigantes, etc.)."""
-    if len(s) <= max_len:
-        return s
-    return s[: max(0, max_len - 12)] + " …(truncated)"
+def _clip(text: str, *, max_len: int) -> str:
+    """Trunca un string a un tamaño máximo (con sentinel)."""
+    if len(text) <= max_len:
+        return text
+    return text[: max(0, max_len - 12)] + " …(truncated)"
 
 
-def _safe_short(value: object, *, max_len: int = _TRACE_LINE_MAX_CHARS) -> str:
-    """Convierte a string corto y seguro para trazas (sin JSONs grandes)."""
+def _safe_str(value: object, *, max_len: int) -> str:
+    """Convierte a string de forma defensiva y truncada."""
     try:
         return _clip(str(value), max_len=max_len)
     except Exception:
         return "<unprintable>"
 
+
+def _normalize_decision(decision_raw: object) -> str:
+    """Normaliza la decisión a {KEEP,MAYBE,DELETE,UNKNOWN}."""
+    if decision_raw is None:
+        return "UNKNOWN"
+    cand = str(decision_raw).strip().upper()
+    return cand if cand in _VALID_DECISIONS else "UNKNOWN"
+
+
+def _extract_bayes_from_scoring(scoring: Mapping[str, object]) -> float | None:
+    """
+    Extrae el score bayesiano desde el dict de scoring.
+
+    Convención actual:
+        scoring["inputs"]["score_bayes"]
+    """
+    inputs = scoring.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return None
+    sb = inputs.get("score_bayes")
+    if isinstance(sb, (int, float)):
+        return float(sb)
+    return None
+
+
+def _compute_scoring_safe(
+    *,
+    imdb_rating: float | None,
+    imdb_votes: int | None,
+    rt_score: int | None,
+    year: int | None,
+    metacritic_score: int | None,
+    trace: Callable[[str], None],
+) -> tuple[str, str, float | None]:
+    """
+    Ejecuta compute_scoring de forma defensiva.
+
+    Returns:
+        (decision, reason, imdb_bayes)
+    """
+    try:
+        scoring = compute_scoring(
+            imdb_rating=imdb_rating,
+            imdb_votes=imdb_votes,
+            rt_score=rt_score,
+            year=year,
+            metacritic_score=metacritic_score,
+        )
+
+        if not isinstance(scoring, Mapping):
+            trace("scoring fail | compute_scoring returned non-mapping -> UNKNOWN")
+            return "UNKNOWN", "compute_scoring returned non-mapping", None
+
+        decision = _normalize_decision(scoring.get("decision"))
+
+        reason_raw = scoring.get("reason")
+        if isinstance(reason_raw, str):
+            reason = reason_raw
+        elif reason_raw is None:
+            reason = _REASON_FALLBACK
+        else:
+            # Evitamos estructuras raras: lo convertimos a str defensivo.
+            reason = str(reason_raw)
+
+        imdb_bayes = _extract_bayes_from_scoring(scoring)
+
+        trace(
+            "scoring ok | "
+            f"decision={decision} "
+            f"bayes={_safe_str(imdb_bayes, max_len=32)} "
+            f"reason={_safe_str(reason, max_len=_TRACE_REASON_MAX_CHARS)}"
+        )
+        return decision, reason, imdb_bayes
+
+    except Exception as exc:
+        trace(f"scoring fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
+        return "UNKNOWN", "compute_scoring failed", None
+
+
+# ============================================================================
+# API principal
+# ============================================================================
 
 def analyze_input_movie(
     movie: MovieInput,
@@ -132,177 +228,181 @@ def analyze_input_movie(
     analysis_trace: TraceCallable | None = None,
 ) -> AnalysisRow:
     """
-    Analiza una película genérica (`MovieInput`) usando OMDb.
+    Analiza una película genérica (MovieInput) usando señales externas.
+
+    Lazy OMDb:
+    - Fase A: scoring sin OMDb.
+    - Fase B: solo si decisión no concluyente (MAYBE/UNKNOWN).
 
     Args:
         movie:
-            Entrada unificada (source/library/title/year/file_path, etc.).
+            Entrada unificada.
         fetch_omdb:
-            Callable inyectada que devuelve un Mapping tipo OMDb.
-            Se asume que puede usar cache interna y throttling global.
+            Callable inyectada para resolver OMDb (idealmente cacheada y throttled).
+            Firma: fetch_omdb(title, year) -> Mapping[str, object]
         plex_title / plex_year:
-            Título/año “display” del origen Plex, si se quiere priorizar para
-            detectar misidentifications (Plex a veces muestra título distinto al buscado).
+            Display title/año preferibles para detect_misidentified (si aplica).
         plex_rating:
-            Rating del usuario o rating del item en Plex (si aplica).
+            Rating del origen Plex (si aplica). No se usa para scoring aquí,
+            pero se exporta a la fila para reporting/diagnóstico.
         metacritic_score:
-            Score opcional (puede venir de OMDb o Wiki minimal) para enriquecer scoring.
+            Señal opcional ya computada externamente (si existe).
         analysis_trace:
-            Callback opcional para trazas debug. Si se pasa, este core emitirá mensajes
-            cortos (sin payloads grandes). Las capas superiores deben decidir si
-            imprimirlas, guardarlas o caparlas.
+            Callback opcional de trazas (corto, truncado, nunca rompe).
 
     Returns:
-        AnalysisRow: fila mínima, lista para enriquecer y exportar.
+        AnalysisRow: fila base y robusta para reporting.
     """
 
     def _trace(msg: str) -> None:
-        """
-        Emite trazas cortas y seguras si hay callback.
-        Nunca debe romper el análisis.
-        """
+        """Trazas seguras y truncadas."""
         if analysis_trace is None:
             return
         try:
             analysis_trace(_clip(msg, max_len=_TRACE_LINE_MAX_CHARS))
         except Exception:
+            # La instrumentación no debe romper el pipeline.
             return
 
-    # Identificadores compactos para traza (evitar ruido)
+    # Normalización de campos “mínimos” para trazabilidad
     lib = movie.library or ""
     title = movie.title or ""
     year = movie.year
 
     _trace(
         "start | "
-        f"lib={_safe_short(lib)} title={_safe_short(title)} year={_safe_short(year)} "
-        f"src={_safe_short(movie.source)}"
+        f"src={_safe_str(movie.source, max_len=32)} "
+        f"lib={_safe_str(lib, max_len=80)} "
+        f"title={_safe_str(title, max_len=120)} "
+        f"year={_safe_str(year, max_len=16)}"
     )
 
     # ------------------------------------------------------------------
-    # 1) Consultar OMDb mediante la función inyectada (defensivo)
-    # ------------------------------------------------------------------
-    omdb_data: dict[str, object] = {}
-    try:
-        raw = fetch_omdb(movie.title, movie.year)
-        omdb_data = dict(raw) if isinstance(raw, Mapping) else {}
-        _trace(f"omdb ok | keys={len(omdb_data)}")
-    except Exception as exc:
-        omdb_data = {}
-        _trace(f"omdb fail | err={_safe_short(exc)}")
-
-    # ------------------------------------------------------------------
-    # 2) Extraer ratings desde OMDb
+    # Fase A: scoring sin OMDb (sin red, sin cache lookup)
     # ------------------------------------------------------------------
     imdb_rating: float | None = None
     imdb_votes: int | None = None
     rt_score: int | None = None
-
-    try:
-        imdb_rating, imdb_votes, rt_score = extract_ratings_from_omdb(omdb_data)
-        _trace(
-            "ratings ok | "
-            f"imdb_rating={_safe_short(imdb_rating)} votes={_safe_short(imdb_votes)} rt={_safe_short(rt_score)}"
-        )
-    except Exception as exc:
-        imdb_rating, imdb_votes, rt_score = None, None, None
-        _trace(f"ratings fail | err={_safe_short(exc)}")
-
-    # ------------------------------------------------------------------
-    # 3) Decisión KEEP / MAYBE / DELETE / UNKNOWN vía scoring.compute_scoring
-    #    + capturamos el score bayesiano en imdb_bayes
-    # ------------------------------------------------------------------
-    decision: str = "UNKNOWN"
-    reason: str = ""
     imdb_bayes: float | None = None
 
-    try:
-        scoring = compute_scoring(
+    _trace("phaseA | scoring without omdb (ratings=None)")
+    decision, reason, imdb_bayes = _compute_scoring_safe(
+        imdb_rating=None,
+        imdb_votes=None,
+        rt_score=None,
+        year=year,
+        metacritic_score=metacritic_score,
+        trace=_trace,
+    )
+
+    # Decisión de “ir a OMDb”:
+    # - KEEP/DELETE suelen ser suficientemente fuertes con heurística local.
+    # - MAYBE/UNKNOWN requieren señales externas para desempatar.
+    should_fetch_omdb = decision in {"MAYBE", "UNKNOWN"}
+
+    # ------------------------------------------------------------------
+    # Fase B: OMDb solo si hace falta
+    # ------------------------------------------------------------------
+    used_omdb = False
+    omdb_data: dict[str, object] = {}
+
+    if should_fetch_omdb:
+        _trace("phaseB | fetching omdb (needed)")
+        try:
+            raw = fetch_omdb(title, year)
+            omdb_data = dict(raw) if isinstance(raw, Mapping) else {}
+            used_omdb = bool(omdb_data)
+            _trace(f"omdb ok | keys={len(omdb_data)}")
+        except Exception as exc:
+            omdb_data = {}
+            used_omdb = False
+            _trace(f"omdb fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
+
+        # Ratings desde OMDb (defensivo)
+        if omdb_data:
+            try:
+                imdb_rating, imdb_votes, rt_score = extract_ratings_from_omdb(omdb_data)
+                _trace(
+                    "ratings ok | "
+                    f"imdb_rating={_safe_str(imdb_rating, max_len=32)} "
+                    f"votes={_safe_str(imdb_votes, max_len=32)} "
+                    f"rt={_safe_str(rt_score, max_len=32)}"
+                )
+            except Exception as exc:
+                imdb_rating, imdb_votes, rt_score = None, None, None
+                _trace(f"ratings fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
+
+        # Re-score con señales reales (aunque ratings sigan None, la lógica es consistente)
+        _trace("phaseB | scoring with omdb-derived signals")
+        decision, reason, imdb_bayes = _compute_scoring_safe(
             imdb_rating=imdb_rating,
             imdb_votes=imdb_votes,
             rt_score=rt_score,
-            year=movie.year,
+            year=year,
             metacritic_score=metacritic_score,
+            trace=_trace,
         )
-
-        d = scoring.get("decision")
-        r = scoring.get("reason")
-
-        decision_candidate = str(d) if d is not None else "UNKNOWN"
-        if decision_candidate not in _VALID_DECISIONS:
-            _trace(f"scoring unexpected decision={_safe_short(decision_candidate)} -> UNKNOWN")
-            decision_candidate = "UNKNOWN"
-
-        decision = decision_candidate
-        reason = str(r) if r is not None else ""
-
-        inputs = scoring.get("inputs")
-        if isinstance(inputs, Mapping):
-            sb = inputs.get("score_bayes")
-            if isinstance(sb, (int, float)):
-                imdb_bayes = float(sb)
-
-        # “reason” puede ser largo: solo mostramos un clip para depurar.
-        reason_clip = _safe_short(reason, max_len=_TRACE_REASON_MAX_CHARS)
-        _trace(f"scoring ok | decision={decision} bayes={_safe_short(imdb_bayes)} reason={reason_clip}")
-
-    except Exception as exc:
-        decision = "UNKNOWN"
-        reason = "compute_scoring failed"
-        imdb_bayes = None
-        _trace(f"scoring fail | err={_safe_short(exc)}")
+    else:
+        _trace("phaseB | skipped omdb (decision strong)")
 
     # ------------------------------------------------------------------
-    # 4) Detección de posibles películas mal identificadas
+    # Misidentified: solo si OMDb devolvió algo usable
     # ------------------------------------------------------------------
-    detect_title = plex_title if plex_title is not None else movie.title
-    detect_year = plex_year if plex_year is not None else movie.year
+    misidentified_hint = ""
 
-    try:
-        misidentified_hint = detect_misidentified(
-            plex_title=detect_title,
-            plex_year=detect_year,
-            plex_imdb_id=movie.imdb_id_hint,
-            omdb_data=omdb_data,
-            imdb_rating=imdb_rating,
-            imdb_votes=imdb_votes,
-            rt_score=rt_score,
-        )
-    except Exception as exc:
-        misidentified_hint = ""
-        _trace(f"misidentified fail | err={_safe_short(exc)}")
+    if omdb_data:
+        detect_title = plex_title if isinstance(plex_title, str) and plex_title.strip() else title
+        detect_year = plex_year if isinstance(plex_year, int) else year
 
-    if not isinstance(misidentified_hint, str):
-        misidentified_hint = str(misidentified_hint) if misidentified_hint is not None else ""
+        _trace("misidentified | running")
+        try:
+            misidentified_hint = detect_misidentified(
+                plex_title=detect_title,
+                plex_year=detect_year,
+                plex_imdb_id=movie.imdb_id_hint,
+                omdb_data=omdb_data,
+                imdb_rating=imdb_rating,
+                imdb_votes=imdb_votes,
+                rt_score=rt_score,
+            )
+        except Exception as exc:
+            misidentified_hint = ""
+            _trace(f"misidentified fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
 
-    if misidentified_hint.strip():
-        # Señal binaria para correlación (texto completo ya viaja en row).
-        _trace("misidentified yes")
+        if not isinstance(misidentified_hint, str):
+            misidentified_hint = str(misidentified_hint) if misidentified_hint is not None else ""
+
+        if misidentified_hint.strip():
+            _trace("misidentified | YES")
+        else:
+            _trace("misidentified | no")
+    else:
+        _trace("misidentified | skipped (no omdb data)")
 
     # ------------------------------------------------------------------
-    # 5) Construir fila base
+    # Construcción de fila base
     # ------------------------------------------------------------------
     row: AnalysisRow = {
         "source": movie.source,
         "library": movie.library,
         "title": movie.title,
-        "year": movie.year,
+        "year": year,
         "imdb_rating": imdb_rating,
         "imdb_bayes": imdb_bayes,
         "rt_score": rt_score,
         "imdb_votes": imdb_votes,
         "plex_rating": plex_rating,
-        "decision": decision,
-        "reason": reason,
-        "misidentified_hint": misidentified_hint,
+        "decision": _normalize_decision(decision),
+        "reason": reason if isinstance(reason, str) and reason.strip() else _REASON_FALLBACK,
+        "misidentified_hint": misidentified_hint.strip(),
         "file": movie.file_path,
         "file_size_bytes": movie.file_size_bytes,
+        "used_omdb": used_omdb,
+        "omdb_keys_count": len(omdb_data),
     }
 
-    # Solo añadimos imdb_id_hint si existe (evita strings/columnas inútiles)
     if isinstance(movie.imdb_id_hint, str) and movie.imdb_id_hint.strip():
         row["imdb_id_hint"] = movie.imdb_id_hint.strip()
 
     _trace("done")
-
     return row
