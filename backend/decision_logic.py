@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 backend/decision_logic.py
 
@@ -5,14 +7,24 @@ Heurística para:
 - Detectar posibles películas mal identificadas (misidentified).
 - Ordenar filas filtradas (DELETE/MAYBE) para el CSV final.
 
-Filosofía (alineada con el logger del proyecto)
------------------------------------------------
-- Este módulo NO debería “ensuciar” salida en ejecuciones normales.
-- En DEBUG_MODE=True podemos emitir trazas, pero:
-  - SILENT_MODE=True: nada de spam; si hace falta, que lo hagan orquestadores con progress.
-  - SILENT_MODE=False: debug/info permitido.
-- Por eso aquí usamos un helper `_log_debug(...)` que respeta DEBUG_MODE y SILENT_MODE,
-  y además evita cálculos caros si no van a mostrarse.
+Mejora aplicada (performance/robustez alineada con 2/3/4)
+----------------------------------------------------------
+Este módulo se invoca por película y suele ejecutarse miles de veces. La mejora aquí
+no es “network-bound” como OMDb, pero sí puede acumular coste por:
+
+- Normalización de strings repetida.
+- difflib.SequenceMatcher (comparación relativamente cara) ejecutada en casos donde
+  ya hay señales más fuertes.
+- Ordenación de filas que pueden venir con tipos inconsistentes.
+
+Por tanto:
+1) Hacemos early-returns y short-circuit de cálculos caros.
+2) Reducimos trabajo de difflib a los casos “ambiguos” donde puede aportar.
+3) Robustecemos parseos y evitamos excepciones (no deben romper el pipeline).
+4) Logging: mantenemos la filosofía del proyecto:
+   - Este módulo no debe spamear.
+   - Sólo debug si DEBUG_MODE=True y SILENT_MODE=False.
+   - No hacemos cálculos extra para logs si no van a emitirse.
 
 API pública
 -----------
@@ -21,8 +33,6 @@ API pública
 - sort_filtered_rows(rows)-> list[dict]:
     Ordena filas priorizando DELETE > MAYBE > KEEP > UNKNOWN y luego “impacto/certeza”.
 """
-
-from __future__ import annotations
 
 import difflib
 import re
@@ -38,16 +48,29 @@ from backend.config import (
     SILENT_MODE,
 )
 
+# ---------------------------------------------------------------------------
+# Constantes
+# ---------------------------------------------------------------------------
+
+# Umbral de similitud (difflib ratio) por debajo del cual consideramos mismatch
 TITLE_SIMILARITY_THRESHOLD: Final[float] = 0.60
 
 # Regex precompilados (micro-optimización, evita recompilar por llamada)
 _NON_ALNUM_RE: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9\s]")
 _WS_RE: Final[re.Pattern[str]] = re.compile(r"\s+")
 
+# Límite razonable para comparar títulos (evita costes raros con strings enormes)
+_MAX_TITLE_LEN_FOR_COMPARE: Final[int] = 180
+
 
 # ============================================================
 # Logging controlado por modos
 # ============================================================
+
+def _debug_enabled() -> bool:
+    """True solo si el usuario quiere logs debug y NO estamos en silent."""
+    return bool(DEBUG_MODE and not SILENT_MODE)
+
 
 def _log_debug(msg: object) -> None:
     """
@@ -57,14 +80,13 @@ def _log_debug(msg: object) -> None:
         * SILENT_MODE=True: no emitimos (evitar ruido). Este módulo es “core heurístico”.
         * SILENT_MODE=False: usamos _logger.debug.
     """
-    if not DEBUG_MODE:
-        return
-    if SILENT_MODE:
+    if not _debug_enabled():
         return
     try:
         _logger.debug(str(msg))
     except Exception:
-        pass
+        # Nunca romper por logging
+        return
 
 
 # ============================================================
@@ -75,16 +97,25 @@ def _normalize_title(s: str | None) -> str:
     """
     Normaliza un título para comparación:
     - minúsculas
-    - sin puntuación
+    - sin puntuación (solo [a-z0-9 ] tras normalizar)
     - espacios colapsados
+    - truncado defensivo
 
     Nota:
-    - Se usa para difflib.SequenceMatcher y comparaciones tipo contains.
-    - Si el título está vacío -> "".
+    - Se usa para comparaciones:
+        * contains
+        * equality
+        * difflib.SequenceMatcher
     """
     if not s:
         return ""
-    s2 = s.lower()
+
+    # Truncado: protege de títulos patológicos o metadata corrupta
+    s2 = s.strip()
+    if len(s2) > _MAX_TITLE_LEN_FOR_COMPARE:
+        s2 = s2[:_MAX_TITLE_LEN_FOR_COMPARE]
+
+    s2 = s2.lower()
     s2 = _NON_ALNUM_RE.sub(" ", s2)
     s2 = _WS_RE.sub(" ", s2).strip()
     return s2
@@ -92,7 +123,7 @@ def _normalize_title(s: str | None) -> str:
 
 def _safe_imdb_id(value: object) -> str | None:
     """
-    Normaliza un imdb id (tt1234567) a minúsculas, o None si inválido.
+    Normaliza un imdb id (tt1234567) a minúsculas, o None si inválido/vacío.
     """
     if not isinstance(value, str):
         return None
@@ -106,6 +137,7 @@ def _extract_omdb_year(omdb_year_raw: object) -> int | None:
       - "1994"
       - "1994–1998"
       - "N/A"
+
     Devolvemos el primer año (4 dígitos) si existe.
     """
     if not isinstance(omdb_year_raw, str):
@@ -113,10 +145,13 @@ def _extract_omdb_year(omdb_year_raw: object) -> int | None:
     s = omdb_year_raw.strip()
     if not s or s.upper() == "N/A":
         return None
-    # coger primeros 4 si son dígitos
+
     if len(s) >= 4 and s[:4].isdigit():
         try:
-            return int(s[:4])
+            y = int(s[:4])
+            if 1800 <= y <= 2200:
+                return y
+            return None
         except Exception:
             return None
     return None
@@ -125,13 +160,23 @@ def _extract_omdb_year(omdb_year_raw: object) -> int | None:
 def _clamp_int(v: object, default: int = 0) -> int:
     """
     Convierte a int seguro para ordenación.
+    - bool -> int
+    - float -> int (trunc)
+    - str numérica -> int
     """
-    if isinstance(v, bool):
-        return int(v)
-    if isinstance(v, int):
-        return v
-    if isinstance(v, float):
-        return int(v)
+    try:
+        if isinstance(v, bool):
+            return int(v)
+        if isinstance(v, int):
+            return v
+        if isinstance(v, float):
+            return int(v)
+        if isinstance(v, str):
+            s = v.strip()
+            if s.isdigit():
+                return int(s)
+    except Exception:
+        pass
     return default
 
 
@@ -139,11 +184,37 @@ def _clamp_float(v: object, default: float = 0.0) -> float:
     """
     Convierte a float seguro para ordenación.
     """
-    if isinstance(v, bool):
-        return float(int(v))
-    if isinstance(v, (int, float)):
-        return float(v)
+    try:
+        if isinstance(v, bool):
+            return float(int(v))
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            s = v.strip().replace(",", ".")
+            return float(s)
+    except Exception:
+        pass
     return default
+
+
+def _should_run_title_similarity(pt: str, ot: str) -> bool:
+    """
+    Decide si merece la pena ejecutar difflib.SequenceMatcher.
+
+    difflib es relativamente caro, así que:
+    - si ya son iguales / contains -> no hace falta.
+    - si alguno está vacío -> no hace falta.
+    - si son muy cortos -> ratio puede ser ruidoso; evitamos si < 4 chars.
+    """
+    if not pt or not ot:
+        return False
+    if pt == ot:
+        return False
+    if pt in ot or ot in pt:
+        return False
+    if len(pt) < 4 or len(ot) < 4:
+        return False
+    return True
 
 
 # ============================================================
@@ -167,27 +238,18 @@ def detect_misidentified(
     - rating muy bajo con “suficientes votos” (peli conocida con nota sospechosa)
     - RT muy bajo con “suficientes votos”
 
-    Parámetros:
-        plex_title:
-            Título “display” del origen (Plex). Puede diferir del buscado.
-        plex_year:
-            Año del origen (Plex).
-        plex_imdb_id:
-            imdbID detectado por Plex (si existe).
-        omdb_data:
-            Payload OMDb (Mapping). Si Response != "True" → devolvemos "".
-        imdb_rating/imdb_votes/rt_score:
-            Señales ya normalizadas (idealmente extraídas por extract_ratings_from_omdb).
+    Importante:
+    - Es una heurística: NO bloquea el pipeline.
+    - Debe ser barata por llamada (se ejecuta miles de veces).
 
     Returns:
-        str:
-            '' si no hay sospechas,
-            o texto con hints separadas por " | ".
+        '' si no hay sospechas, o hints separados por " | ".
     """
     if not omdb_data:
         return ""
 
-    # Si OMDb no trae ficha válida, no forzamos misidentified aquí.
+    # Si OMDb no trae ficha válida, evitamos decisiones agresivas aquí.
+    # Esto puede ocurrir si OMDb falló, o Response="False".
     if omdb_data.get("Response") != "True":
         return ""
 
@@ -196,7 +258,7 @@ def detect_misidentified(
     plex_imdb = _safe_imdb_id(plex_imdb_id)
     omdb_imdb = _safe_imdb_id(omdb_data.get("imdbID"))
 
-    # 0) Regla de oro
+    # 0) Regla de oro (si coinciden, salimos rápido)
     if plex_imdb and omdb_imdb and plex_imdb == omdb_imdb:
         return ""
 
@@ -204,36 +266,36 @@ def detect_misidentified(
     if plex_imdb and omdb_imdb and plex_imdb != omdb_imdb:
         hints.append(f"IMDb mismatch: Plex={plex_imdb} vs OMDb={omdb_imdb}")
 
-    # 2) Datos OMDb básicos
+    # 2) Título OMDb y año OMDb
     omdb_title_raw = omdb_data.get("Title")
     omdb_title = omdb_title_raw if isinstance(omdb_title_raw, str) else ""
     omdb_year_int = _extract_omdb_year(omdb_data.get("Year"))
 
-    pt = _normalize_title(plex_title)
+    pt_raw = plex_title if isinstance(plex_title, str) else ""
+    pt = _normalize_title(pt_raw)
     ot = _normalize_title(omdb_title)
 
-    # 3) Títulos claramente distintos (solo si hay señal suficiente)
-    if pt and ot and pt != ot and pt not in ot and ot not in pt:
-        # difflib puede ser relativamente caro; lo hacemos solo si vamos a usarlo
+    # 3) Títulos claramente distintos (difflib sólo cuando aporte)
+    if _should_run_title_similarity(pt, ot):
+        # difflib.SequenceMatcher: coste moderado
         sim = difflib.SequenceMatcher(a=pt, b=ot).ratio()
-        _log_debug(f"Title similarity Plex vs OMDb: '{plex_title}' vs '{omdb_title}' -> {sim:.2f}")
+        if _debug_enabled():
+            _log_debug(f"Title similarity Plex vs OMDb: '{pt_raw}' vs '{omdb_title}' -> {sim:.2f}")
+
         if sim < TITLE_SIMILARITY_THRESHOLD:
-            hints.append(
-                f"Title mismatch: Plex='{plex_title}' vs OMDb='{omdb_title}' (sim={sim:.2f})"
-            )
+            hints.append(f"Title mismatch: Plex='{pt_raw}' vs OMDb='{omdb_title}' (sim={sim:.2f})")
 
     # 4) Años muy diferentes (> 1)
-    try:
-        if plex_year is not None and omdb_year_int is not None:
-            plex_year_int = int(plex_year)
-            if abs(plex_year_int - omdb_year_int) > 1:
-                hints.append(f"Year mismatch: Plex={plex_year_int}, OMDb={omdb_year_int}")
-    except Exception:
-        _log_debug(
-            f"Could not compare years: plex_year={plex_year!r}, omdb_year={omdb_data.get('Year')!r}"
-        )
+    if plex_year is not None and omdb_year_int is not None:
+        try:
+            py = int(plex_year)
+            if abs(py - omdb_year_int) > 1:
+                hints.append(f"Year mismatch: Plex={py}, OMDb={omdb_year_int}")
+        except Exception:
+            if _debug_enabled():
+                _log_debug(f"Could not compare years: plex_year={plex_year!r}, omdb_year={omdb_data.get('Year')!r}")
 
-    # 5) IMDb muy baja con suficientes votos (posible “otra” peli)
+    # 5) Señales de “peli conocida” con rating muy bajo
     votes: int = imdb_votes if isinstance(imdb_votes, int) else 0
     if (
         imdb_rating is not None
@@ -274,32 +336,47 @@ def sort_filtered_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]
 
       1) decision: DELETE primero, luego MAYBE, luego KEEP, luego UNKNOWN.
       2) Más votos IMDb (más “certeza” / relevancia).
-      3) Mayor rating IMDb.
+      3) Mayor score bayesiano (si existe) o mayor rating IMDb.
       4) Mayor tamaño de fichero (más espacio a liberar primero).
+      5) Título como último desempate (orden estable humano).
 
     Nota:
-    - Esta función se usa sobre todo con filas ya filtradas (DELETE/MAYBE),
-      pero soporta cualquier decisión.
+    - Normalmente se llama con filas DELETE/MAYBE, pero soporta cualquier decisión.
+    - Debe ser determinista (importante para diffs y para que el usuario “no vea saltos”).
     """
-
     decision_rank_map: dict[str, int] = {"DELETE": 0, "MAYBE": 1, "KEEP": 2, "UNKNOWN": 3}
 
-    def key_func(r: dict[str, object]) -> tuple[int, int, float, int]:
+    def key_func(r: dict[str, object]) -> tuple[int, int, float, float, int, str]:
         decision_raw = r.get("decision")
         decision = decision_raw if isinstance(decision_raw, str) else "UNKNOWN"
         decision_rank = decision_rank_map.get(decision, 3)
 
-        # En tus rows hay variantes históricas:
-        # - imdb_votes (core) suele ser int o None
-        # - file_size puede ser "file_size" o "file_size_bytes" según orquestador
+        # Señales de certeza
         imdb_votes = _clamp_int(r.get("imdb_votes"), 0)
-        imdb_rating = _clamp_float(r.get("imdb_rating"), 0.0)
 
+        # Preferimos bayes si existe (más robusto que rating a pelo)
+        imdb_bayes = _clamp_float(r.get("imdb_bayes"), default=-1.0)
+        imdb_rating = _clamp_float(r.get("imdb_rating"), 0.0)
+        score_for_sort = imdb_bayes if imdb_bayes >= 0.0 else imdb_rating
+
+        # Tamaño: en tu pipeline hay variantes:
+        # - file_size (collection_analysis pone file_size=file_size_bytes)
+        # - file_size_bytes
         file_size = _clamp_int(r.get("file_size"), 0)
         if file_size <= 0:
             file_size = _clamp_int(r.get("file_size_bytes"), 0)
 
-        # Nota: usamos negativos para ordenar desc.
-        return decision_rank, -imdb_votes, -imdb_rating, -file_size
+        # Título como tiebreak (stable, humano)
+        title_raw = r.get("title")
+        title = title_raw if isinstance(title_raw, str) else ""
+
+        # Orden:
+        # - decision_rank asc
+        # - votes desc
+        # - score_for_sort desc
+        # - imdb_rating desc (para casos sin bayes)
+        # - file_size desc
+        # - title asc
+        return decision_rank, -imdb_votes, -score_for_sort, -imdb_rating, -file_size, title
 
     return sorted(rows, key=key_func)
