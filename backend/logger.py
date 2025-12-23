@@ -3,108 +3,51 @@ from __future__ import annotations
 """
 backend/logger.py
 
-Logger central del proyecto.
+Logger central del proyecto (fachada sobre `logging`).
 
-Este módulo actúa como “fachada” (facade) sobre `logging` para que el resto del código
-use una API única y consistente:
+API estable:
+- debug / info / warning / error
+- progress / progressf (siempre visible, sin timestamps)
+- debug_ctx(tag, msg) (debug contextual alineado con SILENT/DEBUG)
+- append_bounded_log(logs, line, ...) (logs por item acotados)
 
-- info / warning / error / debug
-- progress / progressf (salida “heartbeat” siempre visible, sin timestamps)
-- utilidades para logging “debug contextual” y buffers de logs acotados:
-    * debug_ctx(tag, msg)
-    * append_bounded_log(logs, line, ...)
+Política:
+- SILENT_MODE=True: suprime debug/info/warning (salvo always=True). `error()` siempre emite.
+- DEBUG_MODE=True: permite trazas útiles; en SILENT+DEBUG se emiten por `progress`.
+- El logging nunca debe romper el pipeline.
 
-Por qué mover aquí la política de logs
---------------------------------------
-Durante esta iteración hemos ido aplicando una filosofía común:
-
-1) SILENT_MODE=True
-   - Evitar ruido y, muy importante, evitar acumulación de strings (CPU/memoria).
-   - Permitir “señales mínimas” de vida mediante `progress`.
-2) DEBUG_MODE=True
-   - Permitir trazas útiles, cortas y no voluminosas.
-   - En SILENT+DEBUG: las trazas deben seguir siendo “mínimas” (usar progress o logs acotados).
-3) No romper el pipeline
-   - El logging no debe lanzar excepciones ni bloquear el flujo.
-
-Este fichero implementa esa política en un solo lugar, evitando duplicación en:
-- collection_analysis.py
-- analiza_plex.py
-- analiza_dlna.py
-- omdb_client.py
-- etc.
-
-Compatibilidad
---------------
-- Mantiene `LOGGER_NAME`, `get_logger()`, `debug/info/warning/error`,
-  `progress/progressf` con la misma semántica.
-- Los tests que referencian `LOGGER_NAME` siguen funcionando.
-
-Notas de diseño
----------------
+Nota:
 - No importamos `backend.config` directamente para evitar dependencias circulares.
   Leemos `backend.config` desde `sys.modules` si ya está importado.
-- La configuración de logging es idempotente: `_ensure_configured()` puede llamarse
-  repetidas veces.
-- Añadimos helpers de *bounded logs* para que los orquestadores acumulen logs
-  por item sin explotar memoria.
-
-Uso recomendado
----------------
-1) Logs normales:
-   - logger.info("...") / logger.warning("...", always=True) / logger.error("...")
-2) Señales mínimas:
-   - logger.progress("[DLNA] ...")
-3) Debug contextual (cuando DEBUG_MODE=True):
-   - logger.debug_ctx("COLLECTION", "Fetched OMDb+Wiki ...")
-   - logger.debug_ctx("OMDB", "Throttle sleeping ...")
-4) Buffer de logs acotado (para devolver logs a capas superiores):
-   - logger.append_bounded_log(logs, "[TRACE] ...")
-   - logger.append_bounded_log(logs, "[ERROR] ...", force=True)
-
 """
 
 import logging
 import sys
-from typing import Any, Final
+from typing import Final
 
 # ============================================================================
 # CONFIGURACIÓN GLOBAL
 # ============================================================================
 
-# Nombre del logger principal de la aplicación.
-# ⚠️ IMPORTANTE: los tests lo referencian explícitamente.
 LOGGER_NAME: Final[str] = "movies_cleaner"
 
-# Logger interno cacheado.
-# Puede ser:
-#   - logging.Logger (ejecución real)
-#   - FakeLogger (inyectado por tests)
-_LOGGER: Any = None
+# Logger interno cacheado (solo logger real; sin Any).
+_LOGGER: logging.Logger | None = None
 
-# Flag para asegurar inicialización idempotente del logger
+# Flag de inicialización idempotente
 _CONFIGURED: bool = False
+
 
 # ============================================================================
 # UTILIDADES CONFIG / FLAGS (sin importar backend.config directamente)
 # ============================================================================
 
-
-def _safe_get_cfg() -> Any | None:
-    """
-    Devuelve el módulo backend.config si ya ha sido importado.
-
-    No lo importamos directamente para:
-    - evitar dependencias circulares
-    - permitir ejecución parcial (tests, herramientas, etc.)
-    """
+def _safe_get_cfg() -> object | None:
+    """Devuelve backend.config si ya ha sido importado; si no, None."""
     return sys.modules.get("backend.config")
 
 
 def _cfg_bool(name: str, default: bool = False) -> bool:
-    """
-    Lee un flag booleano desde backend.config de forma defensiva.
-    """
     cfg = _safe_get_cfg()
     if cfg is None:
         return default
@@ -115,23 +58,16 @@ def _cfg_bool(name: str, default: bool = False) -> bool:
 
 
 def _cfg_int(name: str, default: int) -> int:
-    """
-    Lee un entero desde backend.config de forma defensiva.
-    """
     cfg = _safe_get_cfg()
     if cfg is None:
         return default
     try:
-        v = getattr(cfg, name, default)
-        return int(v)
+        return int(getattr(cfg, name, default))
     except Exception:
         return default
 
 
 def _cfg_str(name: str, default: str | None = None) -> str | None:
-    """
-    Lee un string desde backend.config de forma defensiva.
-    """
     cfg = _safe_get_cfg()
     if cfg is None:
         return default
@@ -146,16 +82,12 @@ def _cfg_str(name: str, default: str | None = None) -> str | None:
 
 
 def is_silent_mode() -> bool:
-    """
-    SILENT_MODE global (si backend.config está cargado).
-    """
+    """SILENT_MODE global (si backend.config está cargado)."""
     return _cfg_bool("SILENT_MODE", False)
 
 
 def is_debug_mode() -> bool:
-    """
-    DEBUG_MODE global (si backend.config está cargado).
-    """
+    """DEBUG_MODE global (si backend.config está cargado)."""
     return _cfg_bool("DEBUG_MODE", False)
 
 
@@ -163,21 +95,18 @@ def is_debug_mode() -> bool:
 # RESOLUCIÓN DE LEVEL + EXTERNAL LOGGERS
 # ============================================================================
 
-
 def _resolve_level_from_config() -> int:
     """
-    Determina el nivel de logging raíz (root) en base a backend.config.
+    Determina el nivel del logging root.
 
-    Orden de prioridad:
-      1) LOG_LEVEL explícito (string)
-      2) Flags de debug (WIKI_DEBUG, OMDB_DEBUG, DEBUG, DEBUG_MODE)
-      3) Fallback seguro: INFO
+    Prioridad:
+      1) LOG_LEVEL explícito
+      2) Flags de debug heredados
+      3) INFO
     """
-    cfg = _safe_get_cfg()
-    if cfg is None:
+    if _safe_get_cfg() is None:
         return logging.INFO
 
-    # 1) LOG_LEVEL explícito
     lvl = _cfg_str("LOG_LEVEL", None)
     if isinstance(lvl, str) and lvl.strip():
         name = lvl.strip().upper()
@@ -193,7 +122,6 @@ def _resolve_level_from_config() -> int:
         if mapped is not None:
             return mapped
 
-    # 2) Flags de debug “heredados”
     if (
         _cfg_bool("WIKI_DEBUG", False)
         or _cfg_bool("OMDB_DEBUG", False)
@@ -206,11 +134,7 @@ def _resolve_level_from_config() -> int:
 
 
 def _apply_root_level(level: int) -> None:
-    """
-    Aplica el nivel al logger root y a todos sus handlers.
-
-    Esto es necesario porque algunos entornos crean handlers antes de que lleguemos aquí.
-    """
+    """Aplica nivel al root y a sus handlers (si existen)."""
     root = logging.getLogger()
     root.setLevel(level)
     for handler in root.handlers:
@@ -220,12 +144,8 @@ def _apply_root_level(level: int) -> None:
             pass
 
 
-def _should_enable_http_debug(cfg: Any | None) -> bool:
-    """
-    Decide si se permite el ruido HTTP de librerías externas.
-
-    Si backend.config define HTTP_DEBUG=True, NO se silencian urllib3/requests/plexapi.
-    """
+def _should_enable_http_debug(cfg: object | None) -> bool:
+    """Si HTTP_DEBUG=True, no silenciamos urllib3/requests/plexapi."""
     if cfg is None:
         return False
     try:
@@ -236,17 +156,14 @@ def _should_enable_http_debug(cfg: Any | None) -> bool:
 
 def _configure_external_loggers(*, level: int) -> None:
     """
-    Ajusta el nivel de logging de dependencias ruidosas.
-
-    Objetivo:
-    - Aunque el root esté en DEBUG, evitar que urllib3/requests/plexapi inunden la consola.
-    - Si HTTP_DEBUG=True → no tocamos nada.
+    Baja el nivel de loggers externos ruidosos aunque el root esté en DEBUG,
+    salvo que HTTP_DEBUG=True.
     """
     cfg = _safe_get_cfg()
     if _should_enable_http_debug(cfg):
         return
 
-    noisy_loggers = (
+    noisy = (
         "urllib3",
         "urllib3.connectionpool",
         "requests",
@@ -254,7 +171,7 @@ def _configure_external_loggers(*, level: int) -> None:
         "plexapi",
     )
 
-    for name in noisy_loggers:
+    for name in noisy:
         try:
             logging.getLogger(name).setLevel(logging.WARNING)
         except Exception:
@@ -265,19 +182,15 @@ def _configure_external_loggers(*, level: int) -> None:
 # INICIALIZACIÓN DEL LOGGER
 # ============================================================================
 
-
-def _ensure_configured() -> Any:
+def _ensure_configured() -> logging.Logger:
     """
-    Inicializa el sistema de logging una sola vez y devuelve el logger principal.
+    Inicializa logging de forma idempotente y devuelve el logger principal.
 
-    Comportamiento clave:
-    - Idempotente: puede llamarse muchas veces sin efectos secundarios.
-    - Respeta loggers inyectados por tests.
-    - Reaplica niveles si backend.config cambia dinámicamente.
+    - Si ya se configuró, re-sincroniza niveles (por si backend.config cambió).
+    - Nunca lanza excepciones.
     """
     global _LOGGER, _CONFIGURED
 
-    # Ya inicializado → re-sincronizamos niveles
     if _CONFIGURED and _LOGGER is not None:
         try:
             level = _resolve_level_from_config()
@@ -287,17 +200,19 @@ def _ensure_configured() -> Any:
             pass
         return _LOGGER
 
-    # Primera inicialización real
     level = _resolve_level_from_config()
     root = logging.getLogger()
 
-    if not root.handlers:
-        logging.basicConfig(
-            level=level,
-            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        )
-    else:
-        _apply_root_level(level)
+    try:
+        if not root.handlers:
+            logging.basicConfig(
+                level=level,
+                format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            )
+        else:
+            _apply_root_level(level)
+    except Exception:
+        pass
 
     _configure_external_loggers(level=level)
 
@@ -306,10 +221,8 @@ def _ensure_configured() -> Any:
     return _LOGGER
 
 
-def get_logger() -> Any:
-    """
-    Devuelve el logger principal de la aplicación, asegurando inicialización previa.
-    """
+def get_logger() -> logging.Logger:
+    """Devuelve el logger principal, asegurando inicialización."""
     return _ensure_configured()
 
 
@@ -317,15 +230,12 @@ def get_logger() -> Any:
 # CONTROL DE SILENT MODE (para logs con niveles)
 # ============================================================================
 
-
 def _should_log(*, always: bool = False) -> bool:
     """
-    Decide si un mensaje de logging debe emitirse.
+    Decide si un mensaje debe emitirse (para debug/info/warning).
 
-    Reglas:
-      - always=True → siempre se emite
-      - SILENT_MODE=True → se suprimen debug/info/warning
-      - error() ignora este mecanismo (siempre emite)
+    - always=True -> siempre emite
+    - SILENT_MODE=True -> suprime
     """
     if always:
         return True
@@ -336,17 +246,11 @@ def _should_log(*, always: bool = False) -> bool:
 # PROGRESO / HEARTBEAT (NO logging)
 # ============================================================================
 
-
 def progress(message: str) -> None:
     """
-    Emite una línea de progreso SIEMPRE visible.
+    Emite una línea siempre visible (ignora SILENT_MODE).
 
-    Características:
-    - Ignora SILENT_MODE
-    - No usa logging (sin timestamps ni niveles)
-    - Diseñado para feedback estructural:
-        "(1/4) Películas"
-        "Analizando biblioteca X"
+    No usa logging para evitar timestamps/levels y dar una “señal” limpia.
     """
     try:
         sys.stdout.write(f"{message}\n")
@@ -355,10 +259,8 @@ def progress(message: str) -> None:
         pass
 
 
-def progressf(fmt: str, *args: Any) -> None:
-    """
-    Variante con formateo estilo printf para progreso.
-    """
+def progressf(fmt: str, *args: object) -> None:
+    """Formato estilo printf para progress."""
     try:
         msg = fmt % args if args else fmt
     except Exception:
@@ -367,76 +269,60 @@ def progressf(fmt: str, *args: Any) -> None:
 
 
 # ============================================================================
-# API PÚBLICA DE LOGGING (compat)
+# API PÚBLICA DE LOGGING
 # ============================================================================
 
-
-def debug(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
-    """
-    Logging DEBUG.
-
-    - Respeta SILENT_MODE
-    - always=True fuerza emisión
-    """
+def debug(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
     kwargs.pop("always", None)
-    log.debug(msg, *args, **kwargs)
+    try:
+        log.debug(msg, *args, **kwargs)
+    except Exception:
+        pass
 
 
-def info(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
-    """
-    Logging INFO.
-
-    - Respeta SILENT_MODE
-    - always=True fuerza emisión
-    """
+def info(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
     kwargs.pop("always", None)
-    log.info(msg, *args, **kwargs)
+    try:
+        log.info(msg, *args, **kwargs)
+    except Exception:
+        pass
 
 
-def warning(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
-    """
-    Logging WARNING.
-
-    - Respeta SILENT_MODE
-    - always=True fuerza emisión
-    """
+def warning(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
     kwargs.pop("always", None)
-    log.warning(msg, *args, **kwargs)
+    try:
+        log.warning(msg, *args, **kwargs)
+    except Exception:
+        pass
 
 
-def error(msg: str, *args: Any, always: bool = False, **kwargs: Any) -> None:
+def error(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
     """
-    Logging ERROR.
-
-    - SIEMPRE se emite (ignora SILENT_MODE)
-    - `always` se acepta solo por compatibilidad
+    ERROR siempre se emite (ignora SILENT_MODE). `always` se acepta por compat.
     """
     log = _ensure_configured()
     kwargs.pop("always", None)
-    log.error(msg, *args, **kwargs)
+    try:
+        log.error(msg, *args, **kwargs)
+    except Exception:
+        try:
+            print(msg)
+        except Exception:
+            pass
 
 
 # ============================================================================
-# NUEVO: DEBUG CONTEXTUAL (tag) + BOUNDED LOG BUFFER
+# DEBUG CONTEXTUAL (tag) + BOUNDED LOG BUFFER
 # ============================================================================
-
-# En ejecuciones grandes, acumular strings en memoria es caro.
-# Unificamos aquí la política para todo el proyecto.
-
-# Defaults conservadores; se pueden sobreescribir desde config:
-#   LOGGER_LOGS_MAX_SILENT
-#   LOGGER_LOGS_MAX_SILENT_DEBUG
-#   LOGGER_LOGS_MAX_NORMAL
-#   LOGGER_LOG_LINE_MAX_CHARS
 
 _DEFAULT_LOGS_MAX_SILENT: Final[int] = 0
 _DEFAULT_LOGS_MAX_SILENT_DEBUG: Final[int] = 12
@@ -448,10 +334,9 @@ _LOGS_TRUNCATED_SENTINEL: Final[str] = "[LOGS_TRUNCATED]"
 
 def logs_limit() -> int:
     """
-    Devuelve el límite de logs acumulables en una lista `logs` (por item),
-    según SILENT_MODE/DEBUG_MODE.
+    Límite de logs acumulables por item, según modos.
 
-    Se puede ajustar desde backend.config:
+    Ajustable desde config:
       - LOGGER_LOGS_MAX_SILENT
       - LOGGER_LOGS_MAX_SILENT_DEBUG
       - LOGGER_LOGS_MAX_NORMAL
@@ -464,18 +349,12 @@ def logs_limit() -> int:
 
 
 def truncate_line(text: str, max_chars: int | None = None) -> str:
-    """
-    Trunca una línea para evitar explosiones (por ejemplo JSON grande).
-    """
-    if not isinstance(text, str):
-        text = str(text)
-
+    """Trunca una línea para evitar payloads enormes (JSON/HTML/etc.)."""
     limit = (
         int(max_chars)
         if isinstance(max_chars, int) and max_chars > 0
         else _cfg_int("LOGGER_LOG_LINE_MAX_CHARS", _DEFAULT_LOG_LINE_MAX_CHARS)
     )
-
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 12)] + " …(truncated)"
@@ -489,18 +368,10 @@ def append_bounded_log(
     tag: str | None = None,
 ) -> None:
     """
-    Añade un log a una lista `logs` respetando límites por modo.
+    Añade un log a `logs` respetando límites.
 
-    - force=True:
-        * Ignora límites (útil para errores críticos).
-        * Aun así se trunca la línea para evitar payloads enormes.
-    - tag:
-        * Si se pasa, se prefija como "[TAG] ..."
-
-    Política:
-    - SILENT + !DEBUG -> limit=0 (no acumula nada).
-    - SILENT + DEBUG  -> pocas líneas (útiles).
-    - NO SILENT       -> más líneas, pero siempre capadas.
+    - force=True: ignora el límite (pero trunca).
+    - SILENT + !DEBUG -> normalmente no acumula (limit=0).
     """
     if not isinstance(logs, list):
         return
@@ -514,12 +385,10 @@ def append_bounded_log(
         logs.append(msg)
         return
 
-    # En silent con limit=0: no acumulamos logs.
     if limit <= 0:
         return
 
     if len(logs) >= limit:
-        # Añadimos sentinel solo una vez.
         if not logs or logs[-1] != _LOGS_TRUNCATED_SENTINEL:
             logs.append(_LOGS_TRUNCATED_SENTINEL)
         return
@@ -529,13 +398,12 @@ def append_bounded_log(
 
 def debug_ctx(tag: str, msg: object) -> None:
     """
-    Debug contextual con “tag” consistente en todo el proyecto.
+    Debug contextual con tag.
 
-    Reglas:
     - DEBUG_MODE=False -> no-op
     - DEBUG_MODE=True:
-        * SILENT_MODE=True  -> progress("[TAG][DEBUG] ...")  (señal mínima sin timestamps)
-        * SILENT_MODE=False -> logger.info("[TAG][DEBUG] ...")
+        * SILENT_MODE=True  -> progress("[TAG][DEBUG] ...")
+        * SILENT_MODE=False -> info("[TAG][DEBUG] ...")
     """
     if not is_debug_mode():
         return
@@ -549,7 +417,6 @@ def debug_ctx(tag: str, msg: object) -> None:
         else:
             info(f"[{t}][DEBUG] {text}")
     except Exception:
-        # logging nunca debe romper el flujo
         if not is_silent_mode():
             try:
                 print(f"[{t}][DEBUG] {text}")
