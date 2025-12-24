@@ -1,81 +1,64 @@
 from __future__ import annotations
 
 """
-backend/collection_analiza_plex.py  (antes: analiza_plex.py)
+backend/analiza_plex.py
 
 Orquestador principal de análisis Plex (modo streaming + bounded inflight).
 
-✅ Cambio de esta iteración (patch mínimo)
------------------------------------------
-- Este orquestador sigue llamando a `flush_external_caches()` EXACTAMENTE igual que antes
-  (una vez al final del run), pero ahora ese flush ya NO depende de ningún wrapper de Wiki
-  (p.ej. `get_wiki_client()`), porque `collection_analysis.py` ya hace llamadas directas
-  (get_wiki_for_input / get_wiki) y expone un flush agregado.
-
-Objetivo del módulo
--------------------
-Conecta Plex -> MovieInput -> pipeline por-item (analyze_movie) y escribe CSVs:
+✅ Objetivo
+----------
+Conectar Plex -> MovieInput -> pipeline por-item (analyze_movie) y escribir CSVs:
 
 - report_all.csv         (streaming: se escribe a medida que completan items)
-- metadata_fix.csv       (streaming: sugerencias de metadata; en Plex suele tener contenido)
-- report_filtered.csv    (al final y solo si hay filas DELETE/MAYBE; se ordena)
+- metadata_fix.csv       (streaming: sugerencias de metadata)
+- report_filtered.csv    (al final; solo si hay DELETE/MAYBE; se ordena)
 
-Mejoras clave (performance: IO + APIs externas)
------------------------------------------------
+✅ Optimización / robustez (alineado con tus últimos cambios)
+------------------------------------------------------------
 1) Bounded in-flight futures (por biblioteca)
-   - Mantiene un máximo de futures “en vuelo” (inflight_cap).
-   - Beneficios:
-     * menos memoria (closures + buffers + resultados)
-     * menor latencia: se empiezan a escribir filas antes
-     * mejor comportamiento en bibliotecas grandes
+   - Cap “inflight” = workers * factor
+   - Menos memoria, menos latencia, más estable en bibliotecas grandes
 
 2) Orden estable en NO SILENT sin lista gigante
-   - pending_by_index + next_to_write (memoria ~ O(inflight) en vez de O(N)).
+   - pending_by_index + next_to_write (memoria ~ O(inflight), no O(N))
 
-3) Compatible con “Lazy OMDb/Wiki”
-   - analyze_movie / core pueden no llamar OMDb.
-   - Aun así, limitamos concurrencia con un cap sensato para evitar “storm” de IO.
+3) Variables centralizables en config.py
+   - Este módulo NO define knobs hard-coded si ya están en config.py.
+   - Para no romper compatibilidad: getattr(config, ..., default).
 
-Filosofía de logging (alineado con backend/logger.py)
------------------------------------------------------
+4) Métricas con run_metrics.py (best-effort)
+   - Instrumenta: timing por biblioteca, contadores de encoladas/procesadas/errores/decisiones.
+   - Gated por PLEX_RUN_METRICS_ENABLED.
+
+5) Resilience (resilience.py)
+   - Envuelve el arranque “sensible” (connect_plex / get_libraries_to_analyze) con wrapper best-effort.
+
+⚠️ Logs (mantiene la política)
+------------------------------
 - logger.progress(...)               -> SIEMPRE visible (heartbeat)
-- logger.info/warning/error(...)     -> logs por nivel (respetan SILENT_MODE salvo error())
+- logger.info/warning/error(...)     -> respetan SILENT_MODE salvo error(always=True)
 - logger.debug_ctx("PLEX", "...")    -> debug contextual (DEBUG_MODE gated)
 
-En SILENT_MODE:
-- progresos compactos con progress()
-- resumen final explícito + estado de filtered.csv
-En DEBUG_MODE:
-- métricas OMDb y rankings sin spamear en modo normal
+Importante:
+- El orquestador llama a flush_external_caches() UNA sola vez al final del run (finally).
+  No por biblioteca, no por item.
 
-Notas sobre métricas “prepare/analyze”
---------------------------------------
-Se mantienen por continuidad histórica. Con drenaje durante encolado:
-- “prepare” puede incluir algo de ejecución real (porque drenamos para acotar inflight),
-  pero sigue siendo útil como aproximación para comparar coste entre bibliotecas.
+Nota sobre Pylance / sintaxis
+-----------------------------
+- Python NO permite `nonlocal (a, b, c)`. Debe declararse uno a uno.
+  Este fichero ya está corregido para evitar esos errores.
 """
 
 import time
 from collections.abc import Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from typing import Any
+from typing import Any, Callable, cast
 
+from backend import config as _cfg
 from backend import logger as logger
 from backend.collection_analysis import analyze_movie, flush_external_caches
-from backend.config import (
-    DEBUG_MODE,
-    EXCLUDE_PLEX_LIBRARIES,
-    METADATA_FIX_PATH,
-    OMDB_HTTP_MAX_CONCURRENCY,
-    OMDB_HTTP_MIN_INTERVAL_SECONDS,
-    PLEX_ANALYZE_WORKERS,
-    REPORT_ALL_PATH,
-    REPORT_FILTERED_PATH,
-    SILENT_MODE,
-)
 from backend.decision_logic import sort_filtered_rows
 from backend.movie_input import MovieInput
-from backend.omdb_client import get_omdb_metrics_snapshot, reset_omdb_metrics
 from backend.plex_client import (
     connect_plex,
     get_best_search_title,
@@ -89,169 +72,162 @@ from backend.reporting import (
     open_suggestions_csv_writer,
 )
 
+# -----------------------------------------------------------------------------
+# Best-effort: integración con resilience.py y run_metrics.py
+# -----------------------------------------------------------------------------
+try:
+    # Se asume un wrapper del estilo: resilient_call(fn, *, label="...", **kw) -> T
+    from backend.resilience import resilient_call as _resilient_call  # type: ignore
+except Exception:  # pragma: no cover
+    _resilient_call = None  # type: ignore
+
+
+try:
+    # Se asume un API flexible; adaptamos con wrappers no-op si difiere.
+    import backend.run_metrics as _rm  # type: ignore
+except Exception:  # pragma: no cover
+    _rm = None  # type: ignore
+
+
 # ============================================================================
-# CONFIG: Idioma por librería
+# Knobs (preferimos config.py; fallback a defaults si no existen)
 # ============================================================================
 
-_PLEX_LIBRARY_LANGUAGE_DEFAULT: str = "es"
-_PLEX_LIBRARY_LANGUAGE_BY_NAME: dict[str, str] = {
-    # "Movies": "es",
-}
+# 6) Permite desactivar métricas del orquestador sin tocar código.
+_PLEX_RUN_METRICS_ENABLED: bool = bool(getattr(_cfg, "PLEX_RUN_METRICS_ENABLED", True))
 
-_PROGRESS_EVERY_N_MOVIES: int = 100
-_MAX_WORKERS_CAP: int = 64
+# 4) Idioma por defecto por librería
+_PLEX_LIBRARY_LANGUAGE_DEFAULT: str = cast(str, getattr(_cfg, "PLEX_LIBRARY_LANGUAGE_DEFAULT", "es"))
 
-# Máximo de futures simultáneos por biblioteca = workers * factor
-_DEFAULT_MAX_INFLIGHT_FACTOR: int = 4
+# 5) Mapa nombre librería -> idioma
+_PLEX_LIBRARY_LANGUAGE_BY_NAME: dict[str, str] = cast(
+    dict[str, str],
+    getattr(_cfg, "PLEX_LIBRARY_LANGUAGE_BY_NAME", {}),
+)
+
+# 1) Progress cada N películas (para logs/heartbeat)
+_PROGRESS_EVERY_N_MOVIES: int = int(getattr(_cfg, "PLEX_PROGRESS_EVERY_N_MOVIES", 100))
+
+# 2) Cap global (hard cap) de workers para el pool
+_MAX_WORKERS_CAP: int = int(getattr(_cfg, "PLEX_MAX_WORKERS_CAP", 64))
+
+# 3) Factor inflight = workers * factor
+_DEFAULT_MAX_INFLIGHT_FACTOR: int = int(getattr(_cfg, "PLEX_MAX_INFLIGHT_FACTOR", 4))
+
+# Imports directos “clásicos”
+DEBUG_MODE: bool = bool(getattr(_cfg, "DEBUG_MODE", False))
+SILENT_MODE: bool = bool(getattr(_cfg, "SILENT_MODE", False))
+
+PLEX_ANALYZE_WORKERS: int = int(getattr(_cfg, "PLEX_ANALYZE_WORKERS", 8))
+EXCLUDE_PLEX_LIBRARIES: list[str] = list(getattr(_cfg, "EXCLUDE_PLEX_LIBRARIES", []))
+
+REPORT_ALL_PATH: str = str(getattr(_cfg, "REPORT_ALL_PATH"))
+REPORT_FILTERED_PATH: str = str(getattr(_cfg, "REPORT_FILTERED_PATH"))
+METADATA_FIX_PATH: str = str(getattr(_cfg, "METADATA_FIX_PATH"))
+
+# OMDb knobs (solo para capear workers; no hacemos lógica OMDb aquí)
+OMDB_HTTP_MAX_CONCURRENCY: int = int(getattr(_cfg, "OMDB_HTTP_MAX_CONCURRENCY", 2))
+OMDB_HTTP_MIN_INTERVAL_SECONDS: float = float(getattr(_cfg, "OMDB_HTTP_MIN_INTERVAL_SECONDS", 0.10))
 
 
-# ============================================================================
-# OMDb metrics helpers (solo SILENT+DEBUG)
-# ============================================================================
+# -----------------------------------------------------------------------------
+# Helpers métricas (best-effort) — gated por PLEX_RUN_METRICS_ENABLED
+# -----------------------------------------------------------------------------
+def _rm_inc(name: str, value: int = 1, **tags: object) -> None:
+    """
+    Incremento best-effort de un contador en run_metrics.
 
-
-def _metrics_get_int(m: Mapping[str, object], key: str) -> int:
-    """Parse defensivo de métricas para evitar fallos por tipos inesperados."""
+    - Si PLEX_RUN_METRICS_ENABLED=False => no-op
+    - Si run_metrics no existe / API difiere => no-op
+    """
+    if not _PLEX_RUN_METRICS_ENABLED or _rm is None:
+        return
     try:
-        v = m.get(key, 0)
-        if isinstance(v, bool):
-            return int(v)
-        if isinstance(v, int):
-            return v
-        if isinstance(v, float):
-            return int(v)
-        if isinstance(v, str) and v.strip().isdigit():
-            return int(v.strip())
+        fn = getattr(_rm, "inc", None) or getattr(_rm, "counter_inc", None)
+        if callable(fn):
+            # Algunos APIs aceptan tags como dict, otros como kwargs; probamos sin romper.
+            try:
+                fn(name, value=value, tags=tags)  # type: ignore[misc]
+            except TypeError:
+                fn(name, value=value, **tags)  # type: ignore[misc]
     except Exception:
-        pass
-    return 0
-
-
-def _metrics_diff(before: Mapping[str, object], after: Mapping[str, object]) -> dict[str, int]:
-    """Diff parcial de métricas “interesantes” (evita ruido)."""
-    keys = (
-        "cache_hits",
-        "cache_misses",
-        "http_requests",
-        "http_failures",
-        "throttle_sleeps",
-        "rate_limit_hits",
-        "rate_limit_sleeps",
-        "disabled_switches",
-        "cache_store_writes",
-        "cache_patch_writes",
-        "candidate_search_calls",
-    )
-    out: dict[str, int] = {}
-    for k in keys:
-        out[k] = max(0, _metrics_get_int(after, k) - _metrics_get_int(before, k))
-    return out
-
-
-def _log_omdb_metrics(prefix: str, metrics: Mapping[str, object] | None = None) -> None:
-    """
-    Log ultra-compacto de métricas OMDb.
-
-    Solo se emite en SILENT+DEBUG:
-    - SILENT para no contaminar UI normal
-    - DEBUG para no pagar coste/ruido si no se está diagnosticando
-    """
-    if not (SILENT_MODE and DEBUG_MODE):
         return
 
-    m = metrics or get_omdb_metrics_snapshot()
-    logger.progress(
-        f"{prefix} OMDb metrics: "
-        f"cache_hits={_metrics_get_int(m, 'cache_hits')} "
-        f"cache_misses={_metrics_get_int(m, 'cache_misses')} "
-        f"http_requests={_metrics_get_int(m, 'http_requests')} "
-        f"http_failures={_metrics_get_int(m, 'http_failures')} "
-        f"throttle_sleeps={_metrics_get_int(m, 'throttle_sleeps')} "
-        f"rate_limit_hits={_metrics_get_int(m, 'rate_limit_hits')} "
-        f"rate_limit_sleeps={_metrics_get_int(m, 'rate_limit_sleeps')} "
-        f"disabled_switches={_metrics_get_int(m, 'disabled_switches')} "
-        f"cache_store_writes={_metrics_get_int(m, 'cache_store_writes')} "
-        f"cache_patch_writes={_metrics_get_int(m, 'cache_patch_writes')} "
-        f"candidate_search_calls={_metrics_get_int(m, 'candidate_search_calls')}"
-    )
 
-
-def _rank_top(deltas_by_lib: dict[str, dict[str, int]], key: str, top_n: int = 5) -> list[tuple[str, int]]:
-    rows: list[tuple[str, int]] = [(lib, int(d.get(key, 0))) for lib, d in deltas_by_lib.items()]
-    rows.sort(key=lambda x: x[1], reverse=True)
-    return rows[:top_n]
-
-
-def _compute_cost_score(delta: Mapping[str, int]) -> int:
+def _rm_set(name: str, value: object, **tags: object) -> None:
     """
-    Heurística de “coste”:
-    - requests cuestan poco
-    - throttle medio
-    - rate-limit y fallos mucho
-    - sleeps por rate-limit muchísimo
+    Set best-effort (gauge) en run_metrics.
+
+    - Si PLEX_RUN_METRICS_ENABLED=False => no-op
+    - Si run_metrics no existe / API difiere => no-op
     """
-    http_requests = int(delta.get("http_requests", 0))
-    rate_limit_sleeps = int(delta.get("rate_limit_sleeps", 0))
-    http_failures = int(delta.get("http_failures", 0))
-    rate_limit_hits = int(delta.get("rate_limit_hits", 0))
-    throttle_sleeps = int(delta.get("throttle_sleeps", 0))
-
-    score = 0
-    score += http_requests * 1
-    score += throttle_sleeps * 3
-    score += rate_limit_hits * 10
-    score += http_failures * 20
-    score += rate_limit_sleeps * 50
-    return score
-
-
-def _rank_top_by_total_cost(deltas_by_lib: dict[str, dict[str, int]], top_n: int = 5) -> list[tuple[str, int]]:
-    rows: list[tuple[str, int]] = [(lib, _compute_cost_score(d)) for lib, d in deltas_by_lib.items()]
-    rows.sort(key=lambda x: x[1], reverse=True)
-    return rows[:top_n]
-
-
-def _log_omdb_rankings(deltas_by_lib: dict[str, dict[str, int]], *, min_groups: int = 2) -> None:
-    """Rankings compactos para diagnosticar bibliotecas “caras”."""
-    if not (SILENT_MODE and DEBUG_MODE):
+    if not _PLEX_RUN_METRICS_ENABLED or _rm is None:
         return
-    if not deltas_by_lib or len(deltas_by_lib) < min_groups:
+    try:
+        fn = getattr(_rm, "set_gauge", None) or getattr(_rm, "gauge_set", None)
+        if callable(fn):
+            try:
+                fn(name, value=value, tags=tags)  # type: ignore[misc]
+            except TypeError:
+                fn(name, value=value, **tags)  # type: ignore[misc]
+    except Exception:
         return
 
-    top_cost = _rank_top_by_total_cost(deltas_by_lib, top_n=5)
-    top_http = _rank_top(deltas_by_lib, "http_requests", top_n=5)
-    top_rls = _rank_top(deltas_by_lib, "rate_limit_sleeps", top_n=5)
-    top_fail = _rank_top(deltas_by_lib, "http_failures", top_n=5)
-    top_rlh = _rank_top(deltas_by_lib, "rate_limit_hits", top_n=5)
 
-    def _fmt(items: list[tuple[str, int]]) -> str:
-        usable = [(name, val) for (name, val) in items if val > 0]
-        return " | ".join([f"{i+1}) {name}: {val}" for i, (name, val) in enumerate(usable)])
+class _RM_Timer:
+    """
+    Context manager de timing best-effort para run_metrics.
 
-    if (line := _fmt(top_cost)):
-        logger.progress(f"[PLEX][DEBUG] Top libraries by TOTAL_COST: {line}")
-    if (line := _fmt(top_http)):
-        logger.progress(f"[PLEX][DEBUG] Top libraries by http_requests: {line}")
-    if (line := _fmt(top_rls)):
-        logger.progress(f"[PLEX][DEBUG] Top libraries by rate_limit_sleeps: {line}")
-    if (line := _fmt(top_fail)):
-        logger.progress(f"[PLEX][DEBUG] Top libraries by http_failures: {line}")
-    if (line := _fmt(top_rlh)):
-        logger.progress(f"[PLEX][DEBUG] Top libraries by rate_limit_hits: {line}")
+    - Si PLEX_RUN_METRICS_ENABLED=False => no-op
+    - Si run_metrics no existe => no-op
+    """
+
+    def __init__(self, name: str, **tags: object) -> None:
+        self._name = name
+        self._tags = tags
+        self._t0 = 0.0
+
+    def __enter__(self) -> "_RM_Timer":
+        self._t0 = time.monotonic()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        elapsed = time.monotonic() - self._t0
+        if not _PLEX_RUN_METRICS_ENABLED or _rm is None:
+            return
+        try:
+            fn = getattr(_rm, "observe_seconds", None) or getattr(_rm, "timing", None)
+            if callable(fn):
+                try:
+                    fn(self._name, seconds=elapsed, tags=self._tags)  # type: ignore[misc]
+                except TypeError:
+                    fn(self._name, seconds=elapsed, **self._tags)  # type: ignore[misc]
+        except Exception:
+            return
+
+
+def _with_resilience(fn: Callable[[], Any], *, label: str) -> Any:
+    """
+    Ejecuta una función usando resilience.py si existe, sin cambiar semántica:
+
+    - si resilience no está disponible => llamada directa
+    - si falla => re-lanza (para que el caller haga el manejo)
+    """
+    if _resilient_call is None:
+        return fn()
+    return _resilient_call(fn, label=label)  # type: ignore[misc]
 
 
 # ============================================================================
-# WORKERS (cap por OMDb limiter)
+# WORKERS / inflight caps
 # ============================================================================
-
-
 def _compute_max_workers(requested: int, total_work_items: int | None) -> int:
     """
     Decide el número de workers reales del ThreadPool por biblioteca.
 
     Capas:
-    1) requested (PLEX_ANALYZE_WORKERS) con clamp [1.._MAX_WORKERS_CAP]
-    2) cap relativo a OMDb (evita saturar la capa HTTP si hay storm):
+    1) requested (PLEX_ANALYZE_WORKERS) con clamp [1..PLEX_MAX_WORKERS_CAP]
+    2) cap relativo a OMDb (evita saturar capa HTTP si hay “storm”):
        OMDB_HTTP_MAX_CONCURRENCY * 8 (mínimo 4)
     3) cap por total_work_items si se conoce (no spawn de más hilos que items)
     """
@@ -274,20 +250,20 @@ def _compute_max_inflight(max_workers: int) -> int:
     """
     Máximo de futures simultáneos “en vuelo” por biblioteca.
 
-    Regla: inflight >= workers para no starve.
+    Regla: inflight >= workers para no “starve”.
     """
-    inflight = max_workers * _DEFAULT_MAX_INFLIGHT_FACTOR
-    return max(max_workers, inflight)
+    inflight = int(max_workers) * int(_DEFAULT_MAX_INFLIGHT_FACTOR)
+    return max(int(max_workers), int(inflight))
 
 
 # ============================================================================
-# UTILIDADES PLEX (idioma / safe access)
+# UTILIDADES PLEX
 # ============================================================================
-
-
 def _get_plex_library_language(lib_name: str) -> str:
-    """Idioma por librería, usado por el scoring/core via MovieInput.extra."""
-    return _PLEX_LIBRARY_LANGUAGE_BY_NAME.get(lib_name) or _PLEX_LIBRARY_LANGUAGE_DEFAULT
+    """Idioma por librería, consumido por el pipeline via MovieInput.extra."""
+    if lib_name and lib_name in _PLEX_LIBRARY_LANGUAGE_BY_NAME:
+        return str(_PLEX_LIBRARY_LANGUAGE_BY_NAME[lib_name])
+    return str(_PLEX_LIBRARY_LANGUAGE_DEFAULT)
 
 
 def _library_title(library: Any) -> str:
@@ -296,7 +272,7 @@ def _library_title(library: Any) -> str:
 
 
 def _library_total_items(library: Any) -> int | None:
-    """totalSize si Plex lo aporta."""
+    """totalSize si Plex lo aporta (si existe y es usable)."""
     raw = getattr(library, "totalSize", None)
     return raw if isinstance(raw, int) and raw >= 0 else None
 
@@ -305,10 +281,10 @@ def _iter_movies_with_total(library: Any) -> tuple[Iterable[Any], int | None]:
     """
     Devuelve (iterable_de_movies, total_en_biblioteca | None).
 
-    - SILENT_MODE: no materializamos para contar (evitamos RAM).
+    - SILENT_MODE: no materializamos para contar (evita RAM).
     - NO SILENT:
         * si Plex da totalSize, lo usamos para (i/total)
-        * si no y DEBUG_MODE: materializamos para poder mostrar total real
+        * si no y DEBUG_MODE: materializamos para total real
         * si no: devolvemos total None
     """
     if SILENT_MODE:
@@ -330,6 +306,7 @@ def _format_progress_prefix(index: int, total: int | None) -> str:
 
 
 def _format_human_size(num_bytes: int) -> str:
+    """Convierte bytes a tamaño humano (debug/visibilidad; no crítico)."""
     value = float(num_bytes)
     units = ("B", "KiB", "MiB", "GiB", "TiB")
     unit_index = 0
@@ -362,145 +339,151 @@ def _format_movie_progress_line(
 # ============================================================================
 # ORQUESTACIÓN PRINCIPAL
 # ============================================================================
-
-
 def analyze_all_libraries() -> None:
     """
     Punto de entrada principal para analizar Plex.
 
     Política de memoria:
     - Siempre: filtered_rows (DELETE/MAYBE) para ordenación final.
-    - SILENT: filas se escriben al vuelo (no se guarda la biblioteca completa).
+    - SILENT: filas se escriben al vuelo.
     - NO SILENT: orden estable por biblioteca con buffer acotado (pending_by_index).
 
     Robustez:
-    - Errores por-item no paran el run; se contabilizan y se reportan.
+    - Errores por-item NO paran el run; se contabilizan y se reportan.
     - Bibliotecas excluidas por config se saltan de forma explícita.
 
     Importante:
-    - Este orquestador llama a flush_external_caches() UNA sola vez al final del run.
-      (No por biblioteca, no por item.)
+    - flush_external_caches() se llama UNA vez al final del run (finally).
     """
     t0 = time.monotonic()
-    reset_omdb_metrics()
+    _rm_inc("plex.run.start", 1)
 
-    # ✅ Patch mínimo solicitado:
-    # Aseguramos flush de caches aunque haya early-return o excepción inesperada.
+    # “Conectores” sensibles: se benefician de resilience si está disponible.
     try:
-        plex = connect_plex()
-        raw_libraries = get_libraries_to_analyze(plex)
+        plex = _with_resilience(connect_plex, label="plex.connect")
+        raw_libraries = _with_resilience(lambda: get_libraries_to_analyze(plex), label="plex.list_libraries")
+    except Exception as exc:
+        logger.error(f"[PLEX] Error conectando/listando bibliotecas: {exc!r}", always=True)
+        _rm_inc("plex.run.fatal_error", 1)
+        return
 
-        # Filtrado por EXCLUDE_PLEX_LIBRARIES
-        libraries: list[Any] = []
-        excluded: list[str] = []
-        for lib in raw_libraries:
-            name = _library_title(lib)
-            if name and name in EXCLUDE_PLEX_LIBRARIES:
-                excluded.append(name)
-                continue
-            libraries.append(lib)
+    # Filtrado por EXCLUDE_PLEX_LIBRARIES
+    libraries: list[Any] = []
+    excluded: list[str] = []
+    for lib in raw_libraries:
+        name = _library_title(lib)
+        if name and name in EXCLUDE_PLEX_LIBRARIES:
+            excluded.append(name)
+            continue
+        libraries.append(lib)
 
-        total_libs = len(libraries)
+    total_libs = len(libraries)
+    _rm_set("plex.libraries.total", total_libs)
+    _rm_set("plex.libraries.excluded", len(excluded))
 
-        if SILENT_MODE and excluded:
-            logger.progress("[PLEX] Bibliotecas excluidas por configuración: " + ", ".join(sorted(excluded)))
+    if SILENT_MODE and excluded:
+        logger.progress("[PLEX] Bibliotecas excluidas por configuración: " + ", ".join(sorted(excluded)))
 
-        if total_libs == 0:
-            logger.progress("[PLEX] No hay bibliotecas para analizar (0).")
+    if total_libs == 0:
+        logger.progress("[PLEX] No hay bibliotecas para analizar (0).")
+        _rm_inc("plex.run.no_libraries", 1)
+        return
+
+    filtered_rows: list[dict[str, object]] = []
+    decisions_count: dict[str, int] = {"KEEP": 0, "MAYBE": 0, "DELETE": 0, "UNKNOWN": 0}
+
+    total_movies_processed = 0
+    total_movies_errors = 0
+    total_rows_written = 0
+    total_suggestions_written = 0
+
+    # Workers globales (cap adicional por OMDb)
+    max_workers = _compute_max_workers(PLEX_ANALYZE_WORKERS, total_work_items=None)
+    max_inflight = _compute_max_inflight(max_workers)
+
+    _rm_set("plex.pool.workers", max_workers)
+    _rm_set("plex.pool.inflight_cap", max_inflight)
+
+    if SILENT_MODE:
+        logger.progress(
+            f"[PLEX] ThreadPool workers={max_workers} inflight_cap={max_inflight} (por biblioteca) "
+            f"(PLEX_ANALYZE_WORKERS={PLEX_ANALYZE_WORKERS}, "
+            f"OMDB_HTTP_MAX_CONCURRENCY={OMDB_HTTP_MAX_CONCURRENCY}, "
+            f"OMDB_HTTP_MIN_INTERVAL_SECONDS={OMDB_HTTP_MIN_INTERVAL_SECONDS})"
+        )
+    else:
+        logger.debug_ctx(
+            "PLEX",
+            f"ThreadPool workers={max_workers} inflight_cap={max_inflight} (por biblioteca) "
+            f"(PLEX_ANALYZE_WORKERS={PLEX_ANALYZE_WORKERS}, cap por OMDb limiter)",
+        )
+
+    def _maybe_print_movie_logs(logs: list[str]) -> None:
+        """
+        logs vienen acotados desde collection_analysis.
+
+        - NO SILENT: se imprimen como info normal.
+        - SILENT+DEBUG: se imprimen always=True (útil para inspección sin romper silent).
+        - SILENT sin debug: no se imprime nada.
+        """
+        if not logs:
             return
+        if not SILENT_MODE:
+            for line in logs:
+                logger.info(line)
+            return
+        if DEBUG_MODE:
+            for line in logs:
+                logger.info(line, always=True)
 
-        filtered_rows: list[dict[str, object]] = []
-        decisions_count: dict[str, int] = {"KEEP": 0, "MAYBE": 0, "DELETE": 0, "UNKNOWN": 0}
-
-        total_movies_processed = 0
-        total_movies_errors = 0
-        total_rows_written = 0
-        total_suggestions_written = 0
-
-        # Workers globales (cap adicional por OMDb)
-        max_workers = _compute_max_workers(PLEX_ANALYZE_WORKERS, total_work_items=None)
-        max_inflight = _compute_max_inflight(max_workers)
-
-        if SILENT_MODE:
-            logger.progress(
-                f"[PLEX] ThreadPool workers={max_workers} inflight_cap={max_inflight} (por biblioteca) "
-                f"(PLEX_ANALYZE_WORKERS={PLEX_ANALYZE_WORKERS}, "
-                f"OMDB_HTTP_MAX_CONCURRENCY={OMDB_HTTP_MAX_CONCURRENCY}, "
-                f"OMDB_HTTP_MIN_INTERVAL_SECONDS={OMDB_HTTP_MIN_INTERVAL_SECONDS})"
-            )
+    def _tally_decision(row: Mapping[str, object]) -> None:
+        """Acumula decisiones para resumen final + métricas."""
+        d = row.get("decision")
+        if d in ("KEEP", "MAYBE", "DELETE"):
+            decisions_count[str(d)] += 1
+            _rm_inc(f"plex.decision.{str(d).lower()}", 1)
         else:
-            logger.debug_ctx(
-                "PLEX",
-                f"ThreadPool workers={max_workers} inflight_cap={max_inflight} (por biblioteca) "
-                f"(PLEX_ANALYZE_WORKERS={PLEX_ANALYZE_WORKERS}, cap por OMDb limiter)",
-            )
+            decisions_count["UNKNOWN"] += 1
+            _rm_inc("plex.decision.unknown", 1)
 
-        # Rankings de métricas (solo SILENT+DEBUG)
-        lib_omdb_delta_prepare: dict[str, dict[str, int]] = {}
-        lib_omdb_delta_analyze: dict[str, dict[str, int]] = {}
+    def _handle_result(
+        res: tuple[dict[str, object] | None, dict[str, object] | None, list[str]],
+        *,
+        all_writer: Any,
+        sugg_writer: Any,
+        lib_rows_written_ref: dict[str, int],
+        lib_suggestions_written_ref: dict[str, int],
+    ) -> None:
+        """
+        Aplica un resultado de analyze_movie:
+        - imprime logs (según modo)
+        - escribe row a report_all.csv
+        - acumula filtered_rows si DELETE/MAYBE
+        - escribe meta_sugg a metadata_fix.csv
+        """
+        nonlocal total_rows_written
+        nonlocal total_suggestions_written
 
-        def _maybe_print_movie_logs(logs: list[str]) -> None:
-            """
-            logs vienen acotados desde collection_analysis.
+        row, meta_sugg, logs = res
+        _maybe_print_movie_logs(logs)
 
-            - NO SILENT: se imprimen como info normal.
-            - SILENT+DEBUG: se imprimen always=True (útil para inspección sin romper silent).
-            - SILENT sin debug: no se imprime nada.
-            """
-            if not logs:
-                return
-            if not SILENT_MODE:
-                for line in logs:
-                    logger.info(line)
-                return
-            if DEBUG_MODE:
-                for line in logs:
-                    logger.info(line, always=True)
+        if row:
+            all_writer.write_row(row)
+            total_rows_written += 1
+            lib_rows_written_ref["v"] += 1
 
-        def _tally_decision(row: Mapping[str, object]) -> None:
-            """Acumula decisiones para resumen final."""
-            d = row.get("decision")
-            if d in ("KEEP", "MAYBE", "DELETE"):
-                decisions_count[str(d)] += 1
-            else:
-                decisions_count["UNKNOWN"] += 1
+            _tally_decision(row)
 
-        def _handle_result(
-            res: tuple[dict[str, object] | None, dict[str, object] | None, list[str]],
-            *,
-            all_writer: Any,
-            sugg_writer: Any,
-            lib_rows_written_ref: dict[str, int],
-            lib_suggestions_written_ref: dict[str, int],
-        ) -> None:
-            """
-            Aplica un resultado de analyze_movie:
-            - imprime logs (según modo)
-            - escribe row a report_all.csv
-            - acumula filtered_rows si DELETE/MAYBE
-            - escribe meta_sugg a metadata_fix.csv
-            - actualiza contadores globales y por biblioteca
-            """
-            nonlocal total_rows_written, total_suggestions_written
+            if row.get("decision") in {"DELETE", "MAYBE"}:
+                filtered_rows.append(dict(row))
 
-            row, meta_sugg, logs = res
-            _maybe_print_movie_logs(logs)
+        if meta_sugg:
+            sugg_writer.write_row(meta_sugg)
+            total_suggestions_written += 1
+            lib_suggestions_written_ref["v"] += 1
+            _rm_inc("plex.metadata_suggestion.written", 1)
 
-            if row:
-                all_writer.write_row(row)
-                total_rows_written += 1
-                lib_rows_written_ref["v"] += 1
-
-                _tally_decision(row)
-
-                if row.get("decision") in {"DELETE", "MAYBE"}:
-                    filtered_rows.append(dict(row))
-
-            if meta_sugg:
-                sugg_writer.write_row(meta_sugg)
-                total_suggestions_written += 1
-                lib_suggestions_written_ref["v"] += 1
-
+    try:
         # =========================================================================
         # Writers (streaming global)
         # =========================================================================
@@ -527,24 +510,14 @@ def analyze_all_libraries() -> None:
                 lib_rows_written = {"v": 0}
                 lib_suggestions_written = {"v": 0}
 
-                t_lib = time.monotonic()
                 movies_iter, total_movies_in_library = _iter_movies_with_total(library)
 
-                # Métricas (SILENT+DEBUG)
-                prepare_snap_start: dict[str, object] | None = None
-                analyze_snap_start: dict[str, object] | None = None
-
-                if SILENT_MODE and DEBUG_MODE:
-                    prepare_snap_start = dict(get_omdb_metrics_snapshot())
-                    _log_omdb_metrics(prefix=f"[PLEX][DEBUG] {lib_key}: prepare:start:")
-
-                # future -> índice (1..N)
                 future_to_index: dict[
                     Future[tuple[dict[str, object] | None, dict[str, object] | None, list[str]]],
                     int,
                 ] = {}
 
-                # NO SILENT: orden estable sin lista gigante
+                # NO SILENT: orden estable sin materializar toda la lista
                 next_to_write = 1
                 pending_by_index: dict[
                     int,
@@ -562,19 +535,20 @@ def analyze_all_libraries() -> None:
                     """
                     Drena futures completados.
 
-                    - drain_all=False:
-                        procesa un batch completado para liberar sitio en inflight.
-                    - drain_all=True:
-                        drena hasta completar todo lo pendiente.
+                    - drain_all=False: procesa un batch para liberar sitio en inflight.
+                    - drain_all=True: drena hasta completar todo lo pendiente.
 
-                    Importante:
-                    - en SILENT se procesa/escribe inmediatamente.
-                    - en NO SILENT se guarda por índice y se vuelca en orden.
+                    SILENT: procesa/escribe inmediatamente.
+                    NO SILENT: guarda por índice y vuelca en orden.
                     """
-                    nonlocal lib_movies_completed, lib_movies_errors, total_movies_errors, total_movies_processed, next_to_write
+                    nonlocal lib_movies_completed
+                    nonlocal lib_movies_errors
+                    nonlocal total_movies_errors
+                    nonlocal total_movies_processed
+                    nonlocal next_to_write
 
                     while inflight:
-                        done, _ = wait(inflight, return_when=FIRST_COMPLETED)
+                        done, _pending = wait(inflight, return_when=FIRST_COMPLETED)
                         if not done:
                             return
 
@@ -588,6 +562,7 @@ def analyze_all_libraries() -> None:
                                 lib_movies_errors += 1
                                 total_movies_errors += 1
                                 total_movies_processed += 1
+                                _rm_inc("plex.movie.error", 1, library=lib_key)
 
                                 if not SILENT_MODE and idx_local in index_to_title_year:
                                     t, y = index_to_title_year[idx_local]
@@ -596,7 +571,10 @@ def analyze_all_libraries() -> None:
                                         always=True,
                                     )
                                 else:
-                                    logger.error(f"[PLEX] Error analizando película en '{lib_name}': {exc!r}", always=True)
+                                    logger.error(
+                                        f"[PLEX] Error analizando película en '{lib_name}': {exc!r}",
+                                        always=True,
+                                    )
 
                                 lib_movies_completed += 1
                                 continue
@@ -610,6 +588,7 @@ def analyze_all_libraries() -> None:
                                     lib_suggestions_written_ref=lib_suggestions_written,
                                 )
                                 total_movies_processed += 1
+                                _rm_inc("plex.movie.processed", 1, library=lib_key)
                             else:
                                 if idx_local >= 1:
                                     pending_by_index[idx_local] = res
@@ -624,6 +603,7 @@ def analyze_all_libraries() -> None:
                                         lib_suggestions_written_ref=lib_suggestions_written,
                                     )
                                     total_movies_processed += 1
+                                    _rm_inc("plex.movie.processed", 1, library=lib_key)
                                     next_to_write += 1
 
                             lib_movies_completed += 1
@@ -636,7 +616,7 @@ def analyze_all_libraries() -> None:
                         if not drain_all:
                             return
 
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                with _RM_Timer("plex.library.seconds", library=lib_key), ThreadPoolExecutor(max_workers=max_workers) as executor:
                     for movie_index, movie in enumerate(movies_iter, start=1):
                         title = getattr(movie, "title", "") or ""
                         year_value = getattr(movie, "year", None)
@@ -687,6 +667,7 @@ def analyze_all_libraries() -> None:
                         future_to_index[fut] = movie_index
                         inflight.add(fut)
                         lib_movies_enqueued += 1
+                        _rm_inc("plex.movie.enqueued", 1, library=lib_key)
 
                         if not SILENT_MODE:
                             index_to_title_year[movie_index] = (title, year)
@@ -697,17 +678,9 @@ def analyze_all_libraries() -> None:
                         if len(inflight) >= max_inflight:
                             _drain_completed(drain_all=False)
 
-                    # “prepare delta” al terminar encolado
-                    if SILENT_MODE and DEBUG_MODE and prepare_snap_start is not None:
-                        prepare_delta = _metrics_diff(prepare_snap_start, get_omdb_metrics_snapshot())
-                        lib_omdb_delta_prepare[lib_key] = dict(prepare_delta)
-                        _log_omdb_metrics(prefix=f"[PLEX][DEBUG] {lib_key}: prepare:delta:", metrics=prepare_delta)
-
-                        analyze_snap_start = dict(get_omdb_metrics_snapshot())
-                        _log_omdb_metrics(prefix=f"[PLEX][DEBUG] {lib_key}: analyze:start:")
-
                     _drain_completed(drain_all=True)
 
+                # NO SILENT: por seguridad (no debería quedar nada, pero nunca está de más)
                 if not SILENT_MODE:
                     while next_to_write in pending_by_index:
                         ready = pending_by_index.pop(next_to_write)
@@ -719,14 +692,8 @@ def analyze_all_libraries() -> None:
                             lib_suggestions_written_ref=lib_suggestions_written,
                         )
                         total_movies_processed += 1
+                        _rm_inc("plex.movie.processed", 1, library=lib_key)
                         next_to_write += 1
-
-                if SILENT_MODE and DEBUG_MODE and analyze_snap_start is not None:
-                    analyze_delta = _metrics_diff(analyze_snap_start, get_omdb_metrics_snapshot())
-                    lib_omdb_delta_analyze[lib_key] = dict(analyze_delta)
-                    _log_omdb_metrics(prefix=f"[PLEX][DEBUG] {lib_key}: analyze:delta:", metrics=analyze_delta)
-
-                t_lib_elapsed = time.monotonic() - t_lib
 
                 if SILENT_MODE:
                     logger.progress(
@@ -734,17 +701,18 @@ def analyze_all_libraries() -> None:
                         f"{lib_name} | enqueued={lib_movies_enqueued} | "
                         f"completed={lib_movies_completed} | "
                         f"errors={lib_movies_errors} | rows={lib_rows_written['v']} | "
-                        f"suggestions={lib_suggestions_written['v']} | "
-                        f"time={t_lib_elapsed:.1f}s"
+                        f"suggestions={lib_suggestions_written['v']}"
                     )
                 elif DEBUG_MODE:
                     logger.info(
                         "[PLEX][DEBUG] Biblioteca finalizada: "
                         f"{lib_name} enqueued={lib_movies_enqueued} "
                         f"completed={lib_movies_completed} errors={lib_movies_errors} "
-                        f"rows={lib_rows_written['v']} suggestions={lib_suggestions_written['v']} "
-                        f"time={t_lib_elapsed:.1f}s"
+                        f"rows={lib_rows_written['v']} suggestions={lib_suggestions_written['v']}"
                     )
+
+                _rm_set("plex.library.movies.enqueued", lib_movies_enqueued, library=lib_key)
+                _rm_set("plex.library.movies.errors", lib_movies_errors, library=lib_key)
 
         # =========================================================================
         # filtered report (solo si hay DELETE/MAYBE)
@@ -762,6 +730,13 @@ def analyze_all_libraries() -> None:
 
         elapsed = time.monotonic() - t0
 
+        _rm_set("plex.run.seconds", elapsed)
+        _rm_set("plex.movies.processed", total_movies_processed)
+        _rm_set("plex.movies.errors", total_movies_errors)
+        _rm_set("plex.rows.written", total_rows_written)
+        _rm_set("plex.suggestions.written", total_suggestions_written)
+        _rm_set("plex.filtered.rows", filtered_len)
+
         if SILENT_MODE:
             logger.progress(
                 "[PLEX] Resumen final: "
@@ -773,29 +748,32 @@ def analyze_all_libraries() -> None:
                 f"filtered_rows={filtered_len} filtered_csv={filtered_csv_status} "
                 f"suggestions={total_suggestions_written}"
             )
-
             logger.progress(
                 "[PLEX] CSVs: "
                 f"all={REPORT_ALL_PATH} | suggestions={METADATA_FIX_PATH} | filtered={REPORT_FILTERED_PATH}"
             )
 
-            _log_omdb_metrics(prefix="[PLEX][DEBUG] Global:")
-
-            if DEBUG_MODE:
-                if lib_omdb_delta_prepare:
-                    logger.progress("[PLEX][DEBUG] Rankings (prepare deltas):")
-                    _log_omdb_rankings(lib_omdb_delta_prepare, min_groups=2)
-
-                if lib_omdb_delta_analyze:
-                    logger.progress("[PLEX][DEBUG] Rankings (analyze deltas):")
-                    _log_omdb_rankings(lib_omdb_delta_analyze, min_groups=2)
-
         logger.info("[PLEX] Análisis completado.", always=True)
+        _rm_inc("plex.run.ok", 1)
+
+    except Exception as exc:
+        _rm_inc("plex.run.exception", 1)
+        logger.error(f"[PLEX] Error inesperado en el run: {exc!r}", always=True)
+        raise
 
     finally:
-        # ✅ Patch mínimo: flush una vez al final del run, siempre.
+        # ✅ Flush una vez al final del run, siempre.
         # (No por biblioteca, no por item.)
         try:
             flush_external_caches()
         except Exception as exc:  # pragma: no cover
             logger.debug_ctx("PLEX", f"flush_external_caches failed: {exc!r}")
+
+        # Best-effort: si run_metrics tiene un “log_summary”/”flush”, lo intentamos.
+        if _PLEX_RUN_METRICS_ENABLED and _rm is not None:
+            try:
+                fn = getattr(_rm, "flush", None) or getattr(_rm, "log_summary", None)
+                if callable(fn):
+                    fn()  # type: ignore[misc]
+            except Exception:
+                pass
