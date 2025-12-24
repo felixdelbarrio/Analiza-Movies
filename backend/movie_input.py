@@ -19,7 +19,7 @@ Principios (alineados con el proyecto)
 - Normalización “amigable” para búsquedas externas:
     * limpia tokens típicos de releases/filenames (resolución, codecs, tags...)
     * normaliza separadores raros (., _, NBSP, guiones largos)
-    * elimina acentos (robustez)
+    * (configurable) elimina acentos (robustez)
     * colapsa espacios
 - Heurística de idioma conservadora:
     * NO pretende ser un detector perfecto; solo ayuda a decisiones (metadata_fix, wiki).
@@ -40,6 +40,25 @@ De este modo:
 - las heurísticas viven aquí
 - la política de uso vive en módulos superiores (p.ej. metadata_fix.py)
 
+Integración con config.py
+-------------------------
+Este módulo lee "knobs" definidos en backend/config.py para modular comportamiento
+sin tocar código:
+
+Lookup (normalización para búsquedas):
+- MOVIE_INPUT_LOOKUP_STRIP_ACCENTS
+- MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE
+- MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP
+
+Heurística idioma:
+- MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS
+- MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK
+
+⚠️ Nota de arquitectura:
+- movie_input.py sigue siendo “silencioso” (sin logs), aunque importe config.
+- Si quieres que sea 100% libre de config, podríamos inyectar los flags desde arriba;
+  por ahora se prioriza consistencia y centralización de política.
+
 Notas de diseño
 ---------------
 - normalize_title_for_lookup() se usa para consultas externas (OMDb/Wikipedia).
@@ -51,6 +70,14 @@ from dataclasses import dataclass, field
 import re
 import unicodedata
 from typing import Final, Literal, TypeAlias
+
+from backend.config import (
+    MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS,
+    MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK,
+    MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE,
+    MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP,
+    MOVIE_INPUT_LOOKUP_STRIP_ACCENTS,
+)
 
 # ============================================================================
 # Tipos públicos
@@ -65,11 +92,15 @@ LanguageCode: TypeAlias = Literal["es", "en", "it", "fr", "ja", "ko", "zh", "unk
 # ============================================================================
 
 # Año plausible (para limpiar "Title (1999)" / "[1999]" / etc.)
-_YEAR_IN_TITLE_RE: Final[re.Pattern[str]] = re.compile(r"(?:^|[\s\(\[\-])((?:19|20)\d{2})(?:$|[\s\)\]\-])")
+_YEAR_IN_TITLE_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?:^|[\s\(\[\-])((?:19|20)\d{2})(?:$|[\s\)\]\-])"
+)
 
 # Para “sanitizar” a tokens comparables (conservando letras/dígitos y algunos acentos
-# para no destrozar demasiado antes de quitar diacríticos).
-_NON_ALNUM_RE: Final[re.Pattern[str]] = re.compile(r"[^0-9A-Za-záéíóúÁÉÍÓÚñÑüÜ]+", re.UNICODE)
+# para no destrozar demasiado antes de (opcionalmente) quitar diacríticos).
+_NON_ALNUM_RE: Final[re.Pattern[str]] = re.compile(
+    r"[^0-9A-Za-záéíóúÁÉÍÓÚñÑüÜ]+", re.UNICODE
+)
 _MULTI_SPACE_RE: Final[re.Pattern[str]] = re.compile(r"\s{2,}")
 
 # Separadores típicos de releases
@@ -147,6 +178,9 @@ _NOISE_PHRASE_RE: Final[re.Pattern[str]] = re.compile(
 # Heurística de idioma (tokens + unicode + function words)
 # ----------------------------------------------------------------------------
 # Filosofía: conservadora, preferimos "unknown" antes que asignar mal.
+#
+# Importante: los umbrales “numéricos” (function words) se configuran en config.py
+# (MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS).
 # ============================================================================
 
 # ---------- Español ----------
@@ -253,8 +287,13 @@ _CJK_ANY_RE: Final[re.Pattern[str]] = re.compile(
 # Helpers internos (puros, sin logging)
 # ============================================================================
 
+
 def _strip_accents(text: str) -> str:
-    """Elimina diacríticos para robustez en búsquedas externas."""
+    """
+    Elimina diacríticos para robustez en búsquedas externas.
+
+    Controlado por MOVIE_INPUT_LOOKUP_STRIP_ACCENTS.
+    """
     normalized = unicodedata.normalize("NFKD", text)
     return "".join(ch for ch in normalized if not unicodedata.combining(ch))
 
@@ -275,6 +314,9 @@ def _looks_like_noise_group(text: str) -> bool:
     - contiene tokens single-token de ruido
     - o contiene frases de ruido
     - o es básicamente numérico/año
+
+    Nota:
+    - Conservador: ante dudas, preferimos NO eliminar.
     """
     t = text.strip()
     if not t:
@@ -283,13 +325,11 @@ def _looks_like_noise_group(text: str) -> bool:
     if _NOISE_PHRASE_RE.search(t):
         return True
 
-    # tokens dentro del grupo
     toks = _cleanup_separators(t).split()
     for tok in toks:
         if _NOISE_SINGLE_TOKEN_RE.match(tok):
             return True
 
-    # año o grupo numérico
     if t.isdigit():
         return True
     if _YEAR_IN_TITLE_RE.search(t):
@@ -302,10 +342,15 @@ def _remove_bracketed_noise(text: str) -> str:
     """
     Elimina grupos entre [] () {} cuando parecen ruido.
 
+    Controlado por MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE.
+
     Conservador:
     - solo elimina el grupo si el contenido “parece ruido” (ver _looks_like_noise_group)
     - si no, deja el texto intacto.
     """
+    if not MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE:
+        return text
+
     out = text
     patterns: tuple[re.Pattern[str], ...] = (
         re.compile(r"\[[^\]]+\]"),
@@ -318,8 +363,7 @@ def _remove_bracketed_noise(text: str) -> str:
             m = pat.search(out)
             if m is None:
                 break
-            chunk = out[m.start() : m.end()]
-            inner = chunk[1:-1]
+            inner = out[m.start() + 1 : m.end() - 1]
             if _looks_like_noise_group(inner):
                 out = out[: m.start()] + " " + out[m.end() :]
                 continue
@@ -332,18 +376,24 @@ def _remove_trailing_dash_group(text: str) -> str:
     """
     Si el título es "Movie - 1080p - x265" y lo de la derecha parece ruido, recortamos.
 
+    Controlado por MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP.
+
     Regla:
     - si el segmento a la derecha contiene señales claras de ruido, nos quedamos con la izquierda.
     """
+    if not MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP:
+        return text
+
+    # split exacto por " - " (muy común en nombres) para evitar cortar guiones internos.
     parts = [p.strip() for p in text.split(" - ")]
     if len(parts) <= 1:
         return text
 
     left = parts[0].strip()
-    right = " ".join(parts[1:]).strip()
     if not left:
         return text
 
+    right = " ".join(parts[1:]).strip()
     if _looks_like_noise_group(right):
         return left
 
@@ -375,9 +425,24 @@ def _count_function_word_hits(text: str, pattern: re.Pattern[str]) -> int:
     return len(pattern.findall(text))
 
 
+def _lang_hits_ge(text: str, pattern: re.Pattern[str]) -> bool:
+    """
+    Helper común para evaluar function words con umbral configurable.
+
+    MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS:
+    - 0 => “siempre True” (ojo: solo recomendado para debugging)
+    - 1/2/... => umbral conservador
+    """
+    threshold = int(MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS)
+    if threshold <= 0:
+        return True
+    return _count_function_word_hits(text, pattern) >= threshold
+
+
 # ============================================================================
 # API pública: normalización / heurísticas
 # ============================================================================
+
 
 def normalize_title_for_lookup(title: str) -> str:
     """
@@ -385,8 +450,8 @@ def normalize_title_for_lookup(title: str) -> str:
 
     Propiedades:
     - determinista
-    - robusta a separadores / acentos
-    - minimiza ruido de releases (resolución, codecs, tags)
+    - robusta a separadores / acentos (configurable)
+    - minimiza ruido de releases (resolución, codecs, tags...)
     - devuelve una clave en minúsculas con espacios colapsados
 
     Importante:
@@ -401,8 +466,9 @@ def normalize_title_for_lookup(title: str) -> str:
     t = _remove_trailing_dash_group(t)
     t = _remove_bracketed_noise(t)
 
-    # Para lookup: quitamos acentos/diacríticos
-    t = _strip_accents(t)
+    # Para lookup: quitamos acentos/diacríticos (si está habilitado)
+    if MOVIE_INPUT_LOOKUP_STRIP_ACCENTS:
+        t = _strip_accents(t)
 
     # Solo dejamos letras/dígitos (y luego tokenizamos)
     t = _NON_ALNUM_RE.sub(" ", t)
@@ -423,28 +489,30 @@ def guess_spanish_from_title_or_path(title: str, file_path: str) -> bool:
         return True
 
     words = _cleanup_separators(haystack.lower())
-    return _count_function_word_hits(words, _ES_FUNCTION_WORD_RE) >= 2
+    return _lang_hits_ge(words, _ES_FUNCTION_WORD_RE)
 
 
 def guess_english_from_title_or_path(title: str, file_path: str) -> bool:
     """
     Heurística conservadora de “contexto inglés”.
 
-    Nota:
-    - Si hay escritura CJK/Hangul, evitamos declarar “inglés” por heurística.
+    Control:
+    - MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK:
+        True  -> si hay CJK/Hangul, devolvemos False (evita falsos positivos).
+        False -> mantiene heurística normal.
     """
     haystack = f"{title} {file_path}".strip()
     if not haystack:
         return False
 
-    if _CJK_ANY_RE.search(haystack):
+    if MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK and _CJK_ANY_RE.search(haystack):
         return False
 
     if _EN_HINT_RE.search(haystack):
         return True
 
     words = _cleanup_separators(haystack.lower())
-    return _count_function_word_hits(words, _EN_FUNCTION_WORD_RE) >= 2
+    return _lang_hits_ge(words, _EN_FUNCTION_WORD_RE)
 
 
 def guess_italian_from_title_or_path(title: str, file_path: str) -> bool:
@@ -455,7 +523,7 @@ def guess_italian_from_title_or_path(title: str, file_path: str) -> bool:
     if _IT_HINT_RE.search(haystack):
         return True
     words = _cleanup_separators(haystack.lower())
-    return _count_function_word_hits(words, _IT_FUNCTION_WORD_RE) >= 2
+    return _lang_hits_ge(words, _IT_FUNCTION_WORD_RE)
 
 
 def guess_french_from_title_or_path(title: str, file_path: str) -> bool:
@@ -466,14 +534,14 @@ def guess_french_from_title_or_path(title: str, file_path: str) -> bool:
     if _FR_HINT_RE.search(haystack):
         return True
     words = _cleanup_separators(haystack.lower())
-    return _count_function_word_hits(words, _FR_FUNCTION_WORD_RE) >= 2
+    return _lang_hits_ge(words, _FR_FUNCTION_WORD_RE)
 
 
 def guess_japanese_from_title_or_path(title: str, file_path: str) -> bool:
     """
     Heurística conservadora de “contexto japonés”:
     - tokens (日本語/nihongo/jpn/japanese/字幕/吹替)
-    - o presencia de Kana (muy fuerte)
+    - o presencia de Kana (señal muy fuerte)
     """
     haystack = f"{title} {file_path}".strip()
     if not haystack:
@@ -487,14 +555,12 @@ def guess_korean_from_title_or_path(title: str, file_path: str) -> bool:
     """
     Heurística conservadora de “contexto coreano”:
     - tokens (한국어/kor/korean/자막/더빙)
-    - o presencia de Hangul (muy fuerte)
+    - o presencia de Hangul (señal muy fuerte)
     """
     haystack = f"{title} {file_path}".strip()
     if not haystack:
         return False
-    if _KO_HINT_RE.search(haystack) or _HANGUL_RE.search(haystack):
-        return True
-    return False
+    return bool(_KO_HINT_RE.search(haystack) or _HANGUL_RE.search(haystack))
 
 
 def guess_chinese_from_title_or_path(title: str, file_path: str) -> bool:
@@ -535,6 +601,10 @@ def is_probably_english_title(title: str) -> bool:
     - Si contiene tildes/ñ -> no lo consideramos “inglés puro”.
     - Si contiene escritura CJK/Hangul -> no lo consideramos inglés.
     - Si contiene function words EN -> “probablemente inglés”.
+
+    Nota:
+    - Esta función es intencionadamente simple; se usa para decidir si "proteger"
+      títulos locales frente a sugerencias de OMDb en inglés.
     """
     t = (title or "").strip()
     if not t:
@@ -646,6 +716,7 @@ def should_skip_new_title_suggestion(
 # Modelo unificado
 # ============================================================================
 
+
 @dataclass(slots=True)
 class MovieInput:
     """
@@ -680,11 +751,24 @@ class MovieInput:
         return bool((self.file_path or "").strip())
 
     def normalized_title(self) -> str:
-        """Normalización ligera local: minúsculas + strip (sin limpiar ruido)."""
+        """
+        Normalización ligera local: minúsculas + strip (sin limpiar ruido).
+
+        Útil para:
+        - comparaciones internas rápidas
+        - claves temporales de caches en capas superiores (cuando se quiere conservar ruido)
+        """
         return (self.title or "").lower().strip()
 
     def normalized_title_for_lookup(self) -> str:
-        """Normalización fuerte para búsquedas externas (OMDb/Wikipedia)."""
+        """
+        Normalización fuerte para búsquedas externas (OMDb/Wikipedia).
+
+        Respeta flags de config:
+        - MOVIE_INPUT_LOOKUP_STRIP_ACCENTS
+        - MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE
+        - MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP
+        """
         return normalize_title_for_lookup(self.title or "")
 
     # -------------------------
@@ -720,7 +804,13 @@ class MovieInput:
         return guess_spanish_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_english_context(self) -> bool:
-        """True si library_language indica EN o heurística sugiere inglés."""
+        """
+        True si library_language indica EN o heurística sugiere inglés.
+
+        Nota:
+        - La heurística puede bloquear EN si MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK=True
+          y se detecta escritura CJK/Hangul.
+        """
         lang = self.plex_library_language()
         if lang:
             l = lang.lower().strip()

@@ -1,0 +1,119 @@
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: DEBUG_MODE: True
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: SILENT_MODE: False
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: LOG_LEVEL: None
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: HTTP_DEBUG: False
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: BASEURL: http://192.168.1.10
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: PLEX_PORT: 32400
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: PLEX_TOKEN: ****
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: EXCLUDE_PLEX_LIBRARIES: ['Series TV', 'Música : Directos y Videos Oficiales', 'Música : Biotopics y Documetales', 'Música', 'Familia', 'Fotos', 'BBVA']
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: PLEX_ANALYZE_WORKERS: 8
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: PLEX_PROGRESS_EVERY_N_MOVIES: 100
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: PLEX_MAX_WORKERS_CAP: 64
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: PLEX_MAX_INFLIGHT_FACTOR: 4
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: PLEX_LIBRARY_LANGUAGE_DEFAULT: es
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: PLEX_LIBRARY_LANGUAGE_BY_NAME: {}
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: PLEX_RUN_METRICS_ENABLED: True
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: MOVIE_INPUT_LOOKUP_STRIP_ACCENTS: True
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE: True
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP: True
+2025-12-24 12:30:34,627 [INFO] movies_cleaner: MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS: 2
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK: True
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: ANALYZE_TRACE_REASON_MAX_CHARS: 140
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: ANALYZE_CORE_METRICS_ENABLED: True
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: PLEX_METRICS_ENABLED: True
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: PLEX_METRICS_TOP_N: 5
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: PLEX_METRICS_LOG_ON_SILENT_DEBUG: True
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: PLEX_METRICS_LOG_EVEN_IF_ZERO: False
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: COLLECTION_OMDB_LOCAL_CACHE_MAX_ITEMS: 1200
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: COLLECTION_WIKI_LOCAL_CACHE_MAX_ITEMS: 2400
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: COLLECTION_TRACE_LINE_MAX_CHARS: 220
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: COLLECTION_ENABLE_LAZY_WIKI: True
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: COLLECTION_PERSIST_MINIMAL_WIKI_IN_OMDB_CACHE: True
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: COLLECTION_OMDB_JSON_MODE: auto
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: COLLECTION_LAZY_WIKI_ALLOW_TITLE_YEAR_FALLBACK: False
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: COLLECTION_LAZY_WIKI_FORCE_OMDB_POST_CORE: True
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: COLLECTION_TRACE_ALSO_DEBUG_CTX: True
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_API_KEY: ****
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_HTTP_MAX_CONCURRENCY: 2
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_HTTP_MIN_INTERVAL_SECONDS: 0.1
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_RATE_LIMIT_WAIT_SECONDS: 5
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_RATE_LIMIT_MAX_RETRIES: 1
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_CACHE_TTL_OK_SECONDS: 5184000
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_CACHE_TTL_NOT_FOUND_SECONDS: 604800
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_CACHE_TTL_EMPTY_RATINGS_SECONDS: 259200
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_CACHE_FLUSH_MAX_DIRTY_WRITES: 25
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_CACHE_FLUSH_MAX_SECONDS: 8.0
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: ANALIZA_OMDB_CACHE_MAX_RECORDS: 50000
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: ANALIZA_OMDB_CACHE_MAX_INDEX_IMDB: 70000
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: ANALIZA_OMDB_CACHE_MAX_INDEX_TY: 70000
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: ANALIZA_OMDB_HOT_CACHE_MAX: 2048
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_BASE_URL: https://www.omdbapi.com/
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_HTTP_TIMEOUT_SECONDS: 10.0
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT: 30.0
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_HTTP_RETRY_TOTAL: 3
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_HTTP_RETRY_BACKOFF_FACTOR: 0.5
+2025-12-24 12:30:34,628 [INFO] movies_cleaner: OMDB_DISABLE_AFTER_N_FAILURES: 3
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: OMDB_HTTP_USER_AGENT: Analiza-Movies/1.0 (local)
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: OMDB_METRICS_ENABLED: True
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: OMDB_METRICS_TOP_N: 12
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: OMDB_METRICS_LOG_ON_SILENT_DEBUG: True
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: OMDB_METRICS_LOG_EVEN_IF_ZERO: False
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: DLNA_SCAN_WORKERS: 2
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: DLNA_BROWSE_MAX_RETRIES: 2
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: DLNA_CB_FAILURE_THRESHOLD: 5
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: DLNA_CB_OPEN_SECONDS: 20.0
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_LANGUAGE: es
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_FALLBACK_LANGUAGE: en
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_DEBUG: False
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_SPARQL_MIN_INTERVAL_SECONDS: 0.2
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_CACHE_TTL_OK_SECONDS: 10368000
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_CACHE_TTL_NEGATIVE_SECONDS: 604800
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_IMDB_QID_NEGATIVE_TTL_SECONDS: 604800
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_IS_FILM_TTL_SECONDS: 15552000
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_CACHE_FLUSH_MAX_DIRTY_WRITES: 30
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_CACHE_FLUSH_MAX_SECONDS: 8.0
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: ANALIZA_WIKI_CACHE_MAX_RECORDS: 25000
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: ANALIZA_WIKI_CACHE_MAX_IMDB_QID: 40000
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: ANALIZA_WIKI_CACHE_MAX_IS_FILM: 40000
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: ANALIZA_WIKI_CACHE_MAX_ENTITIES: 120000
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: ANALIZA_WIKI_DEBUG: False
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_HTTP_USER_AGENT: Analiza-Movies/1.0 (local)
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_HTTP_TIMEOUT_SECONDS: 10.0
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_SPARQL_TIMEOUT_CONNECT_SECONDS: 5.0
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_SPARQL_TIMEOUT_READ_SECONDS: 45.0
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_HTTP_RETRY_TOTAL: 3
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_HTTP_RETRY_BACKOFF_FACTOR: 0.8
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_WIKIPEDIA_REST_BASE_URL: https://{lang}.wikipedia.org/api/rest_v1
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_WIKIPEDIA_API_BASE_URL: https://{lang}.wikipedia.org/w/api.php
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_WIKIDATA_API_BASE_URL: https://www.wikidata.org/w/api.php
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_WIKIDATA_ENTITY_BASE_URL: https://www.wikidata.org/wiki/Special:EntityData
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_WDQS_URL: https://query.wikidata.org/sparql
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_METRICS_ENABLED: True
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_METRICS_TOP_N: 12
+2025-12-24 12:30:34,629 [INFO] movies_cleaner: WIKI_METRICS_LOG_ON_SILENT_DEBUG: True
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: WIKI_METRICS_LOG_EVEN_IF_ZERO: False
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: REPORTS_DIR: /Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/reports
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: REPORT_ALL_PATH: /Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/reports/report_all.csv
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: REPORT_FILTERED_PATH: /Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/reports/report_filtered.csv
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: METADATA_FIX_PATH: /Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/reports/metadata_fix.csv
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: DATA_DIR: /Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/data
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: OMDB_CACHE_PATH: /Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/data/omdb_cache.json
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: WIKI_CACHE_PATH: /Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/data/wiki_cache.json
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: METADATA_DRY_RUN: True
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: METADATA_APPLY_CHANGES: False
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: IMDB_VOTES_BY_YEAR: [(1980, 500), (2000, 2000), (2010, 5000), (9999, 10000)]
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: LOGGER_FILE_ENABLED: True
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: LOGGER_FILE_DIR: /Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/logs
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: LOGGER_FILE_PREFIX: run
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: LOGGER_FILE_TIMESTAMP_FORMAT: %Y-%m-%d_%H-%M-%S
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: LOGGER_FILE_INCLUDE_PID: True
+2025-12-24 12:30:34,630 [INFO] movies_cleaner: LOGGER_FILE_PATH: /Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/logs/run_2025-12-24_12-30-34_88609.log
+2025-12-24 12:30:34,789 [INFO] movies_cleaner: [OMDB][DEBUG] cache compacted | records=2076 idx_imdb=1649 idx_ty=2076
+2025-12-24 12:30:34,790 [INFO] movies_cleaner: INFO [stats] IMDB_KEEP_MIN_RATING auto-ajustada (global): 8.100 (p=0.9, n=1613)
+2025-12-24 12:30:34,790 [INFO] movies_cleaner: INFO [stats] IMDB_DELETE_MAX_RATING auto-ajustada (global): 6.100 (p=0.1, n=1613)
+2025-12-24 12:30:34,791 [INFO] movies_cleaner: INFO [stats] Media global IMDb desde omdb_cache = 7.097 (n=1613)
+2025-12-24 12:30:34,791 [INFO] movies_cleaner: [DASH] thresholds: keep=8.10 delete=6.10 | bayes_mean=7.097 (omdb_cache (n=1613), n=1613)
+2025-12-24 12:30:34,791 [INFO] movies_cleaner: [DASH][DEBUG] REPORT_ALL_PATH='/Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/reports/report_all.csv' REPORT_FILTERED_PATH='/Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/reports/report_filtered.csv' METADATA_FIX_PATH='/Users/felixdelbarrio/Documents/01.Develop/05.Proyectos/02. Python/Analiza-Movies/backend/reports/metadata_fix.csv' DELETE_DRY_RUN=True DELETE_REQUIRE_CONFIRM=True
+2025-12-24 12:30:35,124 [INFO] movies_cleaner: [OMDB][DEBUG] cache compacted (force) | records=2076 idx_imdb=1649 idx_ty=2076
+2025-12-24 12:30:35,192 [INFO] movies_cleaner: [OMDB][METRICS] summary
+2025-12-24 12:30:35,192 [INFO] movies_cleaner:   cache_flush_writes : 1

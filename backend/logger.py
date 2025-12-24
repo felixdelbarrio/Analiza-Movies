@@ -5,24 +5,46 @@ backend/logger.py
 
 Logger central del proyecto (fachada sobre `logging`).
 
-API estable:
+API estable
+-----------
 - debug / info / warning / error
 - progress / progressf (siempre visible, sin timestamps)
 - debug_ctx(tag, msg) (debug contextual alineado con SILENT/DEBUG)
 - append_bounded_log(logs, line, ...) (logs por item acotados)
 
-Política:
+Política
+--------
 - SILENT_MODE=True: suprime debug/info/warning (salvo always=True). `error()` siempre emite.
 - DEBUG_MODE=True: permite trazas útiles; en SILENT+DEBUG se emiten por `progress`.
 - El logging nunca debe romper el pipeline.
 
-Nota:
-- No importamos `backend.config` directamente para evitar dependencias circulares.
+Salida opcional a fichero (✅ integrado con la última config.py)
+--------------------------------------------------------------
+Este módulo NO decide nombres. Solo "consume" variables desde backend.config (si ya está importado):
+
+- LOGGER_FILE_ENABLED: bool
+- LOGGER_FILE_PATH: Path | str | None
+
+La config (ya actualizada) genera un LOGGER_FILE_PATH único por ejecución
+(timestamp + pid) o respeta un path explícito si se define.
+
+Comportamiento cuando LOGGER_FILE_ENABLED=True y LOGGER_FILE_PATH no es None:
+1) Todo lo que pase por `logging` (debug/info/warning/error) se duplica a fichero
+   vía FileHandler en el root logger.
+2) Todo lo que pase por `progress/progressf` también se apendea al mismo fichero
+   (sin timestamp, para mantener el “heartbeat” limpio).
+
+Notas técnicas importantes
+--------------------------
+- No importamos `backend.config` directamente (evitamos circular imports).
   Leemos `backend.config` desde `sys.modules` si ya está importado.
+- Inicialización idempotente.
+- Best-effort: si no se puede abrir/crear el fichero, el pipeline sigue solo con consola.
 """
 
 import logging
 import sys
+import threading
 from typing import Final
 
 # ============================================================================
@@ -37,13 +59,24 @@ _LOGGER: logging.Logger | None = None
 # Flag de inicialización idempotente
 _CONFIGURED: bool = False
 
+# Tag para identificar nuestro handler de fichero (evita duplicados).
+_FILE_HANDLER_TAG: Final[str] = "_movies_cleaner_file_handler"
+
+# Lock para evitar mezclar líneas del progress() cuando hay hilos.
+_PROGRESS_FILE_LOCK = threading.Lock()
+
 
 # ============================================================================
 # UTILIDADES CONFIG / FLAGS (sin importar backend.config directamente)
 # ============================================================================
 
 def _safe_get_cfg() -> object | None:
-    """Devuelve backend.config si ya ha sido importado; si no, None."""
+    """
+    Devuelve el módulo backend.config si ya ha sido importado.
+
+    Motivo:
+    - Evita dependencias circulares (config importando logger y logger importando config).
+    """
     return sys.modules.get("backend.config")
 
 
@@ -103,6 +136,9 @@ def _resolve_level_from_config() -> int:
       1) LOG_LEVEL explícito
       2) Flags de debug heredados
       3) INFO
+
+    Nota:
+    - Si backend.config aún no está importado, devolvemos INFO (default seguro).
     """
     if _safe_get_cfg() is None:
         return logging.INFO
@@ -134,7 +170,7 @@ def _resolve_level_from_config() -> int:
 
 
 def _apply_root_level(level: int) -> None:
-    """Aplica nivel al root y a sus handlers (si existen)."""
+    """Aplica nivel al root y a sus handlers existentes (best-effort)."""
     root = logging.getLogger()
     root.setLevel(level)
     for handler in root.handlers:
@@ -158,6 +194,9 @@ def _configure_external_loggers(*, level: int) -> None:
     """
     Baja el nivel de loggers externos ruidosos aunque el root esté en DEBUG,
     salvo que HTTP_DEBUG=True.
+
+    Nota:
+    - `level` se mantiene por compat; no lo usamos directamente para externos.
     """
     cfg = _safe_get_cfg()
     if _should_enable_http_debug(cfg):
@@ -179,6 +218,148 @@ def _configure_external_loggers(*, level: int) -> None:
 
 
 # ============================================================================
+# FILE LOGGING (opcional, controlado por config)
+# ============================================================================
+
+def _file_logging_enabled() -> bool:
+    """
+    Feature flag: habilita duplicación del logging a fichero.
+
+    Debe venir de backend.config:
+      LOGGER_FILE_ENABLED: bool
+    """
+    return _cfg_bool("LOGGER_FILE_ENABLED", False)
+
+
+def _file_logging_path() -> str | None:
+    """
+    Path del fichero de log.
+
+    Esperamos que config exponga LOGGER_FILE_PATH como Path | str | None.
+    - None / vacío => None
+    """
+    cfg = _safe_get_cfg()
+    if cfg is None:
+        return None
+    try:
+        p = getattr(cfg, "LOGGER_FILE_PATH", None)
+        if p is None:
+            return None
+        s = str(p).strip()
+        return s or None
+    except Exception:
+        return None
+
+
+def _has_our_file_handler(root: logging.Logger) -> bool:
+    """Detecta si ya existe nuestro FileHandler (idempotencia)."""
+    for h in root.handlers:
+        try:
+            if getattr(h, _FILE_HANDLER_TAG, False):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _ensure_file_handler(root: logging.Logger, *, level: int) -> None:
+    """
+    Añade un FileHandler al root logger si procede y si no existe ya.
+
+    Reglas:
+    - Solo si LOGGER_FILE_ENABLED=True y LOGGER_FILE_PATH está definido.
+    - Idempotente (no duplica handlers).
+    - Best-effort: nunca rompe el pipeline si falla crear el fichero/dir.
+
+    Por qué root logger:
+    - Cubre todo el logging del proceso (incluyendo librerías internas si no se silencian).
+    """
+    if not _file_logging_enabled():
+        return
+
+    path = _file_logging_path()
+    if not path:
+        return
+
+    # Si ya existe, re-sincronizamos nivel y salimos.
+    if _has_our_file_handler(root):
+        for h in root.handlers:
+            try:
+                if getattr(h, _FILE_HANDLER_TAG, False):
+                    h.setLevel(level)
+            except Exception:
+                pass
+        return
+
+    try:
+        # Creamos directorio si hace falta (best-effort).
+        import os  # local import: reduce coste y evita cargar si no se usa
+
+        dir_name = os.path.dirname(path)
+        if dir_name:
+            try:
+                os.makedirs(dir_name, exist_ok=True)
+            except Exception:
+                pass
+
+        fh = logging.FileHandler(path, mode="a", encoding="utf-8", delay=True)
+        fh.setLevel(level)
+        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+
+        # Marcamos handler como nuestro para detección idempotente.
+        setattr(fh, _FILE_HANDLER_TAG, True)
+
+        root.addHandler(fh)
+
+        # Señal discreta solo en debug no-silent (sin usar logging para evitar recursion).
+        try:
+            if is_debug_mode() and not is_silent_mode():
+                sys.stdout.write(f"[LOGGER] File logging enabled -> {path}\n")
+                sys.stdout.flush()
+        except Exception:
+            pass
+
+    except Exception:
+        # Si no puede abrir el fichero, seguimos solo con consola.
+        return
+
+
+def _append_progress_to_file(message: str) -> None:
+    """
+    Duplica a fichero lo que sale por `progress()` cuando el file logging está habilitado.
+
+    Diseño:
+    - Best-effort: si falla, no rompe ni hace ruido.
+    - Abrimos en modo append por llamada: robusto ante forks/errores/rotación externa.
+    - Lock para no mezclar líneas concurrentes.
+    """
+    if not _file_logging_enabled():
+        return
+
+    path = _file_logging_path()
+    if not path:
+        return
+
+    try:
+        import os  # local import
+
+        dir_name = os.path.dirname(path)
+        if dir_name:
+            try:
+                os.makedirs(dir_name, exist_ok=True)
+            except Exception:
+                pass
+
+        with _PROGRESS_FILE_LOCK:
+            with open(path, "a", encoding="utf-8") as f:
+                # Importante: progress es “señal limpia” (sin timestamps).
+                # En el fichero convivirá con logs con timestamp (FileHandler).
+                f.write(f"{message}\n")
+    except Exception:
+        return
+
+
+# ============================================================================
 # INICIALIZACIÓN DEL LOGGER
 # ============================================================================
 
@@ -187,6 +368,7 @@ def _ensure_configured() -> logging.Logger:
     Inicializa logging de forma idempotente y devuelve el logger principal.
 
     - Si ya se configuró, re-sincroniza niveles (por si backend.config cambió).
+    - Configura handler de fichero si procede (consumiendo LOGGER_FILE_* de config).
     - Nunca lanza excepciones.
     """
     global _LOGGER, _CONFIGURED
@@ -196,6 +378,9 @@ def _ensure_configured() -> logging.Logger:
             level = _resolve_level_from_config()
             _apply_root_level(level)
             _configure_external_loggers(level=level)
+
+            root = logging.getLogger()
+            _ensure_file_handler(root, level=level)
         except Exception:
             pass
         return _LOGGER
@@ -203,6 +388,7 @@ def _ensure_configured() -> logging.Logger:
     level = _resolve_level_from_config()
     root = logging.getLogger()
 
+    # Config base a consola (solo si no hay handlers previos).
     try:
         if not root.handlers:
             logging.basicConfig(
@@ -215,6 +401,12 @@ def _ensure_configured() -> logging.Logger:
         pass
 
     _configure_external_loggers(level=level)
+
+    # File handler opcional (best-effort).
+    try:
+        _ensure_file_handler(root, level=level)
+    except Exception:
+        pass
 
     _LOGGER = logging.getLogger(LOGGER_NAME)
     _CONFIGURED = True
@@ -251,10 +443,17 @@ def progress(message: str) -> None:
     Emite una línea siempre visible (ignora SILENT_MODE).
 
     No usa logging para evitar timestamps/levels y dar una “señal” limpia.
+
+    ✅ Si LOGGER_FILE_ENABLED=True y LOGGER_FILE_PATH existe, también se persiste a fichero.
     """
     try:
         sys.stdout.write(f"{message}\n")
         sys.stdout.flush()
+    except Exception:
+        pass
+
+    try:
+        _append_progress_to_file(message)
     except Exception:
         pass
 
@@ -349,7 +548,12 @@ def logs_limit() -> int:
 
 
 def truncate_line(text: str, max_chars: int | None = None) -> str:
-    """Trunca una línea para evitar payloads enormes (JSON/HTML/etc.)."""
+    """
+    Trunca una línea para evitar payloads enormes (JSON/HTML/etc.).
+
+    - max_chars explícito tiene prioridad.
+    - Si no, usa LOGGER_LOG_LINE_MAX_CHARS desde config, con fallback seguro.
+    """
     limit = (
         int(max_chars)
         if isinstance(max_chars, int) and max_chars > 0
@@ -402,8 +606,8 @@ def debug_ctx(tag: str, msg: object) -> None:
 
     - DEBUG_MODE=False -> no-op
     - DEBUG_MODE=True:
-        * SILENT_MODE=True  -> progress("[TAG][DEBUG] ...")
-        * SILENT_MODE=False -> info("[TAG][DEBUG] ...")
+        * SILENT_MODE=True  -> progress("[TAG][DEBUG] ...")   (✅ también a fichero si está habilitado)
+        * SILENT_MODE=False -> info("[TAG][DEBUG] ...")       (✅ también a fichero si está habilitado)
     """
     if not is_debug_mode():
         return

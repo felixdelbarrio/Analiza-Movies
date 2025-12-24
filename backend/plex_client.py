@@ -5,45 +5,43 @@ backend/plex_client.py
 
 Cliente ligero y DEFENSIVO para Plex (plexapi) + helpers de extracción segura.
 
-🧠 Contexto del bug observado
-----------------------------
+🧠 Contexto del bug
+-------------------
 En plexapi, acceder a ciertos atributos (p.ej. movie.originalTitle) puede disparar
 un _reload() interno si el objeto está en modo lazy.
 
-Ese reload implica una request HTTP contra Plex.
-Si Plex cierra la conexión sin responder (RemoteDisconnected / ProtocolError),
-requests lanza ConnectionError y el run entero puede romperse.
+Ese reload implica una request HTTP contra Plex. Si Plex cierra la conexión sin
+responder (RemoteDisconnected / ProtocolError), requests lanza ConnectionError y
+el run entero puede romperse.
 
-🎯 Objetivo de este módulo
--------------------------
-- Proveer helpers que:
-    ✔ sean robustos ante fallos de red
-    ✔ NO tumben el pipeline por errores puntuales
-    ✔ mantengan la semántica actual del proyecto
-- Centralizar accesos lazy peligrosos.
+🎯 Objetivos del módulo
+-----------------------
+- Helpers robustos ante fallos de red y estructuras “raras”.
+- Evitar que errores puntuales tumben el pipeline.
+- Centralizar accesos lazy peligrosos (getattr defensivo).
 - Mantener la política de logs definida en backend/logger.py.
 
-✅ Métricas de fallos Plex (NUEVO)
+✅ Métricas in-memory (thread-safe, O(1))
+-----------------------------------------
+Acumula contadores para:
+- errores de red al leer atributos lazy,
+- fallos generales de helpers,
+- fallos al conectar.
+
+Sin I/O a disco y sin datos sensibles (no IDs, no paths, no tokens).
+
+Configuración (backend/config.py)
 ---------------------------------
-Este módulo acumula métricas in-memory (costo ~O(1)) para responder a preguntas como:
-- ¿Cuántos fallos de red hubo leyendo atributos lazy?
-- ¿Qué atributos fallan más (originalTitle/title/media/...)?
-- ¿En qué helpers se concentran los problemas?
+Este archivo usa directamente variables del config (ya existen):
 
-Características:
-- No escribe a disco (no queremos I/O aquí).
-- No expone datos sensibles.
-- Permite dump manual (log_plex_metrics) y reset (reset_plex_metrics).
-- Los errores de red se loguean (warning always=True) como antes, y además cuentan.
-
-⚠️ Nota de tipado
------------------
-plexapi no expone typing estricto.
-Usamos object / Any + getattr defensivo.
+- PLEX_METRICS_ENABLED: bool
+- PLEX_METRICS_TOP_N: int
+- PLEX_METRICS_LOG_ON_SILENT_DEBUG: bool
+- PLEX_METRICS_LOG_EVEN_IF_ZERO: bool
 """
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence  # ✅ Mapping definido (parche Pylance)
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
@@ -59,6 +57,11 @@ from backend.config import (
     PLEX_PORT,
     PLEX_TOKEN,
     SILENT_MODE,
+    # ✅ ya están en config.py: sin try/except
+    PLEX_METRICS_ENABLED,
+    PLEX_METRICS_TOP_N,
+    PLEX_METRICS_LOG_ON_SILENT_DEBUG,
+    PLEX_METRICS_LOG_EVEN_IF_ZERO,
 )
 
 # ============================================================
@@ -66,7 +69,13 @@ from backend.config import (
 # ============================================================
 
 def _log(msg: object) -> None:
-    """Info normal (visible si SILENT_MODE=False)."""
+    """
+    Info normal (visible si SILENT_MODE=False).
+
+    Regla:
+    - Preferimos backend/logger.py.
+    - Si por lo que sea falla el logger, fallback a print solo si NO silent.
+    """
     try:
         _logger.info(str(msg))
     except Exception:
@@ -75,7 +84,11 @@ def _log(msg: object) -> None:
 
 
 def _log_always(msg: object) -> None:
-    """Aviso importante, visible incluso en SILENT_MODE."""
+    """
+    Aviso importante, visible incluso en SILENT_MODE.
+
+    Mantiene la semántica del proyecto: warning(always=True).
+    """
     try:
         _logger.warning(str(msg), always=True)
     except Exception:
@@ -85,7 +98,8 @@ def _log_always(msg: object) -> None:
 def _log_debug(msg: object) -> None:
     """
     Debug contextual:
-    - DEBUG_MODE=False: no hace nada
+
+    - DEBUG_MODE=False => no emite.
     - DEBUG_MODE=True:
         * SILENT_MODE=True  -> progress
         * SILENT_MODE=False -> info
@@ -108,24 +122,14 @@ def _log_debug(msg: object) -> None:
 #                 MÉTRICAS (in-memory, thread-safe)
 # ============================================================
 
-@dataclass
+@dataclass(slots=True)
 class PlexMetrics:
     """
     Contadores agregados de eventos relevantes del cliente Plex.
 
-    NOTAS DE DISEÑO
-    --------------
-    - Se actualiza desde distintos hilos (ThreadPool) => lock interno.
-    - No guardamos IDs de películas ni paths (privacidad / ruido).
-    - Guardamos "clase de error" y "atributo/helper" para diagnóstico.
-
-    Campos:
-    - network_attr_errors_total: fallos de red al leer atributos (lazy reload).
-    - network_attr_errors_by_attr: top atributos que fallan (originalTitle, title...).
-    - network_attr_errors_by_exc: top tipos de excepción.
-    - helper_failures_total: fallos generales capturados por helpers (no necesariamente red).
-    - helper_failures_by_name: top helpers con excepciones.
-    - connect_failures_total: fallos conectando a Plex.
+    Diseño:
+    - Actualización concurrente (ThreadPool) => lock externo global.
+    - Sin datos sensibles: NO IDs, NO rutas de archivo, NO tokens.
     """
     network_attr_errors_total: int = 0
     network_attr_errors_by_attr: Counter[str] = field(default_factory=Counter)
@@ -139,10 +143,7 @@ class PlexMetrics:
     connect_failures_by_exc: Counter[str] = field(default_factory=Counter)
 
     def snapshot(self) -> dict[str, object]:
-        """
-        Devuelve una snapshot serializable (para logs/debug).
-        (No exportamos Counters directamente para no sorprender en dumps.)
-        """
+        """Snapshot serializable (Counters -> dict)."""
         return {
             "network_attr_errors_total": self.network_attr_errors_total,
             "network_attr_errors_by_attr": dict(self.network_attr_errors_by_attr),
@@ -159,26 +160,37 @@ _METRICS = PlexMetrics()
 _METRICS_LOCK = Lock()
 
 
+def _metrics_enabled() -> bool:
+    """Permite apagar métricas completamente desde config/env."""
+    return bool(PLEX_METRICS_ENABLED)
+
+
 def _metrics_inc_network_attr_error(attr: str, exc: BaseException) -> None:
     """Incrementa métricas de fallo de red en lectura de atributo."""
+    if not _metrics_enabled():
+        return
     exc_name = exc.__class__.__name__
     with _METRICS_LOCK:
         _METRICS.network_attr_errors_total += 1
-        _METRICS.network_attr_errors_by_attr[attr] += 1
+        _METRICS.network_attr_errors_by_attr[str(attr)] += 1
         _METRICS.network_attr_errors_by_exc[exc_name] += 1
 
 
 def _metrics_inc_helper_failure(helper_name: str, exc: BaseException) -> None:
     """Incrementa métricas de fallo interno de helper (defensivo)."""
+    if not _metrics_enabled():
+        return
     exc_name = exc.__class__.__name__
     with _METRICS_LOCK:
         _METRICS.helper_failures_total += 1
-        _METRICS.helper_failures_by_name[helper_name] += 1
+        _METRICS.helper_failures_by_name[str(helper_name)] += 1
         _METRICS.helper_failures_by_exc[exc_name] += 1
 
 
 def _metrics_inc_connect_failure(exc: BaseException) -> None:
     """Incrementa métricas de fallo de conexión a Plex."""
+    if not _metrics_enabled():
+        return
     exc_name = exc.__class__.__name__
     with _METRICS_LOCK:
         _METRICS.connect_failures_total += 1
@@ -187,16 +199,27 @@ def _metrics_inc_connect_failure(exc: BaseException) -> None:
 
 def get_plex_metrics_snapshot() -> dict[str, object]:
     """
-    API pública: snapshot de métricas.
+    API pública: snapshot de métricas (para reports/tests).
 
-    Útil si quieres incluirlo en un reporte final o test.
+    Si las métricas están desactivadas, devuelve estructura “vacía” estable.
     """
+    if not _metrics_enabled():
+        return {
+            "network_attr_errors_total": 0,
+            "network_attr_errors_by_attr": {},
+            "network_attr_errors_by_exc": {},
+            "helper_failures_total": 0,
+            "helper_failures_by_name": {},
+            "helper_failures_by_exc": {},
+            "connect_failures_total": 0,
+            "connect_failures_by_exc": {},
+        }
     with _METRICS_LOCK:
         return _METRICS.snapshot()
 
 
 def reset_plex_metrics() -> None:
-    """API pública: resetea métricas (por ejemplo, al inicio de un run)."""
+    """API pública: resetea métricas (útil al inicio de cada run)."""
     global _METRICS
     with _METRICS_LOCK:
         _METRICS = PlexMetrics()
@@ -206,16 +229,15 @@ def log_plex_metrics(*, force: bool = False) -> None:
     """
     API pública: imprime un resumen de métricas.
 
-    Política de logs:
-    - Si SILENT_MODE=True:
-        - solo emite si DEBUG_MODE=True o force=True
-        - usa debug/progress (vía _log_debug)
-    - Si SILENT_MODE=False:
-        - si hay fallos, imprime resumen en INFO
-        - si no hay fallos, no spamea (a menos que force=True)
-
-    Uso recomendado:
-        - al final del run / en flush_external_caches()
+    Política:
+    - SILENT_MODE=True:
+        - emite solo si force=True
+        - o si DEBUG_MODE=True y PLEX_METRICS_LOG_ON_SILENT_DEBUG=True
+        - usa _log_debug (progress en silent)
+    - NO SILENT:
+        - imprime si hay fallos
+        - o si force=True
+        - o si PLEX_METRICS_LOG_EVEN_IF_ZERO=True
     """
     snap = get_plex_metrics_snapshot()
 
@@ -223,19 +245,38 @@ def log_plex_metrics(*, force: bool = False) -> None:
     helper_total = int(snap.get("helper_failures_total") or 0)
     conn_total = int(snap.get("connect_failures_total") or 0)
 
-    if not force and net_total == 0 and helper_total == 0 and conn_total == 0:
+    if (
+        not force
+        and not bool(PLEX_METRICS_LOG_EVEN_IF_ZERO)
+        and net_total == 0
+        and helper_total == 0
+        and conn_total == 0
+    ):
         return
 
-    # Construimos un resumen pequeño y accionable.
-    def _top(d: dict[str, int], n: int = 5) -> list[tuple[str, int]]:
-        items = [(k, int(v)) for k, v in d.items()]
+    try:
+        top_n = max(1, int(PLEX_METRICS_TOP_N))
+    except Exception:
+        top_n = 5
+
+    def _top(d: Mapping[str, object], n: int) -> list[tuple[str, int]]:
+        items: list[tuple[str, int]] = []
+        try:
+            for k, v in d.items():
+                try:
+                    items.append((str(k), int(v)))  # type: ignore[arg-type]
+                except Exception:
+                    continue
+        except Exception:
+            return []
         items.sort(key=lambda kv: kv[1], reverse=True)
         return items[:n]
 
-    top_attrs = _top(snap.get("network_attr_errors_by_attr") or {}, 5)
-    top_exc = _top(snap.get("network_attr_errors_by_exc") or {}, 5)
-    top_helpers = _top(snap.get("helper_failures_by_name") or {}, 5)
-    top_conn_exc = _top(snap.get("connect_failures_by_exc") or {}, 5)
+    top_attrs = _top(snap.get("network_attr_errors_by_attr") or {}, top_n)
+    top_exc = _top(snap.get("network_attr_errors_by_exc") or {}, top_n)
+    top_helpers = _top(snap.get("helper_failures_by_name") or {}, top_n)
+    top_helper_exc = _top(snap.get("helper_failures_by_exc") or {}, top_n)
+    top_conn_exc = _top(snap.get("connect_failures_by_exc") or {}, top_n)
 
     lines: list[str] = []
     lines.append("[PLEX] Metrics summary")
@@ -252,15 +293,16 @@ def log_plex_metrics(*, force: bool = False) -> None:
     lines.append(f"  - helper_failures: {helper_total}")
     if top_helpers:
         lines.append(f"    * top_helpers: {top_helpers}")
+    if top_helper_exc:
+        lines.append(f"    * top_exc: {top_helper_exc}")
 
     msg = "\n".join(lines)
 
     if SILENT_MODE:
-        if DEBUG_MODE or force:
+        if force or (DEBUG_MODE and bool(PLEX_METRICS_LOG_ON_SILENT_DEBUG)):
             _log_debug(msg)
         return
 
-    # No-silent: si hubo fallos relevantes, INFO es aceptable (aporta valor).
     _log(msg)
 
 
@@ -270,16 +312,33 @@ def log_plex_metrics(*, force: bool = False) -> None:
 
 def _is_networkish_exception(exc: BaseException) -> bool:
     """
-    Heurística para detectar errores típicos de red en plexapi:
-    - requests / urllib3
-    - OSError
-    - RemoteDisconnected / ProtocolError
+    Heurística para detectar errores típicos de red en plexapi.
+
+    Cubre:
+    - requests.exceptions.RequestException
+    - ConnectionError / OSError
+    - nombres típicos de http.client / urllib3 (RemoteDisconnected, ProtocolError, timeouts, resets)
+
+    Nota:
+    - plexapi puede envolver errores; matching por nombre ayuda a capturar más casos.
     """
-    if isinstance(exc, (requests.exceptions.RequestException, OSError, ConnectionError)):
-        return True
+    try:
+        if isinstance(exc, (requests.exceptions.RequestException, OSError, ConnectionError)):
+            return True
+    except Exception:
+        pass
 
     name = exc.__class__.__name__.lower()
-    return "remotedisconnected" in name or "protocolerror" in name
+    if "remotedisconnected" in name:
+        return True
+    if "protocolerror" in name:
+        return True
+    if "connectionaborted" in name or "connectionreset" in name:
+        return True
+    if "readtimeout" in name or "connecttimeout" in name or "timeout" in name:
+        return True
+
+    return False
 
 
 def _safe_getattr(obj: object, attr: str, default: Any = None) -> Any:
@@ -290,8 +349,13 @@ def _safe_getattr(obj: object, attr: str, default: Any = None) -> Any:
     - Captura fallos de red provocados por lazy reload de plexapi.
     - Devuelve default si algo va mal.
 
+    Logs:
+    - Error de red: warning always=True (se ve incluso en SILENT).
+    - Otros errores: debug (para no ensuciar modo normal).
+
     Métricas:
-    - Si detectamos error de red -> incrementa contadores (atributo + tipo de error).
+    - Error de red: network_attr_errors_*
+    - Otros: helper_failures_* (para diagnosticar estructuras raras)
     """
     try:
         return getattr(obj, attr, default)
@@ -304,16 +368,18 @@ def _safe_getattr(obj: object, attr: str, default: Any = None) -> Any:
             )
             return default
 
+        _metrics_inc_helper_failure("_safe_getattr", exc)
         _log_debug(f"_safe_getattr({attr}) failed: {exc!r}")
         return default
 
 
 def _safe_getattr_str(obj: object, attr: str) -> str | None:
     """
-    Lee un atributo string de forma segura:
+    Lee un atributo string de forma segura.
 
-    - Devuelve str.strip() si existe y no está vacío
-    - Devuelve None si falta / vacío / error de red / estructura inesperada
+    - Si es str: strip() y devuelve None si queda vacío.
+    - Si no: None.
+    - Nunca lanza.
     """
     val = _safe_getattr(obj, attr, None)
     if isinstance(val, str):
@@ -330,15 +396,21 @@ def _build_plex_base_url() -> str:
     """
     Construye la URL base para Plex:
 
-        BASEURL = "http://192.168.1.10"
-        PLEX_PORT = 32400
+        BASEURL="http://192.168.1.10"
+        PLEX_PORT=32400
         -> "http://192.168.1.10:32400"
+
+    Falla rápido si BASEURL falta.
     """
     if not BASEURL or not str(BASEURL).strip():
         raise RuntimeError("BASEURL no está definido en el entorno (.env)")
 
     base = str(BASEURL).rstrip("/")
-    return f"{base}:{int(PLEX_PORT)}"
+    try:
+        port = int(PLEX_PORT)
+    except Exception:
+        port = 32400
+    return f"{base}:{port}"
 
 
 def connect_plex() -> PlexServer:
@@ -350,7 +422,7 @@ def connect_plex() -> PlexServer:
     - Fallo de conexión -> se re-lanza (caller decide)
 
     Métricas:
-    - Si falla la conexión, incrementa connect_failures.
+    - connect_failures_*.
     """
     if not BASEURL or not PLEX_TOKEN:
         raise RuntimeError("Faltan BASEURL o PLEX_TOKEN en el .env")
@@ -383,9 +455,9 @@ def get_libraries_to_analyze(plex: PlexServer) -> list[object]:
     """
     Devuelve bibliotecas de Plex excluyendo EXCLUDE_PLEX_LIBRARIES.
 
+    Contrato:
     - Nunca lanza.
-    - En error -> devuelve [] y log always=True.
-    - Métricas: helper_failures si no podemos listar secciones.
+    - En error -> [] y log always=True.
     """
     try:
         sections = plex.library.sections()
@@ -424,9 +496,7 @@ def get_movie_file_info(movie: object) -> tuple[str | None, int | None]:
     - Ruta: primer part.file válido.
     - Tamaño: suma de part.size válidos.
 
-    Nunca lanza.
-    Métricas:
-    - Si la estructura es rara o hay excepciones inesperadas, cuenta helper_failures.
+    Best-effort: nunca lanza.
     """
     try:
         media_seq = _safe_getattr(movie, "media", None)
@@ -472,8 +542,7 @@ def get_imdb_id_from_plex_guid(guid: str) -> str | None:
     """
     Extrae imdb_id (tt1234567) desde un guid de Plex.
 
-    Nota:
-    - Solo reconoce guids con 'imdb://'
+    Solo reconoce guids con 'imdb://'.
     """
     if not isinstance(guid, str) or "imdb://" not in guid:
         return None
@@ -492,9 +561,7 @@ def get_imdb_id_from_movie(movie: object) -> str | None:
     1) movie.guids
     2) movie.guid (fallback)
 
-    Nunca lanza.
-    Métricas:
-    - Si hay excepción inesperada, cuenta helper_failures.
+    Best-effort: nunca lanza.
     """
     try:
         guids = _safe_getattr(movie, "guids", None) or []
@@ -507,7 +574,6 @@ def get_imdb_id_from_movie(movie: object) -> str | None:
                         return imdb_id
     except Exception as exc:
         _metrics_inc_helper_failure("get_imdb_id_from_movie.guids", exc)
-        # No spameamos en always: esto suele ser estructura/lazy; debug basta.
         _log_debug(f"get_imdb_id_from_movie.guids failed: {exc!r}")
 
     guid_main = _safe_getattr(movie, "guid", None)
@@ -529,11 +595,7 @@ def get_best_search_title(movie: object) -> str | None:
       1) originalTitle
       2) title
 
-    - Devuelve None si no hay título usable.
-    - Es 100% no-throw (captura errores de red vía _safe_getattr_str/_safe_getattr).
-
-    Métricas:
-    - Los fallos de red al leer atributos se contabilizan en _safe_getattr.
+    100% no-throw.
     """
     t1 = _safe_getattr_str(movie, "originalTitle")
     if t1:
