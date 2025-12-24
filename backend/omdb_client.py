@@ -3,70 +3,105 @@ from __future__ import annotations
 """
 backend/omdb_client.py (schema v4)
 
-Cliente OMDb + caché persistente indexada + TTL + bounded in-memory caches + compaction en disco
-+ limitador global + métricas.
+Cliente OMDb + caché persistente indexada + TTL + bounded in-memory hot-cache
++ compaction en disco + limitador global + métricas + resumen final de métricas.
 
-✅ Objetivos (v4)
-----------------
-1) Rendimiento:
-   - Cache persistente O(1) con índices (sin duplicación de items):
-       - records[rid] -> OmdbCacheItem
-       - index_imdb[imdb_id] -> rid
-       - index_ty["<norm_title>|<year_str>"] -> rid
-   - TTL por entrada (incluye negative caching persistente: not_found).
-   - Bounded in-memory hot cache (LRU-ish) para evitar lock/dict grandes en hits repetidos.
-   - Write-back batching (flush por umbral/tiempo/salida).
+🧠 Principios
+-------------
+1) Fail-safe:
+   - Fallos de red, rate-limit, o API key inválida NO deben romper el run.
+   - Tras N fallos consecutivos (configurable) OMDb se desactiva para el run
+     y el sistema sigue “cache-only”.
 
-2) Robustez:
-   - Throttle global (min interval) + concurrencia capada (semaphore).
-   - Retry HTTP (429/5xx) en la Session.
-   - Fail-safe: deshabilita OMDb en runtime tras fallos consecutivos / API key inválida.
-   - Compaction antes de escribir:
-       - elimina expirados
-       - cap records e índices
-       - rebuild índices coherentes
-       - dedupe (schema v4 ya no duplica ty+imdb apuntando al mismo item)
+2) Cache-first:
+   - Siempre intentamos resolver por caché (persistente + hot-cache).
+   - Incluye negative caching persistente: "Movie not found!" se guarda con TTL propio.
 
-3) Trazabilidad:
-   - __prov dentro del payload OMDb (lookup_key, resolved_via, etc.)
-   - Persistencia “minimal wiki” (__wiki) SANITIZADA, para no ensuciar el cache.
+3) ThreadPool safe:
+   - requests.Session compartida (pooling) + Retry.
+   - Semaphore global para limitar concurrencia.
+   - Throttle global (mínimo intervalo entre llamadas) para no saturar OMDb.
 
-🪵 Política de logs (ALINEADA con backend/logger.py)
----------------------------------------------------
-Este módulo NO reimplementa SILENT/DEBUG. Usa logger central:
-- logger.warning(..., always=True) para avisos globales importantes
-- logger.debug_ctx("OMDB", ...) para diagnóstico (gated por DEBUG_MODE dentro de logger)
-- logger.error(..., always=True) para fallos graves
+4) Logs coherentes:
+   - Usamos backend/logger.py:
+       - logger.debug_ctx("OMDB", ...) para diagnóstico (gated por DEBUG_MODE).
+       - logger.warning(..., always=True) para avisos importantes.
+       - logger.progress(...) para salida limpia en SILENT+DEBUG (si procede).
+   - Este módulo NO reimplementa SILENT/DEBUG: respeta el facade.
 
-Compatibilidad (API pública)
-----------------------------
-Mantiene firmas públicas:
+Configuración (backend/config.py)
+--------------------------------
+Este módulo consume variables definidas en config.py (sin try/except).
+
+Core:
+- OMDB_API_KEY
+- OMDB_BASE_URL
+- OMDB_HTTP_TIMEOUT_SECONDS
+- OMDB_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT
+- OMDB_HTTP_RETRY_TOTAL
+- OMDB_HTTP_RETRY_BACKOFF_FACTOR
+- OMDB_HTTP_USER_AGENT
+- OMDB_DISABLE_AFTER_N_FAILURES
+
+Rate limiting:
+- OMDB_HTTP_MAX_CONCURRENCY
+- OMDB_HTTP_MIN_INTERVAL_SECONDS
+- OMDB_RATE_LIMIT_MAX_RETRIES
+- OMDB_RATE_LIMIT_WAIT_SECONDS
+
+Cache v4 (paths/TTL/flush/caps):
+- OMDB_CACHE_PATH
+- OMDB_CACHE_TTL_OK_SECONDS
+- OMDB_CACHE_TTL_NOT_FOUND_SECONDS
+- OMDB_CACHE_TTL_EMPTY_RATINGS_SECONDS
+- OMDB_CACHE_FLUSH_MAX_DIRTY_WRITES
+- OMDB_CACHE_FLUSH_MAX_SECONDS
+- ANALIZA_OMDB_CACHE_MAX_RECORDS
+- ANALIZA_OMDB_CACHE_MAX_INDEX_IMDB
+- ANALIZA_OMDB_CACHE_MAX_INDEX_TY
+- ANALIZA_OMDB_HOT_CACHE_MAX
+
+✅ Mejora aplicada: OMDb metrics logging (estilo Plex)
+-----------------------------------------------------
+Resumen final de métricas controlado por config.py:
+
+- OMDB_METRICS_ENABLED
+- OMDB_METRICS_TOP_N
+- OMDB_METRICS_LOG_ON_SILENT_DEBUG
+- OMDB_METRICS_LOG_EVEN_IF_ZERO
+
+Reglas:
+- SILENT_MODE=True y DEBUG_MODE=False -> no imprime (salvo force=True).
+- SILENT_MODE=True y DEBUG_MODE=True  -> imprime vía progress si LOG_ON_SILENT_DEBUG=True.
+- SILENT_MODE=False                  -> imprime vía info.
+- Si todo está a 0 y LOG_EVEN_IF_ZERO=False -> no imprime (salvo force=True).
+
+Compatibilidad (API pública estable)
+------------------------------------
 - omdb_request
 - omdb_query_with_cache
 - patch_cached_omdb_record
 - iter_cached_omdb_records
 - get_omdb_metrics_snapshot / reset_omdb_metrics
 - search_omdb_by_imdb_id / search_omdb_by_title_and_year / search_omdb_with_candidates
-- flush_omdb_cache() (para orquestadores -> flush_external_caches)
+- flush_omdb_cache()  (para orquestadores -> flush_external_caches)
+- log_omdb_metrics_summary() (opcional, para orquestadores/tests)
 
-Notas
------
-- Política de schema:
-  - NO migración automática (por petición): schema mismatch => cache vacío.
-  - Se regenerará desde cero en runs posteriores.
-
-- “bounded in-memory caches”:
-  - La cache persistente vive en _CACHE (cargada una vez).
-  - Además, mantenemos un hot-cache acotado (LRU aproximado) para:
-      - hits frecuentes de la misma key en el mismo run
-      - negative hits (not_found) que evitarían re-lock y re-check repetidos
-  - Esto no sustituye al cache persistente: es un acelerador de corto plazo.
+Notas de esquema (v4)
+---------------------
+- Sin migración automática: schema mismatch => cache vacío (fail-safe).
+- Records únicos:
+    records[rid] -> OmdbCacheItem
+    index_imdb[imdb_id] -> rid
+    index_ty["<norm_title>|<year_str>"] -> rid
+- rid estable:
+    - "imdb:<id>" si existe imdb
+    - else "ty:<norm_title>|<year_str>"
 """
 
 import atexit
 import json
 import os
-import re
 import tempfile
 import threading
 import time
@@ -81,24 +116,40 @@ from urllib3.util.retry import Retry  # type: ignore[import-not-found]
 
 from backend import logger as logger
 from backend.config import (
+    # v4 caps / hot-cache
     ANALIZA_OMDB_CACHE_MAX_INDEX_IMDB,
     ANALIZA_OMDB_CACHE_MAX_INDEX_TY,
     ANALIZA_OMDB_CACHE_MAX_RECORDS,
     ANALIZA_OMDB_HOT_CACHE_MAX,
+    # OMDb core
     OMDB_API_KEY,
+    OMDB_BASE_URL,
+    OMDB_DISABLE_AFTER_N_FAILURES,
+    OMDB_HTTP_RETRY_BACKOFF_FACTOR,
+    OMDB_HTTP_RETRY_TOTAL,
+    OMDB_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT,
+    OMDB_HTTP_TIMEOUT_SECONDS,
+    OMDB_HTTP_USER_AGENT,
+    # OMDb cache settings
     OMDB_CACHE_FLUSH_MAX_DIRTY_WRITES,
     OMDB_CACHE_FLUSH_MAX_SECONDS,
     OMDB_CACHE_PATH,
     OMDB_CACHE_TTL_EMPTY_RATINGS_SECONDS,
     OMDB_CACHE_TTL_NOT_FOUND_SECONDS,
     OMDB_CACHE_TTL_OK_SECONDS,
+    # OMDb throttling
     OMDB_HTTP_MAX_CONCURRENCY,
     OMDB_HTTP_MIN_INTERVAL_SECONDS,
+    # OMDb rate-limit policy
     OMDB_RATE_LIMIT_MAX_RETRIES,
     OMDB_RATE_LIMIT_WAIT_SECONDS,
+    # ✅ OMDb metrics logging (nuevo)
+    OMDB_METRICS_ENABLED,
+    OMDB_METRICS_TOP_N,
+    OMDB_METRICS_LOG_ON_SILENT_DEBUG,
+    OMDB_METRICS_LOG_EVEN_IF_ZERO,
 )
 from backend.movie_input import normalize_title_for_lookup
-
 
 # ============================================================
 #                       CACHE v4 (records + indexes + TTL)
@@ -166,7 +217,7 @@ _CACHE_PATH: Final[Path] = Path(OMDB_CACHE_PATH)
 _CACHE: OmdbCacheFile | None = None
 _CACHE_LOCK = threading.RLock()  # reentrante (helpers encadenados)
 
-# Flush batching (defensivo ante configs raras)
+# Flush batching (valores ya capados en config; re-caps defensivos aquí)
 _FLUSH_MAX_DIRTY_WRITES: Final[int] = max(1, int(OMDB_CACHE_FLUSH_MAX_DIRTY_WRITES))
 _FLUSH_MAX_SECONDS: Final[float] = max(0.1, float(OMDB_CACHE_FLUSH_MAX_SECONDS))
 
@@ -179,7 +230,7 @@ _COMPACT_MAX_RECORDS: Final[int] = int(ANALIZA_OMDB_CACHE_MAX_RECORDS)
 _COMPACT_MAX_INDEX_IMDB: Final[int] = int(ANALIZA_OMDB_CACHE_MAX_INDEX_IMDB)
 _COMPACT_MAX_INDEX_TY: Final[int] = int(ANALIZA_OMDB_CACHE_MAX_INDEX_TY)
 
-# Bounded in-memory hot-cache (acelerador intra-run) (centralizado en config.py)
+# Bounded in-memory hot-cache (acelerador intra-run)
 _HOT_CACHE_MAX: Final[int] = int(ANALIZA_OMDB_HOT_CACHE_MAX)
 _HOT_CACHE_LOCK = threading.Lock()
 _HOT_CACHE: dict[str, tuple[object, float]] = {}
@@ -189,25 +240,28 @@ _HOT_MISS: Final[object] = object()
 
 
 def _now_epoch() -> int:
+    """Epoch seconds (para TTL persistente)."""
     return int(time.time())
 
 
 def _ty_key(norm_title: str, norm_year: str) -> str:
+    """Key estable para index_ty: "<norm_title>|<year_str>"."""
     return f"{norm_title}|{norm_year}"
 
 
 def _cache_key_for_imdb(imdb_id: str) -> str:
+    """Key estable hot-cache para búsquedas por imdb."""
     return f"imdb:{imdb_id.lower()}"
 
 
 def _cache_key_for_title_year(norm_title: str, norm_year: str) -> str:
-    # norm_year puede ser "" (year desconocido) -> sigue siendo estable.
+    """Key estable hot-cache para búsquedas por title+year."""
     return f"ty:{_ty_key(norm_title, norm_year)}"
 
 
 def _rid_for_record(*, imdb_norm: str | None, norm_title: str, norm_year: str) -> str:
     """
-    RID estable para records:
+    RID estable v4:
       - imdb:<id> si hay imdb
       - else ty:<title>|<year>
     """
@@ -217,6 +271,10 @@ def _rid_for_record(*, imdb_norm: str | None, norm_title: str, norm_year: str) -
 
 
 def _is_expired_item(item: OmdbCacheItem, now_epoch: int) -> bool:
+    """
+    Expiración TTL (persistente).
+    Si faltan campos, consideramos expirado (fail-safe).
+    """
     fetched_at = int(item.get("fetched_at", 0))
     ttl_s = int(item.get("ttl_s", 0))
     if fetched_at <= 0 or ttl_s <= 0:
@@ -250,6 +308,7 @@ _METRICS: dict[str, int] = {
 
 
 def _m_inc(key: str, delta: int = 1) -> None:
+    """Incrementa contador de métrica de forma thread-safe."""
     with _METRICS_LOCK:
         _METRICS[key] = int(_METRICS.get(key, 0)) + int(delta)
 
@@ -268,14 +327,103 @@ def reset_omdb_metrics() -> None:
 
 
 # ============================================================
+# MÉTRICAS: LOG AL FINAL DEL RUN (estilo Plex)
+# ============================================================
+
+def _metrics_any_nonzero(snapshot: Mapping[str, int]) -> bool:
+    """True si alguna métrica tiene valor != 0."""
+    try:
+        return any(int(v) != 0 for v in snapshot.values())
+    except Exception:
+        # Si algo raro pasa, preferimos "sí" para no ocultar diagnósticos.
+        return True
+
+
+def _format_metrics_top(snapshot: Mapping[str, int], top_n: int) -> list[tuple[str, int]]:
+    """
+    Devuelve top-N por valor desc, estable por key si empatan.
+    - Filtra ceros para que el resumen sea útil y compacto.
+    """
+    items: list[tuple[str, int]] = []
+    for k, v in snapshot.items():
+        try:
+            iv = int(v)
+        except Exception:
+            continue
+        if iv == 0:
+            continue
+        items.append((str(k), iv))
+
+    items.sort(key=lambda kv: (-kv[1], kv[0]))
+    return items[: max(1, int(top_n))]
+
+
+def log_omdb_metrics_summary(*, force: bool = False) -> None:
+    """
+    Log de métricas al final del run (o manual).
+
+    - Respeta SILENT/DEBUG mediante backend/logger.py.
+    - No hace I/O de disco: solo imprime contadores.
+    """
+    if not OMDB_METRICS_ENABLED and not force:
+        return
+
+    snap = get_omdb_metrics_snapshot()
+
+    if (not OMDB_METRICS_LOG_EVEN_IF_ZERO) and (not force):
+        if not _metrics_any_nonzero(snap):
+            return
+
+    silent = logger.is_silent_mode()
+    debug = logger.is_debug_mode()
+
+    # SILENT "real": no imprimimos nada salvo force=True
+    if silent and (not debug) and (not force):
+        return
+
+    # SILENT+DEBUG: solo si está activado (salvo force)
+    if silent and debug and (not OMDB_METRICS_LOG_ON_SILENT_DEBUG) and (not force):
+        return
+
+    # Cap defensivo
+    try:
+        top_n = int(OMDB_METRICS_TOP_N)
+    except Exception:
+        top_n = 12
+    top_n = max(1, min(100, top_n))
+
+    top = _format_metrics_top(snap, top_n=top_n)
+
+    header = "[OMDB][METRICS] summary"
+    lines: list[str] = [header]
+
+    if not top:
+        lines.append("  (all zeros)")
+    else:
+        max_k = max((len(k) for k, _ in top), default=10)
+        for k, v in top:
+            lines.append(f"  {k.ljust(max_k)} : {v}")
+
+    # Emitimos respetando policy
+    if silent and debug:
+        for ln in lines:
+            logger.progress(ln)
+    else:
+        for ln in lines:
+            logger.info(ln)
+
+
+# ============================================================
 # LOGGING (centralizado en backend/logger.py)
 # ============================================================
 
 def _dbg(msg: object) -> None:
+    """Diagnóstico contextual (solo si DEBUG_MODE=True)."""
     logger.debug_ctx("OMDB", msg)
 
 
 def _warn_always(msg: object) -> None:
+    """Aviso importante (visible incluso en SILENT_MODE)."""
     logger.warning(str(msg), always=True)
 
 
@@ -287,12 +435,35 @@ _SESSION: requests.Session | None = None
 _SESSION_LOCK = threading.Lock()
 
 
+def _cap_int_runtime(value: int, *, min_v: int, max_v: int) -> int:
+    """Cap defensivo (por si config/env cambia)."""
+    if value < min_v:
+        return min_v
+    if value > max_v:
+        return max_v
+    return value
+
+
+def _cap_float_runtime(value: float, *, min_v: float, max_v: float | None = None) -> float:
+    """Cap defensivo (por si config/env cambia)."""
+    if value < min_v:
+        return min_v
+    if max_v is not None and value > max_v:
+        return max_v
+    return value
+
+
 def _get_session() -> requests.Session:
     """
     Singleton requests.Session con retries.
 
     - Retry automático para 429/5xx.
     - Pooling de conexiones (crítico con ThreadPool).
+    - User-Agent configurable.
+
+    Nota:
+    - El Retry de urllib3 es “best-effort”. Aun con retry, seguimos tratando
+      fallos como no-fatales y devolvemos None donde aplique.
     """
     global _SESSION
     if _SESSION is not None:
@@ -302,22 +473,28 @@ def _get_session() -> requests.Session:
         if _SESSION is not None:
             return _SESSION
 
+        retry_total = _cap_int_runtime(int(OMDB_HTTP_RETRY_TOTAL), min_v=0, max_v=10)
+        backoff = _cap_float_runtime(float(OMDB_HTTP_RETRY_BACKOFF_FACTOR), min_v=0.0, max_v=10.0)
+
         session = requests.Session()
+
         retries = Retry(
-            total=3,
-            backoff_factor=0.5,
+            total=retry_total,
+            backoff_factor=backoff,
             status_forcelist=(429, 500, 502, 503, 504),
             allowed_methods=("GET",),
             raise_on_status=False,
             respect_retry_after_header=True,
         )
+
         adapter = HTTPAdapter(max_retries=retries)
         session.mount("https://", adapter)
         session.mount("http://", adapter)
 
+        ua = str(OMDB_HTTP_USER_AGENT).strip() or "Analiza-Movies/1.0 (local)"
         session.headers.update(
             {
-                "User-Agent": "Analiza-Movies/1.0 (local)",
+                "User-Agent": ua,
                 "Accept": "application/json,text/plain,*/*",
             }
         )
@@ -330,7 +507,7 @@ def _get_session() -> requests.Session:
 # LIMITADOR GLOBAL OMDb (ThreadPool safe)
 # ============================================================
 
-# Concurrencia máxima de requests OMDb (defensivo ante configs <= 0)
+# Concurrencia máxima de requests OMDb
 _OMDB_HTTP_SEMAPHORE = threading.Semaphore(max(1, int(OMDB_HTTP_MAX_CONCURRENCY)))
 
 # Throttle global (intervalo mínimo entre requests)
@@ -349,14 +526,19 @@ OMDB_INVALID_KEY_NOTICE_SHOWN: bool = False
 
 _OMDB_CONSECUTIVE_FAILURES: int = 0
 _OMDB_FAILURES_LOCK = threading.Lock()
-_OMDB_DISABLE_AFTER_N_FAILURES: Final[int] = 3
+
+_DISABLE_AFTER_N_FAILURES: Final[int] = _cap_int_runtime(int(OMDB_DISABLE_AFTER_N_FAILURES), min_v=1, max_v=50)
 
 
 def _mark_omdb_failure() -> None:
     """
     Fail-safe:
     - Tras N fallos consecutivos, deshabilita OMDb para el resto del run.
-    - Evita runs rotos por caídas / rate limits / problemas de red.
+    - Evita runs rotos por caídas / rate limit / problemas de red.
+
+    Importante:
+    - N cuenta “fallos de transporte/protocolo”, no “Movie not found!”.
+    - Si OMDb se deshabilita, seguimos resolviendo por caché (persistente/hot).
     """
     global OMDB_DISABLED, OMDB_DISABLED_NOTICE_SHOWN, _OMDB_CONSECUTIVE_FAILURES
 
@@ -364,7 +546,7 @@ def _mark_omdb_failure() -> None:
         _OMDB_CONSECUTIVE_FAILURES += 1
         fails = _OMDB_CONSECUTIVE_FAILURES
 
-    if fails < _OMDB_DISABLE_AFTER_N_FAILURES:
+    if fails < _DISABLE_AFTER_N_FAILURES:
         return
 
     if not OMDB_DISABLED:
@@ -394,23 +576,24 @@ def _omdb_http_get(*, base_url: str, params: Mapping[str, str], timeout_seconds:
     - métricas
     - manejo defensivo de excepciones
 
-    Devuelve Response o None (si error / deshabilitado / no se pudo adquirir semaphore).
+    Devuelve:
+      - Response en caso de éxito
+      - None si OMDb está deshabilitado, no se adquirió el semaphore, o falló la request.
     """
     global _OMDB_HTTP_LAST_REQUEST_TS
 
     if OMDB_DISABLED:
         return None
 
-    acquired = _OMDB_HTTP_SEMAPHORE.acquire(timeout=30.0)
+    acquire_timeout = _cap_float_runtime(float(OMDB_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT), min_v=0.1, max_v=120.0)
+    acquired = _OMDB_HTTP_SEMAPHORE.acquire(timeout=acquire_timeout)
     if not acquired:
-        _dbg("Semaphore acquire timeout (30s). Skipping OMDb request.")
+        _dbg(f"Semaphore acquire timeout ({acquire_timeout:.1f}s). Skipping OMDb request.")
         return None
 
     try:
-        min_interval = float(OMDB_HTTP_MIN_INTERVAL_SECONDS)
-        if min_interval < 0.0:
-            min_interval = 0.0
-
+        # throttle global (mínimo intervalo entre llamadas)
+        min_interval = max(0.0, float(OMDB_HTTP_MIN_INTERVAL_SECONDS))
         if min_interval > 0.0:
             with _OMDB_HTTP_THROTTLE_LOCK:
                 now = time.monotonic()
@@ -423,7 +606,9 @@ def _omdb_http_get(*, base_url: str, params: Mapping[str, str], timeout_seconds:
 
         _m_inc("http_requests", 1)
         session = _get_session()
-        return session.get(base_url, params=dict(params), timeout=timeout_seconds)
+
+        t = _cap_float_runtime(float(timeout_seconds), min_v=0.5, max_v=120.0)
+        return session.get(base_url, params=dict(params), timeout=t)
 
     except Exception as exc:
         _m_inc("http_failures", 1)
@@ -459,9 +644,7 @@ def _safe_float(value: object) -> float | None:
 def _safe_imdb_id(value: object) -> str | None:
     """
     Normaliza imdbID: strip + lower.
-    Nota:
-      - OMDb suele devolver "tt1234567"
-      - En el proyecto tratamos imdb IDs en minúscula para keys estables.
+    En el proyecto tratamos IDs en minúscula para keys estables.
     """
     if not isinstance(value, str):
         return None
@@ -530,8 +713,9 @@ def extract_ratings_from_omdb(data: Mapping[str, object] | None) -> tuple[float 
 
 def is_omdb_data_empty_for_ratings(data: Mapping[str, object] | None) -> bool:
     """
-    Señal “empty ratings”: OMDb devuelve ficha, pero sin métricas útiles.
-    Útil para TTL más corto y refresh futuro.
+    Señal “empty ratings”:
+    OMDb devuelve ficha, pero sin métricas útiles.
+    Sirve para usar TTL intermedio y permitir refresh futuro.
     """
     if not data:
         return True
@@ -542,7 +726,7 @@ def is_omdb_data_empty_for_ratings(data: Mapping[str, object] | None) -> bool:
 
 
 def _extract_imdb_id_from_omdb_record(data: Mapping[str, object] | None) -> str | None:
-    """Extrae imdbID de una respuesta OMDb “True”."""
+    """Extrae imdbID de una respuesta OMDb con Response=True."""
     if not isinstance(data, Mapping):
         return None
     if data.get("Response") != "True":
@@ -551,23 +735,25 @@ def _extract_imdb_id_from_omdb_record(data: Mapping[str, object] | None) -> str 
 
 
 def _norm_year_str(year: int | None) -> str:
+    """Normaliza year a str; year desconocido => ""."""
     return str(year) if year is not None else ""
 
 
 def _is_movie_not_found(data: Mapping[str, object]) -> bool:
+    """Detecta el not_found “estándar” de OMDb."""
     return data.get("Response") == "False" and data.get("Error") == "Movie not found!"
 
 
 def _is_invalid_api_key(data: Mapping[str, object]) -> bool:
+    """Detecta respuesta de API key inválida."""
     err = data.get("Error")
     return data.get("Response") == "False" and isinstance(err, str) and "api key" in err.lower()
 
 
 def _pick_ttl_and_status(omdb_data: Mapping[str, object]) -> tuple[int, CacheStatus]:
     """
-    Decide TTL y status según payload.
-
-    - not_found: negative caching persistente
+    TTL/status:
+    - not_found: negative caching persistente (TTL propio)
     - empty_ratings: TTL intermedio
     - ok: TTL largo
     """
@@ -620,9 +806,8 @@ def _sanitize_wiki_block(v: object) -> dict[str, object] | None:
     Sanitiza __wiki minimal:
       - imdb_id, wikidata_id, wikipedia_title, source_language, wiki_lookup
 
-    Importante:
-    - Este bloque se guarda DENTRO del payload OMDb en caché.
-    - Debe ser estable, pequeño y seguro.
+    Este bloque se guarda DENTRO del payload OMDb en caché:
+    debe ser estable, pequeño y seguro.
     """
     if not isinstance(v, Mapping):
         return None
@@ -657,6 +842,11 @@ def _sanitize_wiki_block(v: object) -> dict[str, object] | None:
 # ============================================================
 
 def _build_default_provenance(*, imdb_norm: str | None, norm_title: str, year: int | None) -> dict[str, object]:
+    """
+    Provenance base para trazabilidad:
+    - lookup_key (cómo intentamos resolver)
+    - had_imdb_hint
+    """
     if imdb_norm:
         lookup_key = f"imdb_id:{imdb_norm}"
     else:
@@ -665,6 +855,7 @@ def _build_default_provenance(*, imdb_norm: str | None, norm_title: str, year: i
 
 
 def _merge_provenance(existing: Mapping[str, object] | None, incoming: Mapping[str, object] | None) -> dict[str, object]:
+    """Merge shallow: incoming pisa existing."""
     out: dict[str, object] = {}
     if isinstance(existing, Mapping):
         out.update(dict(existing))
@@ -674,6 +865,7 @@ def _merge_provenance(existing: Mapping[str, object] | None, incoming: Mapping[s
 
 
 def _attach_provenance(omdb_data: dict[str, object], prov: Mapping[str, object] | None) -> dict[str, object]:
+    """Adjunta/mergea __prov dentro del payload OMDb."""
     existing = omdb_data.get("__prov")
     merged = _merge_provenance(existing if isinstance(existing, Mapping) else None, prov)
     if merged:
@@ -743,7 +935,6 @@ def _hot_put(key: str, obj: object) -> None:
         if len(_HOT_CACHE) <= _HOT_CACHE_MAX:
             return
 
-        # Evict más viejo(s)
         oldest_k: str | None = None
         oldest_ts = float("inf")
         for k, (_obj, ts) in _HOT_CACHE.items():
@@ -761,6 +952,7 @@ def _hot_put(key: str, obj: object) -> None:
 # ============================================================
 
 def _empty_cache() -> OmdbCacheFile:
+    """Crea estructura vacía del cache (schema v4)."""
     return {"schema": _SCHEMA_VERSION, "records": {}, "index_imdb": {}, "index_ty": {}}
 
 
@@ -819,6 +1011,7 @@ def _load_cache_unlocked() -> OmdbCacheFile:
         _CACHE = _empty_cache()
         return _CACHE
 
+    # Validación defensiva de records
     records: dict[str, OmdbCacheItem] = {}
     for rid, v in records_obj.items():
         if not isinstance(rid, str) or not isinstance(v, Mapping):
@@ -855,6 +1048,7 @@ def _load_cache_unlocked() -> OmdbCacheFile:
             "status": status,
         }
 
+    # Validación defensiva de índices
     index_imdb: dict[str, str] = {}
     for k, v in index_imdb_obj.items():
         if isinstance(k, str) and isinstance(v, str) and k.strip():
@@ -907,6 +1101,7 @@ def _save_cache_file_atomic(cache: OmdbCacheFile) -> None:
 
 
 def _mark_dirty_unlocked() -> None:
+    """Marca cache como dirty para write-back batching."""
     global _CACHE_DIRTY, _CACHE_DIRTY_WRITES
     _CACHE_DIRTY = True
     _CACHE_DIRTY_WRITES += 1
@@ -921,6 +1116,9 @@ def _compact_cache_unlocked(cache: OmdbCacheFile, *, force: bool) -> None:
       - cap records (más recientes primero)
       - rebuild índices coherentes
       - cap índices (por seguridad)
+
+    Nota:
+    - Esto opera en memoria. Solo se persiste cuando _maybe_flush_unlocked decide.
     """
     try:
         now_epoch = _now_epoch()
@@ -951,14 +1149,14 @@ def _compact_cache_unlocked(cache: OmdbCacheFile, *, force: bool) -> None:
                 d["imdbID"] = None
             records[rid] = d  # type: ignore[assignment]
 
-        # 2) cap records
+        # 2) cap records (evita crecimiento infinito del JSON)
         if _COMPACT_MAX_RECORDS > 0 and len(records) > _COMPACT_MAX_RECORDS:
             ranked = sorted(records.items(), key=lambda kv: int(kv[1].get("fetched_at", 0)), reverse=True)
             records = dict(ranked[:_COMPACT_MAX_RECORDS])
 
         cache["records"] = records
 
-        # 3) rebuild índices
+        # 3) rebuild índices desde records (fuente de la verdad)
         index_imdb: dict[str, str] = {}
         index_ty: dict[str, str] = {}
         for rid, it in records.items():
@@ -998,8 +1196,8 @@ def _maybe_flush_unlocked(force: bool) -> None:
     - o dirty_writes >= umbral
     - o han pasado X segundos desde el último flush
 
-    Importante:
-    - Antes de escribir, hacemos compaction/GC.
+    Antes de escribir:
+    - compaction/GC (reduce tamaño y elimina expirados)
     """
     global _CACHE_DIRTY, _CACHE_DIRTY_WRITES, _CACHE_LAST_FLUSH_TS, _CACHE
     if _CACHE is None:
@@ -1030,18 +1228,30 @@ def _maybe_flush_unlocked(force: bool) -> None:
 def flush_omdb_cache() -> None:
     """
     API pública: flush explícito del cache OMDb (si está dirty).
-    Orquestadores (plex/dlna) lo llaman vía flush_external_caches().
+    Orquestadores lo llaman vía flush_external_caches().
     """
     with _CACHE_LOCK:
         _maybe_flush_unlocked(force=True)
 
 
 def _flush_cache_on_exit() -> None:
+    """
+    Asegura persistencia al salir (best-effort) y emite resumen de métricas.
+
+    Orden recomendado:
+      1) flush del cache (puede incrementar cache_flush_writes)
+      2) resumen de métricas (para que refleje el flush final)
+    """
     try:
         with _CACHE_LOCK:
             _maybe_flush_unlocked(force=True)
     except Exception:
-        return
+        pass
+
+    try:
+        log_omdb_metrics_summary()
+    except Exception:
+        pass
 
 
 atexit.register(_flush_cache_on_exit)
@@ -1058,10 +1268,6 @@ def _get_cached_item_unlocked(*, norm_title: str, norm_year: str, imdb_id_hint: 
     Orden:
       1) imdb (más estable)
       2) title+year
-
-    Nota:
-      - Este método NO consulta el hot-cache (eso se hace arriba),
-        para no mezclar políticas.
     """
     cache = _load_cache_unlocked()
     records = cache["records"]
@@ -1096,12 +1302,8 @@ def _get_cached_item_unlocked(*, norm_title: str, norm_year: str, imdb_id_hint: 
 def _get_cached_item(*, norm_title: str, norm_year: str, imdb_id_hint: str | None) -> OmdbCacheItem | None:
     """
     Lookup combinado:
-      - primero hot-cache (bounded in-memory)
-      - luego cache persistente (con lock)
-
-    Hot-cache keys:
-      - imdb:<id> si hay imdb hint
-      - ty:<title>|<year> siempre (si hay title canonicalizable)
+      - hot-cache (bounded in-memory)
+      - persistente (con lock)
     """
     imdb_key = _cache_key_for_imdb(imdb_id_hint) if imdb_id_hint else None
     ty_key = _cache_key_for_title_year(norm_title, norm_year) if norm_title or norm_year else None
@@ -1133,7 +1335,7 @@ def _get_cached_item(*, norm_title: str, norm_year: str, imdb_id_hint: str | Non
             _hot_put(ty_key, it)
         return it
 
-    # Negative hot-cache: solo si estamos seguros de la key
+    # Negative hot-cache: evita re-locks repetidos durante el mismo run
     if imdb_key:
         _hot_put(imdb_key, _HOT_MISS)
     if ty_key:
@@ -1146,7 +1348,7 @@ def _cache_store_item(*, norm_title: str, norm_year: str, imdb_id: str | None, o
     Inserta/actualiza un record en cache v4:
       - records[rid] = item
       - index_ty y index_imdb apuntan a rid
-      - TTL/status según payload (incluye not_found -> negative caching persistente)
+      - TTL/status según payload
       - batching del flush
       - write-through al hot-cache
     """
@@ -1155,11 +1357,10 @@ def _cache_store_item(*, norm_title: str, norm_year: str, imdb_id: str | None, o
 
     imdb_norm = imdb_id.lower() if isinstance(imdb_id, str) and imdb_id.strip() else None
 
-    # Robustez: evitar keys vacías “raras”
+    # Robustez: evitar keys vacías raras
     norm_title_final = norm_title or normalize_title_for_lookup(str(omdb_data.get("Title") or "")) or ""
-    norm_year_final = norm_year or (
-        str(extract_year_from_omdb(omdb_data)) if extract_year_from_omdb(omdb_data) is not None else ""
-    )
+    y_extracted = extract_year_from_omdb(omdb_data)
+    norm_year_final = norm_year or (str(y_extracted) if y_extracted is not None else "")
 
     item: OmdbCacheItem = {
         "Title": norm_title_final,
@@ -1184,7 +1385,7 @@ def _cache_store_item(*, norm_title: str, norm_year: str, imdb_id: str | None, o
         _mark_dirty_unlocked()
         _maybe_flush_unlocked(force=False)
 
-    # hot-cache (post-lock, no pasa nada si hay carrera)
+    # hot-cache (post-lock: best-effort)
     _hot_put(_cache_key_for_title_year(norm_title_final, norm_year_final), item)
     if imdb_norm:
         _hot_put(_cache_key_for_imdb(imdb_norm), item)
@@ -1195,8 +1396,7 @@ def _cache_store_item(*, norm_title: str, norm_year: str, imdb_id: str | None, o
 def iter_cached_omdb_records() -> Iterable[dict[str, object]]:
     """
     Itera payloads OMDb (sin metadatos de cache).
-
-    En schema v4 ya no hay duplicados por diseño (records únicos).
+    En schema v4 ya no hay duplicados por diseño.
     """
     with _CACHE_LOCK:
         cache = _load_cache_unlocked()
@@ -1300,6 +1500,7 @@ def omdb_request(params: Mapping[str, object]) -> dict[str, object] | None:
     """
     global OMDB_INVALID_KEY_NOTICE_SHOWN, OMDB_DISABLED, OMDB_DISABLED_NOTICE_SHOWN
 
+    # API key requerida
     if OMDB_API_KEY is None or not str(OMDB_API_KEY).strip():
         if not OMDB_DISABLED:
             OMDB_DISABLED = True
@@ -1312,11 +1513,13 @@ def omdb_request(params: Mapping[str, object]) -> dict[str, object] | None:
     if OMDB_DISABLED:
         return None
 
-    base_url = "https://www.omdbapi.com/"
+    base_url = str(OMDB_BASE_URL).strip() or "https://www.omdbapi.com/"
     req_params: dict[str, str] = {str(k): str(v) for k, v in params.items()}
     req_params["apikey"] = str(OMDB_API_KEY)
 
-    resp = _omdb_http_get(base_url=base_url, params=req_params, timeout_seconds=10.0)
+    timeout_s = _cap_float_runtime(float(OMDB_HTTP_TIMEOUT_SECONDS), min_v=0.5, max_v=120.0)
+
+    resp = _omdb_http_get(base_url=base_url, params=req_params, timeout_seconds=timeout_s)
     if resp is None:
         _mark_omdb_failure()
         return None
@@ -1369,7 +1572,10 @@ def _request_with_rate_limit(params: Mapping[str, object]) -> dict[str, object] 
     global OMDB_RATE_LIMIT_NOTICE_SHOWN
 
     retries_local = 0
-    while retries_local <= int(OMDB_RATE_LIMIT_MAX_RETRIES):
+    max_retries = max(0, int(OMDB_RATE_LIMIT_MAX_RETRIES))
+    wait_s = max(0.0, float(OMDB_RATE_LIMIT_WAIT_SECONDS))
+
+    while retries_local <= max_retries:
         data = omdb_request(params)
         if data is None:
             return None
@@ -1381,11 +1587,12 @@ def _request_with_rate_limit(params: Mapping[str, object]) -> dict[str, object] 
             if not OMDB_RATE_LIMIT_NOTICE_SHOWN:
                 _warn_always(
                     "AVISO: límite de llamadas gratuitas de OMDb alcanzado. "
-                    f"Esperando {OMDB_RATE_LIMIT_WAIT_SECONDS} segundos antes de continuar..."
+                    f"Esperando {wait_s:g} segundos antes de continuar..."
                 )
                 OMDB_RATE_LIMIT_NOTICE_SHOWN = True
 
-            time.sleep(float(OMDB_RATE_LIMIT_WAIT_SECONDS))
+            if wait_s > 0.0:
+                time.sleep(wait_s)
             retries_local += 1
             continue
 
@@ -1404,6 +1611,10 @@ def _search_candidates_imdb_id(*, title_for_search: str, year: int | None) -> st
     - endpoint s=
     - rankea por similitud de título y cercanía de año
     - devuelve imdbID más probable
+
+    Nota:
+    - Este search es “lo mínimo razonable”: OMDb search es limitado y ruidoso.
+    - No pretende ser fuzzy-matching perfecto: solo rescatar casos comunes.
     """
     _m_inc("candidate_search_calls", 1)
 
@@ -1413,10 +1624,11 @@ def _search_candidates_imdb_id(*, title_for_search: str, year: int | None) -> st
     if OMDB_API_KEY is None or not str(OMDB_API_KEY).strip():
         return None
 
-    base_url = "https://www.omdbapi.com/"
+    base_url = str(OMDB_BASE_URL).strip() or "https://www.omdbapi.com/"
     params_s: dict[str, str] = {"apikey": str(OMDB_API_KEY), "s": title_q, "type": "movie"}
 
-    resp = _omdb_http_get(base_url=base_url, params=params_s, timeout_seconds=10.0)
+    timeout_s = _cap_float_runtime(float(OMDB_HTTP_TIMEOUT_SECONDS), min_v=0.5, max_v=120.0)
+    resp = _omdb_http_get(base_url=base_url, params=params_s, timeout_seconds=timeout_s)
     if resp is None:
         return None
 
@@ -1435,6 +1647,13 @@ def _search_candidates_imdb_id(*, title_for_search: str, year: int | None) -> st
     ptit = normalize_title_for_lookup(title_q)
 
     def score_candidate(cand: Mapping[str, object]) -> float:
+        """
+        Heurística simple:
+        - título exacto normalizado: +2
+        - substring: +1
+        - año exacto: +2
+        - año +/-1: +1
+        """
         score = 0.0
 
         ct_raw = cand.get("Title")
@@ -1515,12 +1734,15 @@ def omdb_query_with_cache(
     norm_title = normalize_title_for_lookup(title or "")
     title_query = (title or "").strip()
 
+    # Nada que buscar
     if not norm_title and imdb_norm is None:
         return None
 
+    # Provenance
     prov_base = _build_default_provenance(imdb_norm=imdb_norm, norm_title=norm_title, year=year)
     prov_in = _merge_provenance(prov_base, provenance)
 
+    # Cache-first
     cached = _get_cached_item(norm_title=norm_title, norm_year=year_str, imdb_id_hint=imdb_norm)
     if cached is not None:
         _m_inc("cache_hits", 1)
@@ -1542,7 +1764,7 @@ def omdb_query_with_cache(
             imdb_from_resp = _extract_imdb_id_from_omdb_record(data_main)
             imdb_final = imdb_from_resp or imdb_norm
 
-            # si no tenemos norm_title/year, intentamos derivarlos (para un cache key mejor)
+            # Derivar title/year si faltaban, para key mejor en cache
             if not norm_title:
                 t_raw = data_main.get("Title")
                 if isinstance(t_raw, str):
@@ -1565,7 +1787,6 @@ def omdb_query_with_cache(
     # B) title (+year) -> t=
     # ------------------------------------------------------------------
     title_for_omdb = title_query or norm_title
-
     params_t: dict[str, object] = {"t": title_for_omdb, "type": "movie", "plot": "short"}
     if year is not None:
         params_t["y"] = str(year)
@@ -1604,7 +1825,7 @@ def omdb_query_with_cache(
                 _cache_store_item(norm_title=norm_title, norm_year=year_str2, imdb_id=imdb_final2, omdb_data=dict(data_full))
                 return dict(data_full)
 
-    # Guardamos lo obtenido por t= (incluso not_found; negative caching persistente)
+    # Guardamos lo obtenido por t= (incluye not_found: negative caching persistente)
     imdb_final3 = _extract_imdb_id_from_omdb_record(data_t)
     y_resp3 = extract_year_from_omdb(data_t)
     year_str3 = year_str or (str(y_resp3) if y_resp3 is not None else "")
@@ -1622,6 +1843,7 @@ def omdb_query_with_cache(
 # ============================================================
 
 def search_omdb_by_imdb_id(imdb_id: str) -> dict[str, object] | None:
+    """Helper: búsqueda por imdbID."""
     imdb_norm = _safe_imdb_id(imdb_id)
     if not imdb_norm:
         return None
@@ -1629,6 +1851,7 @@ def search_omdb_by_imdb_id(imdb_id: str) -> dict[str, object] | None:
 
 
 def search_omdb_by_title_and_year(title: str, year: int | None) -> dict[str, object] | None:
+    """Helper: búsqueda por título y (opcional) año."""
     if not title.strip():
         return None
     return omdb_query_with_cache(title=title, year=year, imdb_id=None)
