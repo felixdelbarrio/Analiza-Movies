@@ -18,17 +18,28 @@ Política
 - DEBUG_MODE=True: permite trazas útiles; en SILENT+DEBUG se emiten por `progress`.
 - El logging nunca debe romper el pipeline.
 
-Salida opcional a fichero (✅ integrado con la última config.py)
---------------------------------------------------------------
+Salida opcional a fichero (integrado con config.py)
+---------------------------------------------------
 Este módulo NO decide nombres. Solo "consume" variables desde backend.config (si ya está importado):
 
 - LOGGER_FILE_ENABLED: bool
 - LOGGER_FILE_PATH: Path | str | None
 
-La config (ya actualizada) genera un LOGGER_FILE_PATH único por ejecución
-(timestamp + pid) o respeta un path explícito si se define.
+⚠️ Importante (bug de "dos logs" / "un log por PID")
+---------------------------------------------------
+En entornos con subprocesos (multiprocessing/spawn), cada proceso puede importar config
+y generar un LOGGER_FILE_PATH diferente (por PID), provocando "dos logs".
 
-Comportamiento cuando LOGGER_FILE_ENABLED=True y LOGGER_FILE_PATH no es None:
+Para evitarlo, este logger resuelve el path con esta prioridad:
+
+  0) ENV LOGGER_FILE_PATH (si el proceso padre lo fija, los hijos lo heredan)
+  1) backend.config.LOGGER_FILE_PATH
+  2) None
+
+Esto permite "congelar" el fichero por ejecución estableciendo LOGGER_FILE_PATH en el
+entorno del proceso principal (recomendado hacerlo desde config.py o desde el launcher).
+
+Comportamiento cuando LOGGER_FILE_ENABLED=True y hay path:
 1) Todo lo que pase por `logging` (debug/info/warning/error) se duplica a fichero
    vía FileHandler en el root logger.
 2) Todo lo que pase por `progress/progressf` también se apendea al mismo fichero
@@ -43,6 +54,7 @@ Notas técnicas importantes
 """
 
 import logging
+import os
 import sys
 import threading
 from typing import Final
@@ -235,9 +247,23 @@ def _file_logging_path() -> str | None:
     """
     Path del fichero de log.
 
-    Esperamos que config exponga LOGGER_FILE_PATH como Path | str | None.
-    - None / vacío => None
+    Prioridad (clave para evitar "1 log por PID" con multiprocessing/spawn):
+      0) ENV LOGGER_FILE_PATH (si el padre lo fijó, los hijos lo heredan)
+      1) backend.config.LOGGER_FILE_PATH (Path | str | None)
+      2) None
+
+    Nota:
+    - No decide nombres; solo resuelve el destino.
     """
+    # 0) ENV (congela el fichero entre procesos)
+    try:
+        env_p = (os.getenv("LOGGER_FILE_PATH") or "").strip()
+        if env_p:
+            return env_p
+    except Exception:
+        pass
+
+    # 1) backend.config
     cfg = _safe_get_cfg()
     if cfg is None:
         return None
@@ -267,7 +293,7 @@ def _ensure_file_handler(root: logging.Logger, *, level: int) -> None:
     Añade un FileHandler al root logger si procede y si no existe ya.
 
     Reglas:
-    - Solo si LOGGER_FILE_ENABLED=True y LOGGER_FILE_PATH está definido.
+    - Solo si LOGGER_FILE_ENABLED=True y hay path.
     - Idempotente (no duplica handlers).
     - Best-effort: nunca rompe el pipeline si falla crear el fichero/dir.
 
@@ -293,8 +319,6 @@ def _ensure_file_handler(root: logging.Logger, *, level: int) -> None:
 
     try:
         # Creamos directorio si hace falta (best-effort).
-        import os  # local import: reduce coste y evita cargar si no se usa
-
         dir_name = os.path.dirname(path)
         if dir_name:
             try:
@@ -341,8 +365,6 @@ def _append_progress_to_file(message: str) -> None:
         return
 
     try:
-        import os  # local import
-
         dir_name = os.path.dirname(path)
         if dir_name:
             try:
@@ -368,7 +390,7 @@ def _ensure_configured() -> logging.Logger:
     Inicializa logging de forma idempotente y devuelve el logger principal.
 
     - Si ya se configuró, re-sincroniza niveles (por si backend.config cambió).
-    - Configura handler de fichero si procede (consumiendo LOGGER_FILE_* de config).
+    - Configura handler de fichero si procede (consumiendo LOGGER_FILE_* de config/env).
     - Nunca lanza excepciones.
     """
     global _LOGGER, _CONFIGURED
@@ -444,7 +466,7 @@ def progress(message: str) -> None:
 
     No usa logging para evitar timestamps/levels y dar una “señal” limpia.
 
-    ✅ Si LOGGER_FILE_ENABLED=True y LOGGER_FILE_PATH existe, también se persiste a fichero.
+    ✅ Si LOGGER_FILE_ENABLED=True y existe un path, también se persiste a fichero.
     """
     try:
         sys.stdout.write(f"{message}\n")
