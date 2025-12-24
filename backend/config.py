@@ -9,7 +9,7 @@ Carga y normaliza la configuración del proyecto desde variables de entorno (.en
 -------------
 1) "Config as data":
    - Este módulo SOLO parsea, valida y expone constantes.
-   - No ejecuta lógica de negocio.
+   - Evita lógica de negocio (lo máximo posible).
 
 2) Robusto ante entornos “sucios”:
    - Si una env var viene mal (p.ej. "abc" donde se esperaba int), no rompe.
@@ -34,56 +34,26 @@ Centraliza parámetros de clientes y orquestadores:
 - Caps (compaction / in-memory LRU)
 - Flags de comportamiento
 
-✅ Mejoras
-----------
-- Plex Metrics: parse + caps.
-- OMDb HTTP tuning: timeouts/retries/user-agent.
-- Wiki HTTP tuning: timeouts/retries/user-agent + endpoints.
-- Wiki Metrics: parse + caps, consumido por backend/wiki_client.py.
-
-✅ NUEVO (orquestador Plex)
---------------------------
-Añade knobs del orquestador Plex (analiza_plex.py), centralizables:
-
-1) PLEX_PROGRESS_EVERY_N_MOVIES
-2) PLEX_MAX_WORKERS_CAP
-3) PLEX_MAX_INFLIGHT_FACTOR
-4) PLEX_LIBRARY_LANGUAGE_DEFAULT
-5) PLEX_LIBRARY_LANGUAGE_BY_NAME
-6) PLEX_RUN_METRICS_ENABLED
-
-✅ NUEVO (core de análisis)
---------------------------
-Centraliza knobs del core (backend/analyze_input_core.py):
-
-7) ANALYZE_TRACE_REASON_MAX_CHARS
-8) ANALYZE_CORE_METRICS_ENABLED
-
-✅ NUEVO (collection_analysis.py)
---------------------------------
-Centraliza knobs del orquestador por item:
-
-9)  COLLECTION_OMDB_JSON_MODE
-10) COLLECTION_LAZY_WIKI_ALLOW_TITLE_YEAR_FALLBACK
-11) COLLECTION_LAZY_WIKI_FORCE_OMDB_POST_CORE
-12) COLLECTION_TRACE_ALSO_DEBUG_CTX
-
-✅ NUEVO (movie_input.py)
+✅ Mejoras incluidas aquí
 ------------------------
-Centraliza knobs "de política" (no de algoritmo) para:
-- normalización de títulos para lookup
-- heurística de idioma de contexto
+- DLNA Discovery knobs (SSDP + device-description fetch): timeouts, ST/MX, caps de bytes,
+  allow/deny tokens para filtrar ruido UPnP (routers/IGD, etc.).
+- Logger persistente por ejecución: LOGGER_FILE_* con generación de nombre (timestamp + PID)
+  controlada aquí, y consumida por backend/logger.py.
 
-Estas flags NO deberían cambiar resultados “core” de scoring,
-pero sí pueden modular:
-- si el lookup limpia más/menos ruido
-- el umbral de function words para inferir idioma
-- evitar declarar inglés cuando hay escritura CJK
+🧩 Fix importante: “dos logs por ejecución”
+-------------------------------------------
+En algunos entornos el proceso principal puede crear subprocesos (multiprocessing / spawn),
+o puede haber imports tempranos que vuelvan a inicializar componentes.
 
-✅ NUEVO (logger.py)
--------------------
-Persistencia opcional del log de ejecución a fichero (además de consola),
-con nombre generado por ejecución (timestamp + PID) controlado aquí.
+Si LOGGER_FILE_PATH se calcula “al vuelo” en cada proceso, el resultado puede ser:
+- múltiples ficheros run_<ts>_<pid>.log (uno por PID), aunque para el usuario sea “un solo run”.
+
+Solución aplicada:
+- Si LOGGER_FILE_PATH no viene explícito, lo calculamos UNA VEZ y lo “congelamos” en
+  os.environ["LOGGER_FILE_PATH"] (en formato absoluto).
+- Así, procesos hijos (que heredan el environment) reutilizan exactamente el mismo path,
+  y también evitamos recalcularlo dentro del propio proceso.
 """
 
 import json
@@ -98,6 +68,7 @@ from dotenv import load_dotenv
 # Si quieres que .env siempre gane, cambia a override=True.
 load_dotenv(override=False)
 
+# Import "tardío" para minimizar riesgo de ciclos (config es importado por casi todo).
 from backend import logger as _logger  # noqa: E402
 
 
@@ -123,16 +94,24 @@ def _clean_env_raw(v: object | None) -> str | None:
     - None -> None
     - str  -> strip() y elimina comillas exteriores típicas.
 
-    Esto evita sorpresas comunes en .env (p.ej. valores con comillas).
+    Ejemplos habituales en .env que queremos tolerar:
+      REPORTS_DIR="reports"
+      REPORTS_DIR='reports'
+      LOG_LEVEL= "INFO"
+
+    Si tras limpiar queda vacío => None.
     """
     if v is None:
         return None
+
     s = str(v).strip()
     if not s:
         return None
+
     # Toleramos casos como '"reports"' o "'reports'"
-    if len(s) >= 2 and ((s[0] == s[-1]) and s[0] in ("'", '"')):
+    if len(s) >= 2 and (s[0] == s[-1]) and s[0] in ("'", '"'):
         s = s[1:-1].strip()
+
     return s or None
 
 
@@ -143,15 +122,13 @@ def _get_env_str(name: str, default: str | None = None) -> str | None:
     - Si viene con comillas externas típicas => las elimina (_clean_env_raw)
     """
     v = _clean_env_raw(os.getenv(name))
-    if v is None:
-        return default
-    return v
+    return default if v is None else v
 
 
 def _get_env_int(name: str, default: int) -> int:
     """
     Lee un int desde env de forma tolerante.
-    - Si no parsea => warning(always=True) y default
+    - Si no parsea => warning(always=True) y default.
     """
     v = _clean_env_raw(os.getenv(name))
     if v is None:
@@ -159,17 +136,14 @@ def _get_env_int(name: str, default: int) -> int:
     try:
         return int(v)
     except Exception:
-        _logger.warning(
-            f"Invalid int for {name!r}: {v!r}, using default {default}",
-            always=True,
-        )
+        _logger.warning(f"Invalid int for {name!r}: {v!r}, using default {default}", always=True)
         return default
 
 
 def _get_env_float(name: str, default: float) -> float:
     """
     Lee un float desde env de forma tolerante.
-    - Si no parsea => warning(always=True) y default
+    - Si no parsea => warning(always=True) y default.
     """
     v = _clean_env_raw(os.getenv(name))
     if v is None:
@@ -177,10 +151,7 @@ def _get_env_float(name: str, default: float) -> float:
     try:
         return float(v)
     except Exception:
-        _logger.warning(
-            f"Invalid float for {name!r}: {v!r}, using default {default}",
-            always=True,
-        )
+        _logger.warning(f"Invalid float for {name!r}: {v!r}, using default {default}", always=True)
         return default
 
 
@@ -202,10 +173,7 @@ def _get_env_bool(name: str, default: bool) -> bool:
     if s in _FALSE_SET:
         return False
 
-    _logger.warning(
-        f"Invalid bool for {name!r}: {v!r}, using default {default}",
-        always=True,
-    )
+    _logger.warning(f"Invalid bool for {name!r}: {v!r}, using default {default}", always=True)
     return default
 
 
@@ -222,6 +190,9 @@ def _get_env_enum_str(
     Casos:
     - env ausente => default
     - env inválida => warning(always=True) + default
+
+    Nota:
+    - `normalize=True` implica lower(), útil para enums tipo "auto/never/always".
     """
     raw = _get_env_str(name, None)
     if raw is None:
@@ -243,7 +214,7 @@ def _get_env_enum_str(
 
 def _cap_int(name: str, value: int, *, min_v: int, max_v: int) -> int:
     """
-    Asegura que value esté en [min_v, max_v].
+    Asegura que `value` esté en [min_v, max_v].
 
     Política:
     - Nunca rompe.
@@ -269,12 +240,17 @@ def _cap_float_min(name: str, value: float, *, min_v: float) -> float:
 def _log_config_debug(label: str, value: object) -> None:
     """
     Dump de config solo si DEBUG_MODE=True y SILENT_MODE=False.
+
+    Motivación:
+    - En CLI local ayuda a diagnosticar.
+    - En entornos automatizados/CI o modo silencioso, evita ruido.
     """
     if not DEBUG_MODE or SILENT_MODE:
         return
     try:
         _logger.info(f"{label}: {value}")
     except Exception:
+        # Fallback ultra defensivo si logger no estuviera listo por cualquier motivo.
         print(f"{label}: {value}")
 
 
@@ -287,9 +263,13 @@ def _parse_env_kv_map(raw: str) -> dict[str, str]:
         {"Movies":"es","Kids":"en"}
     2) Pares separados por coma:
         Movies:es,Kids:en
+
+    Política:
+    - Si una entrada es inválida => warning(always=True) y se ignora.
+    - Devuelve dict vacío si raw viene vacío.
     """
     out: dict[str, str] = {}
-    cleaned = raw.strip().strip('"').strip("'").strip()
+    cleaned = (raw or "").strip().strip('"').strip("'").strip()
     if not cleaned:
         return out
 
@@ -330,6 +310,38 @@ def _parse_env_kv_map(raw: str) -> dict[str, str]:
             _logger.warning(f"Invalid map chunk (empty key/value) ignored: {chunk!r}", always=True)
             continue
         out[ks] = vs
+
+    return out
+
+
+def _parse_env_csv_tokens(raw: str) -> list[str]:
+    """
+    Parsea una lista de tokens desde env (CSV):
+      "a,b,c"
+
+    Normalización:
+    - strip por token
+    - lower()
+    - elimina vacíos
+    - dedup preservando orden
+
+    Uso:
+    - filtros allow/deny en DLNA discovery (evitar routers IGD, etc.).
+    """
+    cleaned = (raw or "").strip().strip('"').strip("'").strip()
+    if not cleaned:
+        return []
+
+    parts = [p.strip().lower() for p in cleaned.split(",") if p.strip()]
+
+    # Dedup preservando orden
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in parts:
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
 
     return out
 
@@ -430,10 +442,7 @@ MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS: int = _cap_int(
     max_v=10,
 )
 
-MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK: bool = _get_env_bool(
-    "MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK",
-    True,
-)
+MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK: bool = _get_env_bool("MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK", True)
 
 
 # ============================================================
@@ -486,10 +495,7 @@ COLLECTION_LAZY_WIKI_FORCE_OMDB_POST_CORE: bool = _get_env_bool(
     True,
 )
 
-COLLECTION_TRACE_ALSO_DEBUG_CTX: bool = _get_env_bool(
-    "COLLECTION_TRACE_ALSO_DEBUG_CTX",
-    True,
-)
+COLLECTION_TRACE_ALSO_DEBUG_CTX: bool = _get_env_bool("COLLECTION_TRACE_ALSO_DEBUG_CTX", True)
 
 
 # ============================================================
@@ -835,7 +841,7 @@ WIKI_METRICS_LOG_EVEN_IF_ZERO: bool = _get_env_bool("WIKI_METRICS_LOG_EVEN_IF_ZE
 
 
 # ============================================================
-# DLNA
+# DLNA (browse workers + circuit breaker)
 # ============================================================
 
 DLNA_SCAN_WORKERS: int = _cap_int(
@@ -865,6 +871,95 @@ DLNA_CB_OPEN_SECONDS: float = _cap_float_min(
     min_v=0.1,
 )
 
+# ============================================================
+# ✅ NUEVO: DLNA traversal fuses (anti-loop + anti-duplicados)
+# ============================================================
+# Estos límites protegen de:
+# - ciclos en el grafo de contenedores (Plex virtual folders / aliases)
+# - paginación inconsistente (TotalMatches enorme pero páginas vacías)
+# - catálogos gigantes que harían el run interminable
+#
+# Se consumen en collection_analiza_dlna.py (_iter_video_items_recursive).
+
+DLNA_TRAVERSE_MAX_DEPTH: int = _cap_int(
+    "DLNA_TRAVERSE_MAX_DEPTH",
+    _get_env_int("DLNA_TRAVERSE_MAX_DEPTH", 30),
+    min_v=1,
+    max_v=500,
+)
+
+DLNA_TRAVERSE_MAX_CONTAINERS: int = _cap_int(
+    "DLNA_TRAVERSE_MAX_CONTAINERS",
+    _get_env_int("DLNA_TRAVERSE_MAX_CONTAINERS", 20_000),
+    min_v=100,
+    max_v=5_000_000,
+)
+
+DLNA_TRAVERSE_MAX_ITEMS_TOTAL: int = _cap_int(
+    "DLNA_TRAVERSE_MAX_ITEMS_TOTAL",
+    _get_env_int("DLNA_TRAVERSE_MAX_ITEMS_TOTAL", 300_000),
+    min_v=1_000,
+    max_v=50_000_000,
+)
+
+DLNA_TRAVERSE_MAX_EMPTY_PAGES: int = _cap_int(
+    "DLNA_TRAVERSE_MAX_EMPTY_PAGES",
+    _get_env_int("DLNA_TRAVERSE_MAX_EMPTY_PAGES", 3),
+    min_v=1,
+    max_v=100,
+)
+
+DLNA_TRAVERSE_MAX_PAGES_PER_CONTAINER: int = _cap_int(
+    "DLNA_TRAVERSE_MAX_PAGES_PER_CONTAINER",
+    _get_env_int("DLNA_TRAVERSE_MAX_PAGES_PER_CONTAINER", 20_000),
+    min_v=10,
+    max_v=5_000_000,
+)
+
+# ============================================================
+# ✅ NUEVO: DLNA Discovery (SSDP) + device description fetch
+# ============================================================
+
+DLNA_DISCOVERY_TIMEOUT_SECONDS: float = _cap_float_min(
+    "DLNA_DISCOVERY_TIMEOUT_SECONDS",
+    _get_env_float("DLNA_DISCOVERY_TIMEOUT_SECONDS", 3.0),
+    min_v=0.3,
+)
+
+DLNA_DISCOVERY_MX: int = _cap_int(
+    "DLNA_DISCOVERY_MX",
+    _get_env_int("DLNA_DISCOVERY_MX", 2),
+    min_v=1,
+    max_v=10,
+)
+
+DLNA_DISCOVERY_ST: str = _get_env_str("DLNA_DISCOVERY_ST", "ssdp:all") or "ssdp:all"
+
+DLNA_DEVICE_DESC_TIMEOUT_SECONDS: float = _cap_float_min(
+    "DLNA_DEVICE_DESC_TIMEOUT_SECONDS",
+    _get_env_float("DLNA_DEVICE_DESC_TIMEOUT_SECONDS", 3.0),
+    min_v=0.2,
+)
+
+DLNA_DEVICE_DESC_MAX_BYTES: int = _cap_int(
+    "DLNA_DEVICE_DESC_MAX_BYTES",
+    _get_env_int("DLNA_DEVICE_DESC_MAX_BYTES", 2_000_000),
+    min_v=16_384,
+    max_v=50_000_000,
+)
+
+_DLNA_DISCOVERY_DENY_TOKENS_RAW: str = _get_env_str(
+    "DLNA_DISCOVERY_DENY_TOKENS",
+    "internetgatewaydevice,wanipconnection,wanpppconnection,wandevice,igd",
+) or "internetgatewaydevice,wanipconnection,wanpppconnection,wandevice,igd"
+DLNA_DISCOVERY_DENY_TOKENS: list[str] = _parse_env_csv_tokens(_DLNA_DISCOVERY_DENY_TOKENS_RAW)
+
+_DLNA_DISCOVERY_ALLOW_HINT_TOKENS_RAW: str = _get_env_str(
+    "DLNA_DISCOVERY_ALLOW_HINT_TOKENS",
+    "mediaserver,contentdirectory",
+) or "mediaserver,contentdirectory"
+DLNA_DISCOVERY_ALLOW_HINT_TOKENS: list[str] = _parse_env_csv_tokens(_DLNA_DISCOVERY_ALLOW_HINT_TOKENS_RAW)
+
 
 # ============================================================
 # Scoring bayesiano / heurística
@@ -892,6 +987,9 @@ def _parse_votes_by_year(raw: str) -> list[tuple[int, int]]:
     """
     Parsea IMDB_VOTES_BY_YEAR con formato:
         "1980:500,2000:2000,2010:5000,9999:10000"
+
+    Política:
+    - Chunks inválidos se ignoran (best-effort).
     """
     if not raw:
         return []
@@ -1058,75 +1156,79 @@ METADATA_FIX_PATH: Final[str] = str(REPORTS_DIR_PATH / METADATA_FIX_FILENAME)
 # ============================================================
 # LOGGER (persistencia opcional a fichero por ejecución)
 # ============================================================
-#
-# IMPORTANTE:
-# - backend/logger.py NO debe decidir el nombre. Solo "consume" LOGGER_FILE_PATH.
-# - Aquí generamos un path único por ejecución: <dir>/<prefix>_<timestamp>[_pid].log
-# - Si LOGGER_FILE_PATH viene explícito en env, lo respetamos (para casos especiales).
 
 LOGGER_FILE_ENABLED: bool = _get_env_bool("LOGGER_FILE_ENABLED", False)
 
 _LOGGER_FILE_DIR_RAW: Final[str] = _get_env_str("LOGGER_FILE_DIR", "logs") or "logs"
 _LOGGER_FILE_DIR_CANDIDATE = Path(_LOGGER_FILE_DIR_RAW)
 LOGGER_FILE_DIR: Final[Path] = (
-    _LOGGER_FILE_DIR_CANDIDATE
-    if _LOGGER_FILE_DIR_CANDIDATE.is_absolute()
-    else (BASE_DIR / _LOGGER_FILE_DIR_CANDIDATE)
+    _LOGGER_FILE_DIR_CANDIDATE if _LOGGER_FILE_DIR_CANDIDATE.is_absolute() else (BASE_DIR / _LOGGER_FILE_DIR_CANDIDATE)
 )
 
 LOGGER_FILE_PREFIX: Final[str] = _get_env_str("LOGGER_FILE_PREFIX", "run") or "run"
-LOGGER_FILE_TIMESTAMP_FORMAT: Final[str] = _get_env_str(
-    "LOGGER_FILE_TIMESTAMP_FORMAT",
-    "%Y-%m-%d_%H-%M-%S",
-) or "%Y-%m-%d_%H-%M-%S"
+LOGGER_FILE_TIMESTAMP_FORMAT: Final[str] = _get_env_str("LOGGER_FILE_TIMESTAMP_FORMAT", "%Y-%m-%d_%H-%M-%S") or "%Y-%m-%d_%H-%M-%S"
 LOGGER_FILE_INCLUDE_PID: bool = _get_env_bool("LOGGER_FILE_INCLUDE_PID", True)
 
-# Permite fijar un path exacto si se desea (override).
-# Si es relativo => BASE_DIR/<path>.
 _LOGGER_FILE_PATH_EXPLICIT_RAW: str | None = _get_env_str("LOGGER_FILE_PATH", None)
+
+_LOGGER_FILE_PATH_SENTINEL: Final[object] = object()
+_LOGGER_FILE_PATH_CACHED: Path | None | object = _LOGGER_FILE_PATH_SENTINEL
 
 
 def _sanitize_filename_component(s: str) -> str:
-    """
-    Sanitiza una parte de nombre de fichero para evitar caracteres problemáticos.
-    Mantiene letras/dígitos/._-@ y sustituye el resto por "_".
-    """
     out_chars: list[str] = []
     for ch in (s or ""):
         if ch.isalnum() or ch in ("-", "_", ".", "@"):
             out_chars.append(ch)
         else:
             out_chars.append("_")
+
     cleaned = "".join(out_chars).strip("._-")
     return cleaned or "run"
 
 
 def _build_logger_file_path() -> Path | None:
-    """
-    Calcula el Path final (o None) de LOGGER_FILE_PATH.
+    global _LOGGER_FILE_PATH_CACHED
 
-    Reglas:
-    - LOGGER_FILE_ENABLED=False -> None
-    - LOGGER_FILE_PATH explícito en env -> se respeta
-    - Si no, generamos por ejecución: <dir>/<prefix>_<timestamp>[_pid].log
-    """
+    if _LOGGER_FILE_PATH_CACHED is not _LOGGER_FILE_PATH_SENTINEL:
+        return None if _LOGGER_FILE_PATH_CACHED is None else _LOGGER_FILE_PATH_CACHED  # type: ignore[return-value]
+
     try:
         if not LOGGER_FILE_ENABLED:
+            _LOGGER_FILE_PATH_CACHED = None
             return None
+
+        env_path = _clean_env_raw(os.getenv("LOGGER_FILE_PATH"))
+        if env_path:
+            p = Path(env_path)
+            resolved = (p if p.is_absolute() else (BASE_DIR / p)).resolve()
+            _LOGGER_FILE_PATH_CACHED = resolved
+            return resolved
 
         if isinstance(_LOGGER_FILE_PATH_EXPLICIT_RAW, str) and _LOGGER_FILE_PATH_EXPLICIT_RAW.strip():
             p = Path(_LOGGER_FILE_PATH_EXPLICIT_RAW.strip())
-            return p if p.is_absolute() else (BASE_DIR / p)
+            resolved = (p if p.is_absolute() else (BASE_DIR / p)).resolve()
+            os.environ["LOGGER_FILE_PATH"] = str(resolved)
+            _LOGGER_FILE_PATH_CACHED = resolved
+            return resolved
 
         ts = datetime.now().strftime(LOGGER_FILE_TIMESTAMP_FORMAT)
         ts = _sanitize_filename_component(ts)
+
         prefix = _sanitize_filename_component(LOGGER_FILE_PREFIX)
         pid_part = f"_{os.getpid()}" if LOGGER_FILE_INCLUDE_PID else ""
+
         filename = f"{prefix}_{ts}{pid_part}.log"
-        return LOGGER_FILE_DIR / filename
+        resolved = (LOGGER_FILE_DIR / filename).resolve()
+
+        os.environ["LOGGER_FILE_PATH"] = str(resolved)
+
+        _LOGGER_FILE_PATH_CACHED = resolved
+        return resolved
 
     except Exception as exc:
         _logger.warning(f"LOGGER_FILE_PATH build failed: {exc!r}", always=True)
+        _LOGGER_FILE_PATH_CACHED = None
         return None
 
 
@@ -1192,11 +1294,6 @@ _log_config_debug("OMDB_CACHE_TTL_EMPTY_RATINGS_SECONDS", OMDB_CACHE_TTL_EMPTY_R
 _log_config_debug("OMDB_CACHE_FLUSH_MAX_DIRTY_WRITES", OMDB_CACHE_FLUSH_MAX_DIRTY_WRITES)
 _log_config_debug("OMDB_CACHE_FLUSH_MAX_SECONDS", OMDB_CACHE_FLUSH_MAX_SECONDS)
 
-_log_config_debug("ANALIZA_OMDB_CACHE_MAX_RECORDS", ANALIZA_OMDB_CACHE_MAX_RECORDS)
-_log_config_debug("ANALIZA_OMDB_CACHE_MAX_INDEX_IMDB", ANALIZA_OMDB_CACHE_MAX_INDEX_IMDB)
-_log_config_debug("ANALIZA_OMDB_CACHE_MAX_INDEX_TY", ANALIZA_OMDB_CACHE_MAX_INDEX_TY)
-_log_config_debug("ANALIZA_OMDB_HOT_CACHE_MAX", ANALIZA_OMDB_HOT_CACHE_MAX)
-
 _log_config_debug("OMDB_BASE_URL", OMDB_BASE_URL)
 _log_config_debug("OMDB_HTTP_TIMEOUT_SECONDS", OMDB_HTTP_TIMEOUT_SECONDS)
 _log_config_debug("OMDB_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT", OMDB_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT)
@@ -1205,63 +1302,30 @@ _log_config_debug("OMDB_HTTP_RETRY_BACKOFF_FACTOR", OMDB_HTTP_RETRY_BACKOFF_FACT
 _log_config_debug("OMDB_DISABLE_AFTER_N_FAILURES", OMDB_DISABLE_AFTER_N_FAILURES)
 _log_config_debug("OMDB_HTTP_USER_AGENT", OMDB_HTTP_USER_AGENT)
 
-_log_config_debug("OMDB_METRICS_ENABLED", OMDB_METRICS_ENABLED)
-_log_config_debug("OMDB_METRICS_TOP_N", OMDB_METRICS_TOP_N)
-_log_config_debug("OMDB_METRICS_LOG_ON_SILENT_DEBUG", OMDB_METRICS_LOG_ON_SILENT_DEBUG)
-_log_config_debug("OMDB_METRICS_LOG_EVEN_IF_ZERO", OMDB_METRICS_LOG_EVEN_IF_ZERO)
-
 _log_config_debug("DLNA_SCAN_WORKERS", DLNA_SCAN_WORKERS)
 _log_config_debug("DLNA_BROWSE_MAX_RETRIES", DLNA_BROWSE_MAX_RETRIES)
 _log_config_debug("DLNA_CB_FAILURE_THRESHOLD", DLNA_CB_FAILURE_THRESHOLD)
 _log_config_debug("DLNA_CB_OPEN_SECONDS", DLNA_CB_OPEN_SECONDS)
 
+_log_config_debug("DLNA_TRAVERSE_MAX_DEPTH", DLNA_TRAVERSE_MAX_DEPTH)
+_log_config_debug("DLNA_TRAVERSE_MAX_CONTAINERS", DLNA_TRAVERSE_MAX_CONTAINERS)
+_log_config_debug("DLNA_TRAVERSE_MAX_ITEMS_TOTAL", DLNA_TRAVERSE_MAX_ITEMS_TOTAL)
+_log_config_debug("DLNA_TRAVERSE_MAX_EMPTY_PAGES", DLNA_TRAVERSE_MAX_EMPTY_PAGES)
+_log_config_debug("DLNA_TRAVERSE_MAX_PAGES_PER_CONTAINER", DLNA_TRAVERSE_MAX_PAGES_PER_CONTAINER)
+
+_log_config_debug("DLNA_DISCOVERY_TIMEOUT_SECONDS", DLNA_DISCOVERY_TIMEOUT_SECONDS)
+_log_config_debug("DLNA_DISCOVERY_MX", DLNA_DISCOVERY_MX)
+_log_config_debug("DLNA_DISCOVERY_ST", DLNA_DISCOVERY_ST)
+_log_config_debug("DLNA_DEVICE_DESC_TIMEOUT_SECONDS", DLNA_DEVICE_DESC_TIMEOUT_SECONDS)
+_log_config_debug("DLNA_DEVICE_DESC_MAX_BYTES", DLNA_DEVICE_DESC_MAX_BYTES)
+_log_config_debug("DLNA_DISCOVERY_DENY_TOKENS", DLNA_DISCOVERY_DENY_TOKENS)
+_log_config_debug("DLNA_DISCOVERY_ALLOW_HINT_TOKENS", DLNA_DISCOVERY_ALLOW_HINT_TOKENS)
+
 _log_config_debug("WIKI_LANGUAGE", WIKI_LANGUAGE)
 _log_config_debug("WIKI_FALLBACK_LANGUAGE", WIKI_FALLBACK_LANGUAGE)
 _log_config_debug("WIKI_DEBUG", WIKI_DEBUG)
-_log_config_debug("WIKI_SPARQL_MIN_INTERVAL_SECONDS", WIKI_SPARQL_MIN_INTERVAL_SECONDS)
-_log_config_debug("WIKI_CACHE_TTL_OK_SECONDS", WIKI_CACHE_TTL_OK_SECONDS)
-_log_config_debug("WIKI_CACHE_TTL_NEGATIVE_SECONDS", WIKI_CACHE_TTL_NEGATIVE_SECONDS)
-_log_config_debug("WIKI_IMDB_QID_NEGATIVE_TTL_SECONDS", WIKI_IMDB_QID_NEGATIVE_TTL_SECONDS)
-_log_config_debug("WIKI_IS_FILM_TTL_SECONDS", WIKI_IS_FILM_TTL_SECONDS)
-_log_config_debug("WIKI_CACHE_FLUSH_MAX_DIRTY_WRITES", WIKI_CACHE_FLUSH_MAX_DIRTY_WRITES)
-_log_config_debug("WIKI_CACHE_FLUSH_MAX_SECONDS", WIKI_CACHE_FLUSH_MAX_SECONDS)
-
-_log_config_debug("ANALIZA_WIKI_CACHE_MAX_RECORDS", ANALIZA_WIKI_CACHE_MAX_RECORDS)
-_log_config_debug("ANALIZA_WIKI_CACHE_MAX_IMDB_QID", ANALIZA_WIKI_CACHE_MAX_IMDB_QID)
-_log_config_debug("ANALIZA_WIKI_CACHE_MAX_IS_FILM", ANALIZA_WIKI_CACHE_MAX_IS_FILM)
-_log_config_debug("ANALIZA_WIKI_CACHE_MAX_ENTITIES", ANALIZA_WIKI_CACHE_MAX_ENTITIES)
-_log_config_debug("ANALIZA_WIKI_DEBUG", ANALIZA_WIKI_DEBUG)
-
-_log_config_debug("WIKI_HTTP_USER_AGENT", WIKI_HTTP_USER_AGENT)
-_log_config_debug("WIKI_HTTP_TIMEOUT_SECONDS", WIKI_HTTP_TIMEOUT_SECONDS)
-_log_config_debug("WIKI_SPARQL_TIMEOUT_CONNECT_SECONDS", WIKI_SPARQL_TIMEOUT_CONNECT_SECONDS)
-_log_config_debug("WIKI_SPARQL_TIMEOUT_READ_SECONDS", WIKI_SPARQL_TIMEOUT_READ_SECONDS)
-_log_config_debug("WIKI_HTTP_RETRY_TOTAL", WIKI_HTTP_RETRY_TOTAL)
-_log_config_debug("WIKI_HTTP_RETRY_BACKOFF_FACTOR", WIKI_HTTP_RETRY_BACKOFF_FACTOR)
-_log_config_debug("WIKI_WIKIPEDIA_REST_BASE_URL", WIKI_WIKIPEDIA_REST_BASE_URL)
-_log_config_debug("WIKI_WIKIPEDIA_API_BASE_URL", WIKI_WIKIPEDIA_API_BASE_URL)
-_log_config_debug("WIKI_WIKIDATA_API_BASE_URL", WIKI_WIKIDATA_API_BASE_URL)
-_log_config_debug("WIKI_WIKIDATA_ENTITY_BASE_URL", WIKI_WIKIDATA_ENTITY_BASE_URL)
-_log_config_debug("WIKI_WDQS_URL", WIKI_WDQS_URL)
-
-_log_config_debug("WIKI_METRICS_ENABLED", WIKI_METRICS_ENABLED)
-_log_config_debug("WIKI_METRICS_TOP_N", WIKI_METRICS_TOP_N)
-_log_config_debug("WIKI_METRICS_LOG_ON_SILENT_DEBUG", WIKI_METRICS_LOG_ON_SILENT_DEBUG)
-_log_config_debug("WIKI_METRICS_LOG_EVEN_IF_ZERO", WIKI_METRICS_LOG_EVEN_IF_ZERO)
 
 _log_config_debug("REPORTS_DIR", str(REPORTS_DIR_PATH))
-_log_config_debug("REPORT_ALL_PATH", REPORT_ALL_PATH)
-_log_config_debug("REPORT_FILTERED_PATH", REPORT_FILTERED_PATH)
-_log_config_debug("METADATA_FIX_PATH", METADATA_FIX_PATH)
-
-_log_config_debug("DATA_DIR", str(DATA_DIR))
-_log_config_debug("OMDB_CACHE_PATH", str(OMDB_CACHE_PATH))
-_log_config_debug("WIKI_CACHE_PATH", str(WIKI_CACHE_PATH))
-
-_log_config_debug("METADATA_DRY_RUN", METADATA_DRY_RUN)
-_log_config_debug("METADATA_APPLY_CHANGES", METADATA_APPLY_CHANGES)
-
-_log_config_debug("IMDB_VOTES_BY_YEAR", IMDB_VOTES_BY_YEAR)
 
 _log_config_debug("LOGGER_FILE_ENABLED", LOGGER_FILE_ENABLED)
 _log_config_debug("LOGGER_FILE_DIR", str(LOGGER_FILE_DIR))
