@@ -21,8 +21,12 @@ Cliente OMDb + caché persistente indexada + TTL + bounded in-memory hot-cache
    - requests.Session compartida (pooling) + Retry.
    - Semaphore global para limitar concurrencia.
    - Throttle global (mínimo intervalo entre llamadas) para no saturar OMDb.
-   - Single-flight por clave de lookup para evitar thundering herd (configurable).
-   - Circuit breaker temporal (OPEN) para no martillear en caídas (configurable).
+   - Single-flight por clave de lookup para evitar thundering herd (configurable):
+       - soporta alias keys (imdb y title/year) para agrupar in-flight.
+   - Circuit breaker (CLOSED/OPEN/HALF-OPEN) configurable:
+       - OPEN corta llamadas temporalmente
+       - HALF-OPEN deja pasar 1 probe (single-flight) para cerrar/reabrir.
+   - Jitter configurable en sleeps (throttle y rate-limit) para evitar sincronización entre threads.
 
 4) Logs coherentes:
    - Usamos backend/logger.py:
@@ -66,6 +70,13 @@ Single-flight + Circuit breaker:
 - OMDB_CIRCUIT_BREAKER_THRESHOLD
 - OMDB_CIRCUIT_BREAKER_OPEN_SECONDS
 
+Extras (optimizaciones):
+- OMDB_JITTER_RATIO                       (float, 0.0..0.5 recomendado)
+- OMDB_HOT_MISS_TTL_SECONDS               (float, TTL de misses en hot-cache)
+- OMDB_CACHE_JSON_PRETTY                  (bool, pretty-print del JSON de cache)
+- OMDB_CACHE_JSON_INDENT                  (int, indent si pretty)
+- OMDB_CACHE_COMPACT_EVERY_N_FLUSHES       (int, 0=siempre como hasta ahora; >0 compact full cada N flushes)
+
 ✅ Métricas logging
 ------------------
 Resumen final controlado por config_omdb.py:
@@ -100,6 +111,7 @@ Notas de esquema (v4)
 import atexit
 import json
 import os
+import random
 import tempfile
 import threading
 import time
@@ -121,8 +133,11 @@ from backend.config_omdb import (
     ANALIZA_OMDB_HOT_CACHE_MAX,
     OMDB_API_KEY,
     OMDB_BASE_URL,
+    OMDB_CACHE_COMPACT_EVERY_N_FLUSHES,  
     OMDB_CACHE_FLUSH_MAX_DIRTY_WRITES,
     OMDB_CACHE_FLUSH_MAX_SECONDS,
+    OMDB_CACHE_JSON_INDENT, 
+    OMDB_CACHE_JSON_PRETTY,  
     OMDB_CACHE_PATH,
     OMDB_CACHE_TTL_EMPTY_RATINGS_SECONDS,
     OMDB_CACHE_TTL_NOT_FOUND_SECONDS,
@@ -130,6 +145,7 @@ from backend.config_omdb import (
     OMDB_CIRCUIT_BREAKER_OPEN_SECONDS,
     OMDB_CIRCUIT_BREAKER_THRESHOLD,
     OMDB_DISABLE_AFTER_N_FAILURES,
+    OMDB_HOT_MISS_TTL_SECONDS,  
     OMDB_HTTP_MAX_CONCURRENCY,
     OMDB_HTTP_MIN_INTERVAL_SECONDS,
     OMDB_HTTP_RETRY_BACKOFF_FACTOR,
@@ -137,6 +153,7 @@ from backend.config_omdb import (
     OMDB_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT,
     OMDB_HTTP_TIMEOUT_SECONDS,
     OMDB_HTTP_USER_AGENT,
+    OMDB_JITTER_RATIO, 
     OMDB_METRICS_ENABLED,
     OMDB_METRICS_LOG_EVEN_IF_ZERO,
     OMDB_METRICS_LOG_ON_SILENT_DEBUG,
@@ -220,51 +237,96 @@ _FLUSH_MAX_SECONDS: Final[float] = max(0.1, float(OMDB_CACHE_FLUSH_MAX_SECONDS))
 _CACHE_DIRTY: bool = False
 _CACHE_DIRTY_WRITES: int = 0
 _CACHE_LAST_FLUSH_TS: float = 0.0
+_FLUSH_COUNT: int = 0  # para compaction amortizada si se configura
 
 # Caps para compaction
 _COMPACT_MAX_RECORDS: Final[int] = int(ANALIZA_OMDB_CACHE_MAX_RECORDS)
 _COMPACT_MAX_INDEX_IMDB: Final[int] = int(ANALIZA_OMDB_CACHE_MAX_INDEX_IMDB)
 _COMPACT_MAX_INDEX_TY: Final[int] = int(ANALIZA_OMDB_CACHE_MAX_INDEX_TY)
 
+# JSON cache output (tunable)
+_CACHE_JSON_PRETTY: Final[bool] = bool(OMDB_CACHE_JSON_PRETTY)
+_CACHE_JSON_INDENT: Final[int] = max(0, int(OMDB_CACHE_JSON_INDENT))
+_CACHE_COMPACT_EVERY_N_FLUSHES: Final[int] = max(0, int(OMDB_CACHE_COMPACT_EVERY_N_FLUSHES))
+
 # Bounded in-memory hot-cache (acelerador intra-run)
 _HOT_CACHE_MAX: Final[int] = int(ANALIZA_OMDB_HOT_CACHE_MAX)
 _HOT_CACHE_LOCK = threading.Lock()
-_HOT_CACHE: dict[str, tuple[object, float]] = {}
+
+# value: (obj, last_touch_monotonic, expires_at_monotonic_or_0)
+# - expires_at=0 significa "no expira" (LRU normal)
+_HOT_CACHE: dict[str, tuple[object, float, float]] = {}
 
 # Sentinel explícito para negative cache intra-run (no confundir con persistente "not_found")
 _HOT_MISS: Final[object] = object()
+_HOT_MISS_TTL_S: Final[float] = max(0.0, float(OMDB_HOT_MISS_TTL_SECONDS))
 
 # ============================================================
 # SINGLE-FLIGHT (evita thundering herd por clave de lookup)
 # ============================================================
 
+# Implementación con "primary key" + alias keys:
+# - Key->primary para que distintas rutas (imdb / title-year / title-only) compartan el mismo in-flight.
 _SINGLEFLIGHT_LOCK = threading.Lock()
-_SINGLEFLIGHT_EVENTS: dict[str, threading.Event] = {}
+_SINGLEFLIGHT_PRIMARY_EVENTS: dict[str, threading.Event] = {}
+_SINGLEFLIGHT_KEY_TO_PRIMARY: dict[str, str] = {}
+_SINGLEFLIGHT_PRIMARY_TO_KEYS: dict[str, set[str]] = {}
 _SINGLEFLIGHT_WAIT_S: Final[float] = max(0.05, float(OMDB_SINGLEFLIGHT_WAIT_SECONDS))
 
 
-def _singleflight_enter(key: str) -> tuple[bool, threading.Event]:
+def _singleflight_enter_multi(keys: list[str]) -> tuple[bool, threading.Event, str]:
     """
-    Devuelve (is_leader, event):
-      - leader: crea Event y procede a request
-      - follower: espera a que el líder complete
+    Multi-key single-flight.
+
+    Devuelve (is_leader, event, primary_key):
+      - leader: crea Event y registra todos los keys (alias incluidos)
+      - follower: encuentra un in-flight existente para cualquiera de las keys y espera al leader
     """
-    with _SINGLEFLIGHT_LOCK:
-        ev = _SINGLEFLIGHT_EVENTS.get(key)
-        if ev is not None:
-            return False, ev
+    keys2 = [k for k in keys if isinstance(k, str) and k.strip()]
+    if not keys2:
+        # fallback: no singleflight
         ev = threading.Event()
-        _SINGLEFLIGHT_EVENTS[key] = ev
-        return True, ev
+        ev.set()
+        return True, ev, ""
 
-
-def _singleflight_leave(key: str) -> None:
-    """Señala a followers y limpia tabla."""
     with _SINGLEFLIGHT_LOCK:
-        ev = _SINGLEFLIGHT_EVENTS.pop(key, None)
+        # follower: si alguno ya está en vuelo, engancha
+        for k in keys2:
+            pk = _SINGLEFLIGHT_KEY_TO_PRIMARY.get(k)
+            if pk:
+                ev2 = _SINGLEFLIGHT_PRIMARY_EVENTS.get(pk)
+                if ev2 is not None:
+                    return False, ev2, pk
+
+        # leader: crea primary y registra alias
+        primary = keys2[0]
+        ev = threading.Event()
+        _SINGLEFLIGHT_PRIMARY_EVENTS[primary] = ev
+        _SINGLEFLIGHT_PRIMARY_TO_KEYS[primary] = set(keys2)
+        for k in keys2:
+            _SINGLEFLIGHT_KEY_TO_PRIMARY[k] = primary
+        return True, ev, primary
+
+
+def _singleflight_leave(primary_key: str) -> None:
+    """Señala a followers y limpia tabla (incluye alias keys)."""
+    if not primary_key:
+        return
+
+    with _SINGLEFLIGHT_LOCK:
+        ev = _SINGLEFLIGHT_PRIMARY_EVENTS.pop(primary_key, None)
+        keys = _SINGLEFLIGHT_PRIMARY_TO_KEYS.pop(primary_key, set())
+        for k in keys:
+            if _SINGLEFLIGHT_KEY_TO_PRIMARY.get(k) == primary_key:
+                _SINGLEFLIGHT_KEY_TO_PRIMARY.pop(k, None)
+
     if ev is not None:
         ev.set()
 
+
+# ============================================================
+# TIME + keys
+# ============================================================
 
 def _now_epoch() -> int:
     """Epoch seconds (para TTL persistente)."""
@@ -284,6 +346,11 @@ def _cache_key_for_imdb(imdb_id: str) -> str:
 def _cache_key_for_title_year(norm_title: str, norm_year: str) -> str:
     """Key estable hot-cache para búsquedas por title+year."""
     return f"ty:{_ty_key(norm_title, norm_year)}"
+
+
+def _cache_key_for_title_only(norm_title: str) -> str:
+    """Key estable hot-cache / single-flight para búsqueda por title sin year."""
+    return f"t:{norm_title}"
 
 
 def _rid_for_record(*, imdb_norm: str | None, norm_title: str, norm_year: str) -> str:
@@ -333,8 +400,17 @@ _METRICS: dict[str, int] = {
     "hot_cache_misses": 0,
     "hot_cache_evictions": 0,
     "singleflight_waits": 0,
+    "singleflight_wait_ms_total": 0,
     "cb_open_hits": 0,
     "cb_opens": 0,
+    "cb_half_open_probes": 0,
+    "cb_half_open_rejects": 0,
+    "http_latency_ms_total": 0,
+    "http_latency_ms_max": 0,
+    "semaphore_wait_ms_total": 0,
+    "throttle_sleep_ms_total": 0,
+    "rate_limit_sleep_ms_total": 0,
+    "jitter_sleeps": 0,
 }
 
 
@@ -342,6 +418,14 @@ def _m_inc(key: str, delta: int = 1) -> None:
     """Incrementa contador de métrica de forma thread-safe."""
     with _METRICS_LOCK:
         _METRICS[key] = int(_METRICS.get(key, 0)) + int(delta)
+
+
+def _m_max(key: str, value: int) -> None:
+    """Max thread-safe."""
+    with _METRICS_LOCK:
+        cur = int(_METRICS.get(key, 0))
+        if value > cur:
+            _METRICS[key] = value
 
 
 def get_omdb_metrics_snapshot() -> dict[str, int]:
@@ -454,6 +538,36 @@ def _warn_always(msg: object) -> None:
 
 
 # ============================================================
+# JITTER / SLEEP helpers
+# ============================================================
+
+_JITTER_RATIO: Final[float] = max(0.0, min(0.5, float(OMDB_JITTER_RATIO)))
+
+
+def _sleep_with_jitter(base_seconds: float, *, reason_metric: str | None = None) -> float:
+    """
+    Sleep con jitter proporcional (±ratio).
+    Devuelve segundos reales dormidos (aprox).
+    """
+    s = max(0.0, float(base_seconds))
+    if s <= 0.0:
+        return 0.0
+
+    if _JITTER_RATIO > 0.0:
+        # factor en [1-r, 1+r]
+        factor = 1.0 + random.uniform(-_JITTER_RATIO, _JITTER_RATIO)
+        s = max(0.0, s * factor)
+        _m_inc("jitter_sleeps", 1)
+
+    if reason_metric:
+        # convertimos a ms para sumar
+        _m_inc(reason_metric, int(s * 1000.0))
+
+    time.sleep(s)
+    return s
+
+
+# ============================================================
 # HTTP session + retry (lazy-init thread-safe)
 # ============================================================
 
@@ -532,39 +646,101 @@ def _get_session() -> requests.Session:
 
 
 # ============================================================
-# CIRCUIT BREAKER (OPEN temporal, short-circuit) - CONFIGURABLE
+# CIRCUIT BREAKER (CLOSED/OPEN/HALF-OPEN) - CONFIGURABLE
 # ============================================================
 
 _CB_LOCK = threading.Lock()
 _CB_FAILURES: int = 0
 _CB_OPEN_UNTIL: float = 0.0
+_CB_HALF_OPEN_PROBE_IN_FLIGHT: bool = False
 
 _CB_THRESHOLD: Final[int] = max(1, int(OMDB_CIRCUIT_BREAKER_THRESHOLD))
 _CB_OPEN_SECONDS: Final[float] = max(0.5, float(OMDB_CIRCUIT_BREAKER_OPEN_SECONDS))
 
 
-def _cb_is_open() -> bool:
+def _cb_state(now: float) -> Literal["closed", "open", "half_open"]:
+    """
+    Estado derivado:
+      - open: now < open_until
+      - half_open: now >= open_until y failures >= threshold (y aún no reseteado)
+      - closed: failures < threshold y open_until == 0
+    """
     with _CB_LOCK:
-        return time.monotonic() < _CB_OPEN_UNTIL
+        if now < _CB_OPEN_UNTIL:
+            return "open"
+        if _CB_FAILURES >= _CB_THRESHOLD and _CB_OPEN_UNTIL > 0.0:
+            return "half_open"
+        return "closed"
+
+
+def _cb_try_enter() -> bool:
+    """
+    Control de entrada al breaker:
+      - CLOSED: allow
+      - OPEN: deny
+      - HALF-OPEN: allow 1 probe, el resto deny
+    """
+    global _CB_HALF_OPEN_PROBE_IN_FLIGHT
+
+    now = time.monotonic()
+    st = _cb_state(now)
+    if st == "closed":
+        return True
+    if st == "open":
+        _m_inc("cb_open_hits", 1)
+        return False
+
+    # HALF-OPEN
+    with _CB_LOCK:
+        if _CB_HALF_OPEN_PROBE_IN_FLIGHT:
+            _m_inc("cb_half_open_rejects", 1)
+            return False
+        _CB_HALF_OPEN_PROBE_IN_FLIGHT = True
+        _m_inc("cb_half_open_probes", 1)
+        return True
 
 
 def _cb_record_success() -> None:
-    global _CB_FAILURES, _CB_OPEN_UNTIL
+    """Success => CLOSED (resetea failures/open)."""
+    global _CB_FAILURES, _CB_OPEN_UNTIL, _CB_HALF_OPEN_PROBE_IN_FLIGHT
     with _CB_LOCK:
         _CB_FAILURES = 0
         _CB_OPEN_UNTIL = 0.0
+        _CB_HALF_OPEN_PROBE_IN_FLIGHT = False
 
 
 def _cb_record_failure() -> None:
-    global _CB_FAILURES, _CB_OPEN_UNTIL
+    """
+    Failure => incrementa failures y abre si supera threshold.
+    En HALF-OPEN, cualquier fallo reabre inmediatamente.
+    """
+    global _CB_FAILURES, _CB_OPEN_UNTIL, _CB_HALF_OPEN_PROBE_IN_FLIGHT
+
     now = time.monotonic()
     with _CB_LOCK:
         _CB_FAILURES += 1
-        if _CB_FAILURES >= int(_CB_THRESHOLD):
+
+        # Si venimos de HALF-OPEN (probe in flight), reabre ya.
+        if _CB_HALF_OPEN_PROBE_IN_FLIGHT:
+            _CB_HALF_OPEN_PROBE_IN_FLIGHT = False
+            _CB_OPEN_UNTIL = now + float(_CB_OPEN_SECONDS)
+            _m_inc("cb_opens", 1)
+            return
+
+        if _CB_FAILURES >= _CB_THRESHOLD:
             new_until = now + float(_CB_OPEN_SECONDS)
             if new_until > _CB_OPEN_UNTIL:
                 _CB_OPEN_UNTIL = new_until
             _m_inc("cb_opens", 1)
+
+
+def _cb_leave() -> None:
+    """Libera el flag de probe si estaba marcado (best-effort)."""
+    global _CB_HALF_OPEN_PROBE_IN_FLIGHT
+    with _CB_LOCK:
+        # Si el caller no llegó a registrar success/failure (p.ej. excepción rara),
+        # evitamos dejar el flag colgado.
+        _CB_HALF_OPEN_PROBE_IN_FLIGHT = False
 
 
 # ============================================================
@@ -624,10 +800,10 @@ def _mark_omdb_success() -> None:
 def _omdb_http_get(*, base_url: str, params: Mapping[str, str], timeout_seconds: float) -> Response | None:
     """
     GET a OMDb con:
-    - circuit breaker (open => short-circuit)
+    - circuit breaker (CLOSED/OPEN/HALF-OPEN)
     - semaphore (concurrencia)
-    - throttle (intervalo global)
-    - métricas
+    - throttle (intervalo global) + jitter
+    - métricas (incluye latencia)
     - manejo defensivo
     """
     global _OMDB_HTTP_LAST_REQUEST_TS
@@ -635,18 +811,27 @@ def _omdb_http_get(*, base_url: str, params: Mapping[str, str], timeout_seconds:
     if OMDB_DISABLED:
         return None
 
-    if _cb_is_open():
-        _m_inc("cb_open_hits", 1)
+    # Circuit breaker gate (HALF-OPEN permite 1 probe)
+    if not _cb_try_enter():
         return None
 
     acquire_timeout = _cap_float_runtime(float(OMDB_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT), min_v=0.1, max_v=120.0)
+
+    t0_sem = time.monotonic()
     acquired = _OMDB_HTTP_SEMAPHORE.acquire(timeout=acquire_timeout)
+    sem_wait_ms = int((time.monotonic() - t0_sem) * 1000.0)
+    if sem_wait_ms > 0:
+        _m_inc("semaphore_wait_ms_total", sem_wait_ms)
+
     if not acquired:
         _m_inc("http_semaphore_timeouts", 1)
         _dbg(f"Semaphore acquire timeout ({acquire_timeout:.1f}s). Skipping OMDb request.")
+        _cb_record_failure()
+        _cb_leave()
         return None
 
     try:
+        # Throttle global (mínimo intervalo entre requests) + jitter
         min_interval = max(0.0, float(OMDB_HTTP_MIN_INTERVAL_SECONDS))
         if min_interval > 0.0:
             with _OMDB_HTTP_THROTTLE_LOCK:
@@ -654,20 +839,28 @@ def _omdb_http_get(*, base_url: str, params: Mapping[str, str], timeout_seconds:
                 wait_s = (_OMDB_HTTP_LAST_REQUEST_TS + min_interval) - now
                 if wait_s > 0.0:
                     _m_inc("throttle_sleeps", 1)
-                    _dbg(f"Throttle: sleeping {wait_s:.3f}s")
-                    time.sleep(wait_s)
+                    _dbg(f"Throttle: sleeping {wait_s:.3f}s (pre-jitter)")
+                    _sleep_with_jitter(wait_s, reason_metric="throttle_sleep_ms_total")
                 _OMDB_HTTP_LAST_REQUEST_TS = time.monotonic()
 
-        _m_inc("http_requests", 1)
         session = _get_session()
 
-        t = _cap_float_runtime(float(timeout_seconds), min_v=0.5, max_v=120.0)
-        return session.get(base_url, params=dict(params), timeout=t)
+        t_timeout = _cap_float_runtime(float(timeout_seconds), min_v=0.5, max_v=120.0)
+
+        t0 = time.monotonic()
+        _m_inc("http_requests", 1)
+        resp = session.get(base_url, params=dict(params), timeout=t_timeout)
+        dt_ms = int((time.monotonic() - t0) * 1000.0)
+        if dt_ms >= 0:
+            _m_inc("http_latency_ms_total", dt_ms)
+            _m_max("http_latency_ms_max", dt_ms)
+
+        return resp
 
     except RequestException as exc:
         _m_inc("http_failures", 1)
-        _cb_record_failure()
         _dbg(f"HTTP error calling OMDb: {exc!r}")
+        _cb_record_failure()
         return None
 
     finally:
@@ -905,34 +1098,46 @@ def _merge_dict_shallow(dst: dict[str, object], patch: Mapping[str, object]) -> 
 
 
 # ============================================================
-# HOT CACHE (bounded in-memory)
+# HOT CACHE (bounded in-memory) + miss TTL
 # ============================================================
 
 def _hot_get(key: str) -> object | None:
     if _HOT_CACHE_MAX <= 0:
         return None
+    now = time.monotonic()
     with _HOT_CACHE_LOCK:
         v = _HOT_CACHE.get(key)
         if v is None:
             _m_inc("hot_cache_misses", 1)
             return None
-        obj, _ts = v
-        _HOT_CACHE[key] = (obj, time.monotonic())
+
+        obj, _last, expires_at = v
+        if expires_at > 0.0 and now >= expires_at:
+            _HOT_CACHE.pop(key, None)
+            _m_inc("hot_cache_misses", 1)
+            return None
+
+        # LRU touch (para items sin TTL, y también para misses)
+        _HOT_CACHE[key] = (obj, now, expires_at)
         _m_inc("hot_cache_hits", 1)
         return obj
 
 
-def _hot_put(key: str, obj: object) -> None:
+def _hot_put(key: str, obj: object, *, ttl_s: float | None = None) -> None:
     if _HOT_CACHE_MAX <= 0:
         return
+    now = time.monotonic()
+    expires_at = 0.0
+    if ttl_s is not None:
+        expires_at = now + max(0.0, float(ttl_s))
     with _HOT_CACHE_LOCK:
-        _HOT_CACHE[key] = (obj, time.monotonic())
+        _HOT_CACHE[key] = (obj, now, expires_at)
         if len(_HOT_CACHE) <= _HOT_CACHE_MAX:
             return
 
         oldest_k: str | None = None
         oldest_ts = float("inf")
-        for k, (_obj, ts) in _HOT_CACHE.items():
+        for k, (_obj, ts, _exp) in _HOT_CACHE.items():
             if ts < oldest_ts:
                 oldest_ts = ts
                 oldest_k = k
@@ -1064,7 +1269,10 @@ def _save_cache_file_atomic(cache: OmdbCacheFile) -> None:
     temp_name: str | None = None
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(dirpath)) as tf:
-            json.dump(cache, tf, ensure_ascii=False, indent=2)
+            if _CACHE_JSON_PRETTY:
+                json.dump(cache, tf, ensure_ascii=False, indent=_CACHE_JSON_INDENT)
+            else:
+                json.dump(cache, tf, ensure_ascii=False, separators=(",", ":"))
             tf.flush()
             try:
                 os.fsync(tf.fileno())
@@ -1088,6 +1296,18 @@ def _mark_dirty_unlocked() -> None:
 
 
 def _compact_cache_unlocked(cache: OmdbCacheFile, *, force: bool) -> None:
+    """
+    Compaction/GC de cache (schema v4).
+
+    Hace:
+      - remove expirados
+      - cap records (más recientes primero)
+      - rebuild índices coherentes
+      - cap índices (por seguridad)
+
+    Nota:
+      - Si OMDB_CACHE_COMPACT_EVERY_N_FLUSHES > 0, el caller decide cuándo hacer force=True.
+    """
     try:
         now_epoch = _now_epoch()
 
@@ -1154,7 +1374,7 @@ def _compact_cache_unlocked(cache: OmdbCacheFile, *, force: bool) -> None:
 
 
 def _maybe_flush_unlocked(force: bool) -> None:
-    global _CACHE_DIRTY, _CACHE_DIRTY_WRITES, _CACHE_LAST_FLUSH_TS, _CACHE
+    global _CACHE_DIRTY, _CACHE_DIRTY_WRITES, _CACHE_LAST_FLUSH_TS, _CACHE, _FLUSH_COUNT
     if _CACHE is None:
         return
     if not _CACHE_DIRTY and not force:
@@ -1171,7 +1391,17 @@ def _maybe_flush_unlocked(force: bool) -> None:
     if not should_flush:
         return
 
-    _compact_cache_unlocked(_CACHE, force=force)
+    _FLUSH_COUNT += 1
+
+    # Compaction amortizada (si se configura):
+    # - force=True siempre compacta full
+    # - si compact_every == 0 -> comportamiento previo (compacta siempre)
+    # - si compact_every > 0 -> compacta full cada N flushes; el resto hace GC "light"
+    do_full_compact = True
+    if not force and _CACHE_COMPACT_EVERY_N_FLUSHES > 0:
+        do_full_compact = (_FLUSH_COUNT % _CACHE_COMPACT_EVERY_N_FLUSHES) == 0
+
+    _compact_cache_unlocked(_CACHE, force=do_full_compact or force)
     _save_cache_file_atomic(_CACHE)
 
     _CACHE_DIRTY = False
@@ -1262,10 +1492,13 @@ def _get_cached_item(*, norm_title: str, norm_year: str, imdb_id_hint: str | Non
             _hot_put(ty_key, it)
         return it
 
+    # Negative hot-cache con TTL (evita “miss pegado” infinito)
+    miss_ttl = _HOT_MISS_TTL_S if _HOT_MISS_TTL_S > 0.0 else None
     if imdb_key:
-        _hot_put(imdb_key, _HOT_MISS)
+        _hot_put(imdb_key, _HOT_MISS, ttl_s=miss_ttl)
     if ty_key:
-        _hot_put(ty_key, _HOT_MISS)
+        _hot_put(ty_key, _HOT_MISS, ttl_s=miss_ttl)
+
     return None
 
 
@@ -1303,6 +1536,7 @@ def _cache_store_item(*, norm_title: str, norm_year: str, imdb_id: str | None, o
         _maybe_flush_unlocked(force=False)
 
     _hot_put(_cache_key_for_title_year(norm_title_final, norm_year_final), item)
+    _hot_put(_cache_key_for_title_only(norm_title_final), item)
     if imdb_norm:
         _hot_put(_cache_key_for_imdb(imdb_norm), item)
 
@@ -1371,6 +1605,7 @@ def patch_cached_omdb_record(*, norm_title: str, norm_year: str, imdb_id: str | 
         _maybe_flush_unlocked(force=False)
 
     _hot_put(_cache_key_for_title_year(title_now, year_now), target)
+    _hot_put(_cache_key_for_title_only(title_now), target)
     if imdb_norm:
         _hot_put(_cache_key_for_imdb(imdb_norm), target)
     if imdb_now:
@@ -1398,10 +1633,6 @@ def omdb_request(params: Mapping[str, object]) -> dict[str, object] | None:
     if OMDB_DISABLED:
         return None
 
-    if _cb_is_open():
-        _m_inc("cb_open_hits", 1)
-        return None
-
     base_url = str(OMDB_BASE_URL).strip() or "https://www.omdbapi.com/"
     req_params: dict[str, str] = {str(k): str(v) for k, v in params.items()}
     req_params["apikey"] = str(OMDB_API_KEY)
@@ -1415,25 +1646,22 @@ def omdb_request(params: Mapping[str, object]) -> dict[str, object] | None:
 
     if resp.status_code != 200:
         _m_inc("http_failures", 1)
-        _cb_record_failure()
         _dbg(f"OMDb status != 200: {resp.status_code}")
-        _mark_omdb_failure()
+        _cb_record_failure()
         return None
 
     try:
         data_obj = resp.json()
     except (ValueError, json.JSONDecodeError) as exc:
         _m_inc("http_failures", 1)
-        _cb_record_failure()
         _dbg(f"OMDb invalid JSON: {exc!r}")
-        _mark_omdb_failure()
+        _cb_record_failure()
         return None
 
     if not isinstance(data_obj, dict):
         _m_inc("http_failures", 1)
-        _cb_record_failure()
         _dbg("OMDb returned JSON not dict.")
-        _mark_omdb_failure()
+        _cb_record_failure()
         return None
 
     if _is_invalid_api_key(data_obj):
@@ -1447,6 +1675,7 @@ def omdb_request(params: Mapping[str, object]) -> dict[str, object] | None:
         _mark_omdb_failure()
         return data_obj
 
+    # Éxito: cierra breaker y resetea failures consecutivos
     _cb_record_success()
     _mark_omdb_success()
     return data_obj
@@ -1480,7 +1709,7 @@ def _request_with_rate_limit(params: Mapping[str, object]) -> dict[str, object] 
                 OMDB_RATE_LIMIT_NOTICE_SHOWN = True
 
             if wait_s > 0.0:
-                time.sleep(wait_s)
+                _sleep_with_jitter(wait_s, reason_metric="rate_limit_sleep_ms_total")
             retries_local += 1
             continue
 
@@ -1493,7 +1722,24 @@ def _request_with_rate_limit(params: Mapping[str, object]) -> dict[str, object] 
 # CANDIDATE SEARCH (fallback cuando t= falla)
 # ============================================================
 
+def _tokenize_norm_title(s: str) -> set[str]:
+    """Tokenizador sencillo para heurística (sin dependencias)."""
+    out: set[str] = set()
+    for tok in s.replace("-", " ").replace("_", " ").split():
+        t = tok.strip().lower()
+        if len(t) >= 2:
+            out.add(t)
+    return out
+
+
 def _search_candidates_imdb_id(*, title_for_search: str, year: int | None) -> str | None:
+    """
+    Fallback:
+    - endpoint s=
+    - rankea por similitud de título y cercanía de año
+    - penaliza no-movie
+    - devuelve imdbID más probable
+    """
     _m_inc("candidate_search_calls", 1)
 
     title_q = title_for_search.strip()
@@ -1511,18 +1757,35 @@ def _search_candidates_imdb_id(*, title_for_search: str, year: int | None) -> st
         return None
 
     ptit = normalize_title_for_lookup(title_q)
+    ptoks = _tokenize_norm_title(ptit)
 
     def score_candidate(cand: Mapping[str, object]) -> float:
         score = 0.0
 
+        # Penaliza si no es movie (defensivo: a veces OMDb cuela series/episodes)
+        ctype = cand.get("Type")
+        if isinstance(ctype, str) and ctype and ctype.lower() != "movie":
+            score -= 5.0
+
+        # Título
         ct_raw = cand.get("Title")
         ct = normalize_title_for_lookup(ct_raw) if isinstance(ct_raw, str) else ""
         if ptit and ct:
             if ptit == ct:
-                score += 2.0
+                score += 3.0
             elif ct in ptit or ptit in ct:
-                score += 1.0
+                score += 1.5
 
+        # Similaridad por tokens (Jaccard)
+        if ptoks and ct:
+            ctoks = _tokenize_norm_title(ct)
+            if ctoks:
+                inter = len(ptoks & ctoks)
+                union = len(ptoks | ctoks)
+                if union > 0:
+                    score += 2.0 * (inter / union)
+
+        # Año
         cand_year: int | None = None
         cy = cand.get("Year")
         if isinstance(cy, str) and cy != "N/A":
@@ -1534,8 +1797,13 @@ def _search_candidates_imdb_id(*, title_for_search: str, year: int | None) -> st
         if year is not None and cand_year is not None:
             if year == cand_year:
                 score += 2.0
-            elif abs(year - cand_year) <= 1:
-                score += 1.0
+            else:
+                # penaliza distancia, pero permite ±1
+                d = abs(year - cand_year)
+                if d == 1:
+                    score += 0.75
+                else:
+                    score -= min(2.0, float(d) * 0.25)
 
         return score
 
@@ -1561,6 +1829,33 @@ def _search_candidates_imdb_id(*, title_for_search: str, year: int | None) -> st
 # ============================================================
 # API PRINCIPAL: query + cache + fallback
 # ============================================================
+
+def _singleflight_keys_for_request(*, norm_title: str, year_str: str, imdb_norm: str | None) -> list[str]:
+    """
+    Genera keys (primary + alias) para single-flight.
+    Objetivo: que distintas rutas de lookup compartan el mismo in-flight.
+
+    Keys (orden por preferencia):
+      - imdb:<id> si existe
+      - ty:<title>|<year>
+      - t:<title> (title-only)
+    """
+    keys: list[str] = []
+    if imdb_norm:
+        keys.append(f"imdb:{imdb_norm}")
+    if norm_title or year_str:
+        keys.append(f"ty:{_ty_key(norm_title, year_str)}")
+    if norm_title:
+        keys.append(_cache_key_for_title_only(norm_title))
+    # dedupe estable
+    out: list[str] = []
+    seen: set[str] = set()
+    for k in keys:
+        if k and k not in seen:
+            seen.add(k)
+            out.append(k)
+    return out
+
 
 def omdb_query_with_cache(
     *,
@@ -1593,18 +1888,24 @@ def omdb_query_with_cache(
 
     _m_inc("cache_misses", 1)
 
-    # SINGLE-FLIGHT
-    req_key = f"imdb:{imdb_norm}" if imdb_norm else f"ty:{_ty_key(norm_title, year_str)}"
-    is_leader, ev = _singleflight_enter(req_key)
+    # SINGLE-FLIGHT (multi-key + métricas de espera)
+    keys = _singleflight_keys_for_request(norm_title=norm_title, year_str=year_str, imdb_norm=imdb_norm)
+    is_leader, ev, primary = _singleflight_enter_multi(keys)
     if not is_leader:
         _m_inc("singleflight_waits", 1)
+        t0w = time.monotonic()
         ev.wait(timeout=float(_SINGLEFLIGHT_WAIT_S))
+        waited_ms = int((time.monotonic() - t0w) * 1000.0)
+        if waited_ms > 0:
+            _m_inc("singleflight_wait_ms_total", waited_ms)
+
         cached2 = _get_cached_item(norm_title=norm_title, norm_year=year_str, imdb_id_hint=imdb_norm)
         if cached2 is not None:
             _m_inc("cache_hits", 1)
             out2 = dict(cached2["omdb"])
             _attach_provenance(out2, prov_in)
             return out2
+        # best-effort: si no aparece, seguimos sin bloquear el run.
 
     try:
         # A) imdb_id -> i=
@@ -1644,6 +1945,7 @@ def omdb_query_with_cache(
 
         used_no_year = False
 
+        # Si “not found” con year, reintenta sin year (reduce falsos negativos)
         if year is not None and _is_movie_not_found(data_t):
             params_no_year = dict(params_t)
             params_no_year.pop("y", None)
@@ -1652,6 +1954,7 @@ def omdb_query_with_cache(
                 data_t = data_no_year
                 used_no_year = True
 
+        # Si sigue not found, usa search candidates: s= -> i=
         if _is_movie_not_found(data_t):
             imdb_best = _search_candidates_imdb_id(title_for_search=title_for_omdb, year=year)
             if imdb_best:
@@ -1683,7 +1986,7 @@ def omdb_query_with_cache(
 
     finally:
         if is_leader:
-            _singleflight_leave(req_key)
+            _singleflight_leave(primary)
 
 
 # ============================================================
