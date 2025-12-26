@@ -129,6 +129,9 @@ from backend.config import (
     WIKI_WIKIDATA_ENTITY_BASE_URL,
     WIKI_WIKIPEDIA_API_BASE_URL,
     WIKI_WIKIPEDIA_REST_BASE_URL,
+    WIKI_CB_FAIL_THRESHOLD,
+    WIKI_CB_COOLDOWN_SECONDS,
+
 )
 from backend.movie_input import normalize_title_for_lookup
 
@@ -291,9 +294,9 @@ _HTTP_SEM = threading.BoundedSemaphore(_HTTP_POOL_MAXSIZE)
 # Política:
 # - “Wiki” agrupa: Wikipedia REST/API + Wikidata API/entity
 # - “WDQS” es SPARQL (WIKI_WDQS_URL)
-# Umbrales defensivos (sin tocar config.py):
-_CB_FAIL_THRESHOLD: Final[int] = 5
-_CB_COOLDOWN_S: Final[float] = _cap_float_runtime(float(_HTTP_TIMEOUT) * 10.0, min_v=5.0, max_v=300.0)
+# Umbrales defensivos configurables en config.py:
+_CB_FAIL_THRESHOLD: Final[int] = _cap_int_runtime(int(WIKI_CB_FAIL_THRESHOLD), min_v=1, max_v=50)
+_CB_COOLDOWN_S: Final[float] = _cap_float_runtime(float(WIKI_CB_COOLDOWN_SECONDS), min_v=0.1, max_v=3600.0)
 
 _CB_LOCK = threading.Lock()
 _CB_STATE: dict[str, dict[str, float | int]] = {
