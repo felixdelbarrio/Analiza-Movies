@@ -12,6 +12,20 @@ API pública:
   - flush_wiki_cache() -> None
   - métricas: get_wiki_metrics_snapshot / reset_wiki_metrics / log_wiki_metrics_summary
 
+Diseño (resumen):
+  - Caché persistente en JSON (schema v6) con escritura atómica.
+  - Índices por imdbID y por (Title|Year).
+  - Single-flight: evita duplicar llamadas concurrentes por misma key (imdb o title/year).
+  - SWR (stale-while-revalidate): si un "ok" expira, puede servirse durante una grace window
+    y se programa un refresh asíncrono.
+  - Circuit breaker suave para:
+      * "wiki" (Wikipedia REST/API + Wikidata API)
+      * "wdqs" (Wikidata Query Service / SPARQL)
+  - Throttle global para SPARQL.
+  - JSON de cache configurable via config_wiki.py:
+      * WIKI_CACHE_JSON_PRETTY (bool)
+      * WIKI_CACHE_JSON_INDENT (int)
+
 NOTA: Este archivo está pensado para pegarse ENTERO (para evitar truncados).
 """
 
@@ -43,10 +57,12 @@ from backend.config_wiki import (
     ANALIZA_WIKI_DEBUG,
     WIKI_CACHE_FLUSH_MAX_DIRTY_WRITES,
     WIKI_CACHE_FLUSH_MAX_SECONDS,
+    WIKI_CACHE_JSON_INDENT,
+    WIKI_CACHE_JSON_PRETTY,
     WIKI_CACHE_PATH,
+    WIKI_CACHE_SWR_OK_GRACE_SECONDS,
     WIKI_CACHE_TTL_NEGATIVE_SECONDS,
     WIKI_CACHE_TTL_OK_SECONDS,
-    WIKI_CACHE_SWR_OK_GRACE_SECONDS,
     WIKI_CB_FAILURE_THRESHOLD,
     WIKI_CB_OPEN_SECONDS,
     WIKI_DISAMBIGUATION_NEGATIVE_TTL_SECONDS,
@@ -63,21 +79,20 @@ from backend.config_wiki import (
     WIKI_METRICS_LOG_EVEN_IF_ZERO,
     WIKI_METRICS_LOG_ON_SILENT_DEBUG,
     WIKI_METRICS_TOP_N,
-    WIKI_SINGLEFLIGHT_WAIT_SECONDS,
     WIKI_SEARCH_CANDIDATES_MAX_ENTRIES,
     WIKI_SEARCH_CANDIDATES_TTL_SECONDS,
+    WIKI_SINGLEFLIGHT_WAIT_SECONDS,
     WIKI_SPARQL_MIN_INTERVAL_SECONDS,
     WIKI_SPARQL_TIMEOUT_CONNECT_SECONDS,
     WIKI_SPARQL_TIMEOUT_READ_SECONDS,
-    WIKI_WDQS_URL,
     WIKI_WDQS_CB_FAILURE_THRESHOLD,
     WIKI_WDQS_CB_OPEN_SECONDS,
+    WIKI_WDQS_URL,
     WIKI_WIKIDATA_API_BASE_URL,
     WIKI_WIKIDATA_ENTITY_BASE_URL,
     WIKI_WIKIPEDIA_API_BASE_URL,
     WIKI_WIKIPEDIA_REST_BASE_URL,
 )
-
 from backend.movie_input import normalize_title_for_lookup
 
 
@@ -135,7 +150,7 @@ class MovieInputLangProto(Protocol):
 
 
 # =============================================================================
-# Utils runtime caps
+# Utils runtime caps (defensivo: config ya capea, pero aquí evitamos valores absurdos)
 # =============================================================================
 
 def _cap_int_runtime(value: int, *, min_v: int, max_v: int) -> int:
@@ -151,6 +166,22 @@ def _cap_float_runtime(value: float, *, min_v: float, max_v: float | None = None
     if max_v is not None and value > max_v:
         return max_v
     return value
+
+
+# =============================================================================
+# Logging centralizado
+# =============================================================================
+
+def _log_debug(msg: object) -> None:
+    logger.debug_ctx("WIKI", msg)
+
+def _log_info(msg: str) -> None:
+    if logger.is_silent_mode():
+        return
+    logger.info(msg)
+
+def _log_error(msg: str, *, always: bool = True) -> None:
+    logger.error(msg, always=always)
 
 
 # =============================================================================
@@ -204,11 +235,11 @@ _FILM_INSTANCE_ALLOWLIST: Final[set[str]] = {
     "Q93204",   # short film
 }
 _FILM_INSTANCE_DENYLIST: Final[set[str]] = {
-    "Q5398426",   # television series
-    "Q7725634",   # literary work
-    "Q571",       # book
-    "Q8261",      # novel
-    "Q25379",     # episode
+    "Q5398426",  # television series
+    "Q7725634",  # literary work
+    "Q571",      # book
+    "Q8261",     # novel
+    "Q25379",    # episode
 }
 
 _WORD_RE: Final[re.Pattern[str]] = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -227,6 +258,9 @@ _HTTP_SEM = threading.BoundedSemaphore(_HTTP_POOL_MAXSIZE)
 # =============================================================================
 # Circuit breaker suave
 # =============================================================================
+
+class _CircuitBreakerOpen(RequestException):
+    """Excepción interna: el circuito está abierto (no se cuenta como failure)."""
 
 _CB_LOCK = threading.Lock()
 _CB_STATE: dict[str, dict[str, object]] = {
@@ -252,11 +286,12 @@ def _cb_is_open(key: str) -> bool:
         return now < open_until
 
 def _cb_short_circuit(key: str) -> None:
+    # Importante: no debe contarse como "failure"; es una decisión deliberada de proteger servicios.
     if key == "wiki":
         _m_inc("cb_short_circuits_wiki", 1)
     elif key == "wdqs":
         _m_inc("cb_short_circuits_wdqs", 1)
-    raise RequestException(f"WIKI circuit breaker OPEN ({key})")
+    raise _CircuitBreakerOpen(f"WIKI circuit breaker OPEN ({key})")
 
 def _cb_record_success(key: str) -> None:
     with _CB_LOCK:
@@ -287,7 +322,7 @@ def _cb_record_failure(key: str) -> None:
                     _m_inc("cb_open_events_wiki", 1)
                 elif key == "wdqs":
                     _m_inc("cb_open_events_wdqs", 1)
-                _dbg(f"CB OPEN ({key}) for {open_s:.1f}s (failures={fc}/{thr})")
+                _log_debug(f"CB OPEN ({key}) for {open_s:.1f}s (failures={fc}/{thr})")
 
 
 # =============================================================================
@@ -441,22 +476,6 @@ def log_wiki_metrics_summary(*, force: bool = False) -> None:
 
 
 # =============================================================================
-# Logging helpers
-# =============================================================================
-
-def _dbg(msg: object) -> None:
-    logger.debug_ctx("WIKI", msg)
-
-def _info(msg: str) -> None:
-    if logger.is_silent_mode():
-        return
-    logger.info(msg)
-
-def _err(msg: str) -> None:
-    logger.error(msg, always=True)
-
-
-# =============================================================================
 # Session / HTTP
 # =============================================================================
 
@@ -511,6 +530,11 @@ def _http_get(
     timeout: float | tuple[float, float] | None = None,
     breaker: Literal["wiki", "wdqs"] = "wiki",
 ) -> requests.Response:
+    """
+    GET con:
+      - circuito (antes de salir a red)
+      - semáforo de concurrencia para evitar saturar pool y/o endpoints
+    """
     if _cb_is_open(breaker):
         _cb_short_circuit(breaker)
 
@@ -525,7 +549,7 @@ def _http_get(
         try:
             _HTTP_SEM.release()
         except ValueError:
-            _dbg("HTTP semaphore release ValueError (ignored)")
+            _log_debug("HTTP semaphore release ValueError (ignored)")
 
 
 # =============================================================================
@@ -600,13 +624,29 @@ def _mark_dirty_unlocked() -> None:
     _CACHE_DIRTY_WRITES += 1
 
 def _save_cache_file_atomic(cache: WikiCacheFile) -> None:
+    """
+    Escritura atómica:
+      1) dump a tempfile en el mismo directorio
+      2) fsync
+      3) os.replace
+
+    JSON configurable via config_wiki.py:
+      - WIKI_CACHE_JSON_PRETTY: si True, usa indent=WIKI_CACHE_JSON_INDENT
+      - si False, usa separadores compactos (",", ":") para reducir tamaño/IO
+    """
     dirpath = _CACHE_PATH.parent
     dirpath.mkdir(parents=True, exist_ok=True)
+
+    dump_kwargs: dict[str, object] = {"ensure_ascii": False}
+    if bool(WIKI_CACHE_JSON_PRETTY):
+        dump_kwargs["indent"] = max(0, min(8, int(WIKI_CACHE_JSON_INDENT)))
+    else:
+        dump_kwargs["separators"] = (",", ":")
 
     temp_name: str | None = None
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(dirpath)) as tf:
-            json.dump(cache, tf, ensure_ascii=False, indent=2)
+            json.dump(cache, tf, **dump_kwargs)
             tf.flush()
             try:
                 os.fsync(tf.fileno())
@@ -637,6 +677,7 @@ def _empty_cache() -> WikiCacheFile:
     }
 
 def _maybe_quarantine_corrupt_cache() -> None:
+    # Solo en debug: mover el fichero corrupto a *.corrupt.TIMESTAMP
     if not logger.is_debug_mode():
         return
     try:
@@ -645,7 +686,7 @@ def _maybe_quarantine_corrupt_cache() -> None:
         ts = int(time.time())
         bad_path = _CACHE_PATH.with_name(f"{_CACHE_PATH.name}.corrupt.{ts}")
         os.replace(str(_CACHE_PATH), str(bad_path))
-        _dbg(f"Quarantined corrupt cache file -> {bad_path.name}")
+        _log_debug(f"Quarantined corrupt cache file -> {bad_path.name}")
     except OSError:
         return
 
@@ -665,14 +706,14 @@ def _load_cache_unlocked() -> WikiCacheFile:
     try:
         raw_obj = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
     except (OSError, JSONDecodeError) as exc:
-        _dbg(f"cache read failed ({exc!r}); recreating")
+        _log_debug(f"cache read failed ({exc!r}); recreating")
         _maybe_quarantine_corrupt_cache()
         _CACHE = _empty_cache()
         return _CACHE
 
     if not isinstance(raw_obj, Mapping) or raw_obj.get("schema") != _SCHEMA_VERSION:
         found_schema = raw_obj.get("schema") if isinstance(raw_obj, Mapping) else None
-        _dbg(f"cache schema mismatch -> recreate (found={found_schema!r})")
+        _log_debug(f"cache schema mismatch -> recreate (found={found_schema!r})")
         _CACHE = _empty_cache()
         return _CACHE
 
@@ -839,14 +880,14 @@ def _maybe_flush_unlocked(force: bool) -> None:
         _CACHE_LAST_FLUSH_TS = now
         _m_inc("cache_flush_writes", 1)
     except Exception as exc:
-        _dbg(f"cache flush failed: {exc!r}")
+        _log_debug(f"cache flush failed: {exc!r}")
 
 def flush_wiki_cache() -> None:
     try:
         with _CACHE_LOCK:
             _maybe_flush_unlocked(force=True)
     except Exception as exc:
-        _dbg(f"flush_wiki_cache failed: {exc!r}")
+        _log_debug(f"flush_wiki_cache failed: {exc!r}")
 
 def _flush_cache_on_exit() -> None:
     try:
@@ -1019,17 +1060,17 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
         _m_inc("cache_compactions", 1)
 
         if _WIKI_DEBUG_EXTRA:
-            _dbg(
+            _log_debug(
                 "cache compacted"
                 + (" (force)" if force else "")
                 + f" | records={len(records)} idx_imdb={len(index_imdb)} idx_ty={len(index_ty)} "
                 f"entities={len(entities)} imdb_qid={len(imdb_qid)} is_film={len(is_film)} search_cache={len(sc)}"
             )
         else:
-            _dbg(f"cache compacted{' (force)' if force else ''} | records={len(records)} entities={len(entities)} search_cache={len(sc)}")
+            _log_debug(f"cache compacted{' (force)' if force else ''} | records={len(records)} entities={len(entities)} search_cache={len(sc)}")
 
     except Exception as exc:
-        _dbg(f"cache compaction failed: {exc!r}")
+        _log_debug(f"cache compaction failed: {exc!r}")
 
 
 # =============================================================================
@@ -1135,20 +1176,22 @@ def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str,
     base = str(WIKI_WIKIPEDIA_REST_BASE_URL).rstrip("/")
     url = f"{base.format(lang=language)}/page/summary/{safe_title}"
 
-    _dbg(f"wikipedia.summary -> lang={language} title={title!r}")
+    _log_debug(f"wikipedia.summary -> lang={language} title={title!r}")
 
     try:
         resp = _http_get(url, timeout=_HTTP_TIMEOUT, breaker="wiki")
+    except _CircuitBreakerOpen:
+        return None
     except RequestException as exc:
         _m_inc("wikipedia_failures", 1)
         _cb_record_failure("wiki")
-        _dbg(f"wikipedia.summary EXC: {exc!r}")
+        _log_debug(f"wikipedia.summary EXC: {exc!r}")
         return None
 
     if resp.status_code != 200:
         _m_inc("wikipedia_failures", 1)
         _cb_record_failure("wiki")
-        _dbg(f"wikipedia.summary <- status={resp.status_code}")
+        _log_debug(f"wikipedia.summary <- status={resp.status_code}")
         return None
 
     try:
@@ -1156,7 +1199,7 @@ def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str,
     except (ValueError, JSONDecodeError) as exc:
         _m_inc("wikipedia_failures", 1)
         _cb_record_failure("wiki")
-        _dbg(f"wikipedia.summary JSON EXC: {exc!r}")
+        _log_debug(f"wikipedia.summary JSON EXC: {exc!r}")
         return None
 
     if not isinstance(data, Mapping):
@@ -1165,7 +1208,7 @@ def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str,
         return None
 
     if _safe_str(data.get("type")) == "disambiguation":
-        _dbg("wikipedia.summary -> disambiguation")
+        _log_debug("wikipedia.summary -> disambiguation")
         _cb_record_success("wiki")
         return _DISAMBIG_SENTINEL
 
@@ -1185,20 +1228,22 @@ def _wikipedia_search(*, query: str, language: str, limit: int = 8) -> list[dict
     }
     url = str(WIKI_WIKIPEDIA_API_BASE_URL).format(lang=language)
 
-    _dbg(f"wikipedia.search -> lang={language} q={query!r}")
+    _log_debug(f"wikipedia.search -> lang={language} q={query!r}")
 
     try:
         resp = _http_get(url, params=params, timeout=_HTTP_TIMEOUT, breaker="wiki")
+    except _CircuitBreakerOpen:
+        return []
     except RequestException as exc:
         _m_inc("wikipedia_failures", 1)
         _cb_record_failure("wiki")
-        _dbg(f"wikipedia.search EXC: {exc!r}")
+        _log_debug(f"wikipedia.search EXC: {exc!r}")
         return []
 
     if resp.status_code != 200:
         _m_inc("wikipedia_failures", 1)
         _cb_record_failure("wiki")
-        _dbg(f"wikipedia.search <- status={resp.status_code}")
+        _log_debug(f"wikipedia.search <- status={resp.status_code}")
         return []
 
     try:
@@ -1206,7 +1251,7 @@ def _wikipedia_search(*, query: str, language: str, limit: int = 8) -> list[dict
     except (ValueError, JSONDecodeError) as exc:
         _m_inc("wikipedia_failures", 1)
         _cb_record_failure("wiki")
-        _dbg(f"wikipedia.search JSON EXC: {exc!r}")
+        _log_debug(f"wikipedia.search JSON EXC: {exc!r}")
         return []
 
     if not isinstance(payload, Mapping):
@@ -1327,6 +1372,10 @@ def _choose_wikipedia_summary_candidates(
     primary_language: str,
     fallback_language: str,
 ) -> list[tuple[str, str]]:
+    """
+    Devuelve una lista de (title, lang) ya rankeados.
+    Se intenta primero primary y luego fallback (si procede).
+    """
     out: list[tuple[str, str]] = []
     for t in _rank_wikipedia_candidates(lookup_title=title_for_lookup, year=year, language=primary_language)[:8]:
         out.append((t, primary_language))
@@ -1347,20 +1396,22 @@ def _fetch_wikidata_entity_json(qid: str) -> Mapping[str, object] | None:
 
     base = str(WIKI_WIKIDATA_ENTITY_BASE_URL).rstrip("/")
     url = f"{base}/{qid}.json"
-    _dbg(f"wikidata.entity -> qid={qid}")
+    _log_debug(f"wikidata.entity -> qid={qid}")
 
     try:
         resp = _http_get(url, timeout=_HTTP_TIMEOUT, breaker="wiki")
+    except _CircuitBreakerOpen:
+        return None
     except RequestException as exc:
         _m_inc("wikidata_failures", 1)
         _cb_record_failure("wiki")
-        _dbg(f"wikidata.entity EXC: {exc!r}")
+        _log_debug(f"wikidata.entity EXC: {exc!r}")
         return None
 
     if resp.status_code != 200:
         _m_inc("wikidata_failures", 1)
         _cb_record_failure("wiki")
-        _dbg(f"wikidata.entity <- status={resp.status_code}")
+        _log_debug(f"wikidata.entity <- status={resp.status_code}")
         return None
 
     try:
@@ -1368,7 +1419,7 @@ def _fetch_wikidata_entity_json(qid: str) -> Mapping[str, object] | None:
     except (ValueError, JSONDecodeError) as exc:
         _m_inc("wikidata_failures", 1)
         _cb_record_failure("wiki")
-        _dbg(f"wikidata.entity JSON EXC: {exc!r}")
+        _log_debug(f"wikidata.entity JSON EXC: {exc!r}")
         return None
 
     if not isinstance(data, Mapping):
@@ -1444,16 +1495,18 @@ def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: st
 
         try:
             resp = _http_get(str(WIKI_WIKIDATA_API_BASE_URL), params=params, timeout=_HTTP_TIMEOUT, breaker="wiki")
+        except _CircuitBreakerOpen:
+            continue
         except RequestException as exc:
             _m_inc("wikidata_failures", 1)
             _cb_record_failure("wiki")
-            _dbg(f"wikidata.labels EXC: {exc!r}")
+            _log_debug(f"wikidata.labels EXC: {exc!r}")
             continue
 
         if resp.status_code != 200:
             _m_inc("wikidata_failures", 1)
             _cb_record_failure("wiki")
-            _dbg(f"wikidata.labels <- status={resp.status_code}")
+            _log_debug(f"wikidata.labels <- status={resp.status_code}")
             continue
 
         try:
@@ -1461,7 +1514,7 @@ def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: st
         except (ValueError, JSONDecodeError) as exc:
             _m_inc("wikidata_failures", 1)
             _cb_record_failure("wiki")
-            _dbg(f"wikidata.labels JSON EXC: {exc!r}")
+            _log_debug(f"wikidata.labels JSON EXC: {exc!r}")
             continue
 
         if not isinstance(payload, Mapping):
@@ -1532,20 +1585,22 @@ def _wikidata_sparql(query: str) -> Mapping[str, object] | None:
     params = {"format": "json", "query": query}
 
     _sparql_throttle()
-    _dbg(f"wikidata.sparql -> len={len(query)}")
+    _log_debug(f"wikidata.sparql -> len={len(query)}")
 
     try:
         resp = _http_get(str(WIKI_WDQS_URL), params=params, timeout=_HTTP_TIMEOUT_SPARQL, breaker="wdqs")
+    except _CircuitBreakerOpen:
+        return None
     except RequestException as exc:
         _m_inc("sparql_failures", 1)
         _cb_record_failure("wdqs")
-        _dbg(f"wikidata.sparql EXC: {exc!r}")
+        _log_debug(f"wikidata.sparql EXC: {exc!r}")
         return None
 
     if resp.status_code != 200:
         _m_inc("sparql_failures", 1)
         _cb_record_failure("wdqs")
-        _dbg(f"wikidata.sparql <- status={resp.status_code}")
+        _log_debug(f"wikidata.sparql <- status={resp.status_code}")
         return None
 
     try:
@@ -1553,7 +1608,7 @@ def _wikidata_sparql(query: str) -> Mapping[str, object] | None:
     except (ValueError, JSONDecodeError) as exc:
         _m_inc("sparql_failures", 1)
         _cb_record_failure("wdqs")
-        _dbg(f"wikidata.sparql JSON EXC: {exc!r}")
+        _log_debug(f"wikidata.sparql JSON EXC: {exc!r}")
         return None
 
     _cb_record_success("wdqs")
@@ -1987,9 +2042,8 @@ def _build_ok_item_and_merge_entities(
         status="ok",
     )
 
-    if not logger.is_silent_mode():
-        year_label = norm_year if norm_year else "?"
-        _info(f"[WIKI] cached ({source_language}): {norm_title} ({year_label})")
+    year_label = norm_year if norm_year else "?"
+    _log_info(f"[WIKI] cached ({source_language}): {norm_title} ({year_label})")
 
     return item
 
@@ -1997,21 +2051,6 @@ def _build_ok_item_and_merge_entities(
 # =============================================================================
 # Title/year path
 # =============================================================================
-
-def _choose_wikipedia_summary_candidates(
-    *,
-    title_for_lookup: str,
-    year: int | None,
-    primary_language: str,
-    fallback_language: str,
-) -> list[tuple[str, str]]:
-    out: list[tuple[str, str]] = []
-    for t in _rank_wikipedia_candidates(lookup_title=title_for_lookup, year=year, language=primary_language)[:8]:
-        out.append((t, primary_language))
-    if fallback_language and fallback_language != primary_language:
-        for t in _rank_wikipedia_candidates(lookup_title=title_for_lookup, year=year, language=fallback_language)[:8]:
-            out.append((t, fallback_language))
-    return out
 
 def _try_title_year_path(
     *,
@@ -2030,7 +2069,7 @@ def _try_title_year_path(
         primary_language=primary,
         fallback_language=fallback,
     )
-    _dbg(f"[title/year] candidates={len(candidates)} primary={primary} fallback={fallback}")
+    _log_debug(f"[title/year] candidates={len(candidates)} primary={primary} fallback={fallback}")
 
     disambig_seen = False
     any_non_disambig_summary = False
@@ -2154,7 +2193,7 @@ def _schedule_refresh_if_needed(
                 force_refresh=True,
             )
         except Exception as exc:
-            _dbg(f"SWR refresh failed: {exc!r}")
+            _log_debug(f"SWR refresh failed: {exc!r}")
         finally:
             with _REFRESH_IN_FLIGHT_LOCK:
                 _REFRESH_IN_FLIGHT.discard(key)
@@ -2162,7 +2201,7 @@ def _schedule_refresh_if_needed(
     try:
         threading.Thread(target=_worker, name=f"wiki-refresh:{key}", daemon=True).start()
     except Exception as exc:
-        _dbg(f"refresh thread spawn failed: {exc!r}")
+        _log_debug(f"refresh thread spawn failed: {exc!r}")
         with _REFRESH_IN_FLIGHT_LOCK:
             _REFRESH_IN_FLIGHT.discard(key)
 
@@ -2183,7 +2222,7 @@ def _get_wiki_impl(
 ) -> WikiCacheItem | None:
     lookup_title = normalize_title_for_lookup(title)
     if not lookup_title:
-        _dbg(f"empty lookup_title from title={title!r}")
+        _log_debug(f"empty lookup_title from title={title!r}")
         return None
 
     norm_title = lookup_title
@@ -2198,7 +2237,7 @@ def _get_wiki_impl(
             cached, served_stale_ok = _get_cached_item(cache=cache, norm_title=norm_title, norm_year=norm_year, imdb_id=imdb_norm)
             if cached is not None:
                 _m_inc("cache_hits", 1)
-                _dbg("cache HIT" + (" (stale-ok)" if served_stale_ok else ""))
+                _log_debug("cache HIT" + (" (stale-ok)" if served_stale_ok else ""))
                 if served_stale_ok:
                     _schedule_refresh_if_needed(
                         key=key,
@@ -2226,7 +2265,7 @@ def _get_wiki_impl(
                 cached2, _ = _get_cached_item(cache=cache, norm_title=norm_title, norm_year=norm_year, imdb_id=imdb_norm)
                 if cached2 is not None:
                     _m_inc("cache_hits", 1)
-                    _dbg("cache HIT (after single-flight wait)")
+                    _log_debug("cache HIT (after single-flight wait)")
                     return cached2
 
     try:
@@ -2277,7 +2316,7 @@ def _get_wiki_impl(
             wiki_raw = _fetch_wikipedia_summary_by_title(sl_title, sl_lang) if sl_title else None
 
             if wiki_raw is None or _is_disambiguation_payload(wiki_raw):
-                _dbg("[imdb->qid] missing/ambiguous summary; trying title/year fallback")
+                _log_debug("[imdb->qid] missing/ambiguous summary; trying title/year fallback")
                 _m_inc("path_title_search", 1)
                 return _try_title_year_path(
                     lookup_title=lookup_title,
