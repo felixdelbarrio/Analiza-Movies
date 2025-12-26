@@ -764,6 +764,13 @@ ANALIZA_WIKI_DEBUG: bool = _get_env_bool("ANALIZA_WIKI_DEBUG", False)
 # WIKI (HTTP client tuning + endpoints)
 # ============================================================
 
+WIKI_HTTP_MAX_CONCURRENCY: int = _cap_int(
+    "WIKI_HTTP_MAX_CONCURRENCY",
+    _get_env_int("WIKI_HTTP_MAX_CONCURRENCY", 4),
+    min_v=1,
+    max_v=64,
+)
+
 WIKI_HTTP_USER_AGENT: str = _get_env_str("WIKI_HTTP_USER_AGENT", "Analiza-Movies/1.0 (local)") or "Analiza-Movies/1.0 (local)"
 
 WIKI_HTTP_TIMEOUT_SECONDS: float = _cap_float_min(
@@ -1284,6 +1291,7 @@ _log_config_debug("COLLECTION_TRACE_ALSO_DEBUG_CTX", COLLECTION_TRACE_ALSO_DEBUG
 
 _log_config_debug("OMDB_API_KEY", "****" if OMDB_API_KEY else None)
 _log_config_debug("OMDB_HTTP_MAX_CONCURRENCY", OMDB_HTTP_MAX_CONCURRENCY)
+_log_config_debug("WIKI_HTTP_MAX_CONCURRENCY", WIKI_HTTP_MAX_CONCURRENCY)
 _log_config_debug("OMDB_HTTP_MIN_INTERVAL_SECONDS", OMDB_HTTP_MIN_INTERVAL_SECONDS)
 _log_config_debug("OMDB_RATE_LIMIT_WAIT_SECONDS", OMDB_RATE_LIMIT_WAIT_SECONDS)
 _log_config_debug("OMDB_RATE_LIMIT_MAX_RETRIES", OMDB_RATE_LIMIT_MAX_RETRIES)
