@@ -52,7 +52,7 @@ Fase B (cara):
     * llama a fetch_omdb(title, year)
     * extrae ratings
     * recalcula scoring con señales reales
-    * si hay OMDb, ejecuta detect_misidentified()
+    * si hay OMDb usable, ejecuta detect_misidentified()
 
 Salida
 ------
@@ -61,7 +61,7 @@ Devuelve un AnalysisRow (dict minimalista). Capas superiores enriquecen:
 """
 
 from collections.abc import Callable, Mapping
-from typing import Final, TypedDict
+from typing import Final, Protocol, TypedDict, cast
 
 from backend.decision_logic import detect_misidentified
 from backend.movie_input import MovieInput
@@ -72,17 +72,25 @@ from backend.scoring import compute_scoring
 # Config (best-effort): centralizamos knobs si existen
 # -----------------------------------------------------------------------------
 try:
-    from backend import config as _cfg  # type: ignore
+    from backend import config as _cfg
 except Exception:  # pragma: no cover
-    _cfg = None  # type: ignore
+    _cfg = None
 
 # -----------------------------------------------------------------------------
 # run_metrics (best-effort / no-op si no existe)
 # -----------------------------------------------------------------------------
 try:
-    import backend.run_metrics as _rm  # type: ignore
+    import backend.run_metrics as _rm
 except Exception:  # pragma: no cover
-    _rm = None  # type: ignore
+    _rm = None
+
+# -----------------------------------------------------------------------------
+# Logger central (best-effort)
+# -----------------------------------------------------------------------------
+try:
+    from backend import logger as _log
+except Exception:  # pragma: no cover
+    _log = None
 
 
 # =============================================================================
@@ -138,10 +146,21 @@ _REASON_FALLBACK: Final[str] = "scoring did not provide a usable reason"
 # Set de decisiones válidas para normalizar.
 _VALID_DECISIONS: Final[set[str]] = {"KEEP", "MAYBE", "DELETE", "UNKNOWN"}
 
+# Tag unificado para debug contextual (logger central).
+_LOG_TAG: Final[str] = "analyze_core"
+
 
 # =============================================================================
 # Métricas (best-effort / nunca rompen)
 # =============================================================================
+
+class _IncFn(Protocol):
+    def __call__(self, name: str, *, value: int = 1) -> None: ...
+
+
+class _ObserveSecondsFn(Protocol):
+    def __call__(self, name: str, *, seconds: float) -> None: ...
+
 
 def _rm_inc(name: str, value: int = 1) -> None:
     """
@@ -152,10 +171,12 @@ def _rm_inc(name: str, value: int = 1) -> None:
     """
     if not _METRICS_ENABLED or _rm is None:
         return
+
     try:
-        fn = getattr(_rm, "inc", None) or getattr(_rm, "counter_inc", None)
-        if callable(fn):
-            fn(name, value=value)  # type: ignore[misc]
+        fn_obj = getattr(_rm, "inc", None) or getattr(_rm, "counter_inc", None)
+        if callable(fn_obj):
+            fn = cast(_IncFn, fn_obj)
+            fn(name, value=value)
     except Exception:
         return
 
@@ -169,10 +190,12 @@ def _rm_observe_seconds(name: str, seconds: float) -> None:
     """
     if not _METRICS_ENABLED or _rm is None:
         return
+
     try:
-        fn = getattr(_rm, "observe_seconds", None) or getattr(_rm, "timing", None)
-        if callable(fn):
-            fn(name, seconds=seconds)  # type: ignore[misc]
+        fn_obj = getattr(_rm, "observe_seconds", None) or getattr(_rm, "timing", None)
+        if callable(fn_obj):
+            fn = cast(_ObserveSecondsFn, fn_obj)
+            fn(name, seconds=seconds)
     except Exception:
         return
 
@@ -185,17 +208,20 @@ class _RM_Timer:
     - No importa time a nivel de módulo para minimizar carga.
     - Nunca lanza; el análisis no debe depender de métricas.
     """
+
     def __init__(self, name: str) -> None:
         self._name = name
         self._t0 = 0.0
 
     def __enter__(self) -> "_RM_Timer":
         from time import monotonic
+
         self._t0 = monotonic()
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         from time import monotonic
+
         _rm_observe_seconds(self._name, monotonic() - self._t0)
 
 
@@ -327,6 +353,36 @@ def _extract_bayes_from_scoring(scoring: Mapping[str, object]) -> float | None:
     return None
 
 
+def _is_omdb_usable(omdb_data: Mapping[str, object]) -> bool:
+    """
+    Determina si el payload OMDb es "usable" para scoring/misidentified.
+
+    Problema real que evita:
+    - OMDb puede devolver respuestas de error con forma dict (p.ej. {"Response":"False", ...}).
+      Eso antes marcaba used_omdb=True y contaminaba métricas y heurísticas.
+
+    Política (conservadora):
+    - True si:
+        * Response == "True" (case-insensitive), o
+        * trae imdbID no vacío, o
+        * trae Title no vacío
+    - False en caso contrario.
+    """
+    resp = omdb_data.get("Response")
+    if isinstance(resp, str) and resp.strip().lower() == "true":
+        return True
+
+    imdb_id = omdb_data.get("imdbID")
+    if isinstance(imdb_id, str) and imdb_id.strip():
+        return True
+
+    title = omdb_data.get("Title")
+    if isinstance(title, str) and title.strip():
+        return True
+
+    return False
+
+
 # =============================================================================
 # Scoring defensivo (wrapper)
 # =============================================================================
@@ -405,6 +461,12 @@ def analyze_input_movie(
     - Fase A: scoring sin OMDb.
     - Fase B: solo si decisión no concluyente (MAYBE/UNKNOWN).
 
+    Logs / trazas:
+    - Si se inyecta analysis_trace: se llama (truncado, best-effort).
+    - Si NO se inyecta:
+        * en debug mode, se emite vía logger central debug_ctx(tag=analyze_core)
+        * en modo normal/silent, no imprime nada
+
     Args:
         movie:
             Entrada unificada.
@@ -433,29 +495,42 @@ def analyze_input_movie(
             Trazas seguras y truncadas.
 
             Importante:
-            - No hace logging directamente.
             - Nunca lanza.
             - Trunca a COLLECTION_TRACE_LINE_MAX_CHARS (config).
+            - Respeta logger central (si no se inyecta callback).
             """
-            if analysis_trace is None:
-                return
-            try:
-                analysis_trace(_clip(msg, max_len=_TRACE_LINE_MAX_CHARS))
-            except Exception:
-                # La instrumentación no debe romper el pipeline.
+            clipped = _clip(msg, max_len=_TRACE_LINE_MAX_CHARS)
+
+            if analysis_trace is not None:
+                try:
+                    analysis_trace(clipped)
+                except Exception:
+                    return
                 return
 
-        # Normalización mínima para evitar None/objetos raros en trazas
+            # Sin callback: usamos logger central solo si procede (debug_ctx ya respeta SILENT/DEBUG).
+            if _log is None:
+                return
+            try:
+                if hasattr(_log, "debug_ctx"):
+                    _log.debug_ctx(_LOG_TAG, clipped)  # type: ignore[attr-defined]
+            except Exception:
+                return
+
         lib = movie.library or ""
-        title = movie.title or ""
-        year = movie.year if isinstance(movie.year, int) else movie.year  # mantiene compatibilidad
+        title_raw = movie.title or ""
+        year = movie.year
+
+        # Título normalizado para consultas externas (OMDb/Wikipedia)
+        lookup_title = movie.normalized_title_for_lookup().strip()
 
         _trace(
             "start | "
             f"src={_safe_str(movie.source, max_len=32)} "
             f"lib={_safe_str(lib, max_len=80)} "
-            f"title={_safe_str(title, max_len=120)} "
-            f"year={_safe_str(year, max_len=16)}"
+            f"title={_safe_str(title_raw, max_len=120)} "
+            f"year={_safe_str(year, max_len=16)} "
+            f"lookup_title={_safe_str(lookup_title, max_len=120)}"
         )
 
         # ------------------------------------------------------------------
@@ -490,48 +565,65 @@ def analyze_input_movie(
         omdb_data: dict[str, object] = {}
 
         if should_fetch_omdb:
-            _rm_inc("analyze_core.phaseB.fetch_attempted", 1)
-            _trace("phaseB | fetching omdb (needed)")
-            try:
-                raw = fetch_omdb(title, movie.year)
-                omdb_data = dict(raw) if isinstance(raw, Mapping) else {}
-                used_omdb = bool(omdb_data)
-
-                _rm_inc("analyze_core.phaseB.fetch_ok", 1 if used_omdb else 0)
-                _rm_inc("analyze_core.phaseB.fetch_empty", 1 if not used_omdb else 0)
-                _trace(f"omdb ok | keys={len(omdb_data)}")
-            except Exception as exc:
-                omdb_data = {}
-                used_omdb = False
-                _rm_inc("analyze_core.phaseB.fetch_fail", 1)
-                _trace(f"omdb fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
-
-            # Ratings desde OMDb (defensivo)
-            if omdb_data:
+            # Guard clause: evita requests inútiles si el título normalizado queda vacío.
+            if not lookup_title:
+                _rm_inc("analyze_core.phaseB.skipped_empty_title", 1)
+                _trace("phaseB | skipped omdb (empty normalized title)")
+            else:
+                _rm_inc("analyze_core.phaseB.fetch_attempted", 1)
+                _trace("phaseB | fetching omdb (needed)")
                 try:
-                    imdb_rating, imdb_votes, rt_score = extract_ratings_from_omdb(omdb_data)
-                    _rm_inc("analyze_core.ratings.extract_ok", 1)
-                    _trace(
-                        "ratings ok | "
-                        f"imdb_rating={_safe_str(imdb_rating, max_len=32)} "
-                        f"votes={_safe_str(imdb_votes, max_len=32)} "
-                        f"rt={_safe_str(rt_score, max_len=32)}"
-                    )
-                except Exception as exc:
-                    imdb_rating, imdb_votes, rt_score = None, None, None
-                    _rm_inc("analyze_core.ratings.extract_fail", 1)
-                    _trace(f"ratings fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
+                    raw = fetch_omdb(lookup_title, movie.year)
 
-            # Re-score con señales reales
-            _trace("phaseB | scoring with omdb-derived signals")
-            decision, reason, imdb_bayes = _compute_scoring_safe(
-                imdb_rating=imdb_rating,
-                imdb_votes=imdb_votes,
-                rt_score=rt_score,
-                year=movie.year,
-                metacritic_score=metacritic_score,
-                trace=_trace,
-            )
+                    # Convertimos a dict de forma defensiva (extract_ratings/detect_misidentified esperan mapping).
+                    raw_map: Mapping[str, object] = raw if isinstance(raw, Mapping) else {}
+                    if _is_omdb_usable(raw_map):
+                        omdb_data = dict(raw_map)
+                        used_omdb = True
+                        _rm_inc("analyze_core.phaseB.fetch_ok", 1)
+                        _trace(f"omdb ok | usable=yes keys={len(omdb_data)}")
+                    else:
+                        omdb_data = {}
+                        used_omdb = False
+                        _rm_inc("analyze_core.phaseB.fetch_unusable", 1)
+                        _trace(
+                            "omdb ok | usable=no "
+                            f"keys={len(raw_map)} "
+                            f"response={_safe_str(raw_map.get('Response'), max_len=32)}"
+                        )
+
+                except Exception as exc:
+                    omdb_data = {}
+                    used_omdb = False
+                    _rm_inc("analyze_core.phaseB.fetch_fail", 1)
+                    _trace(f"omdb fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
+
+                # Ratings desde OMDb (solo si usable)
+                if omdb_data:
+                    try:
+                        imdb_rating, imdb_votes, rt_score = extract_ratings_from_omdb(omdb_data)
+                        _rm_inc("analyze_core.ratings.extract_ok", 1)
+                        _trace(
+                            "ratings ok | "
+                            f"imdb_rating={_safe_str(imdb_rating, max_len=32)} "
+                            f"votes={_safe_str(imdb_votes, max_len=32)} "
+                            f"rt={_safe_str(rt_score, max_len=32)}"
+                        )
+                    except Exception as exc:
+                        imdb_rating, imdb_votes, rt_score = None, None, None
+                        _rm_inc("analyze_core.ratings.extract_fail", 1)
+                        _trace(f"ratings fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
+
+                # Re-score con señales reales (si no hay OMDb usable, esto será equivalente a fase A)
+                _trace("phaseB | scoring with omdb-derived signals")
+                decision, reason, imdb_bayes = _compute_scoring_safe(
+                    imdb_rating=imdb_rating,
+                    imdb_votes=imdb_votes,
+                    rt_score=rt_score,
+                    year=movie.year,
+                    metacritic_score=metacritic_score,
+                    trace=_trace,
+                )
         else:
             _trace("phaseB | skipped omdb (decision strong)")
 
@@ -546,7 +638,7 @@ def analyze_input_movie(
         if omdb_data:
             _rm_inc("analyze_core.misidentified.ran", 1)
 
-            detect_title = plex_title if isinstance(plex_title, str) and plex_title.strip() else title
+            detect_title = plex_title if isinstance(plex_title, str) and plex_title.strip() else title_raw
             detect_year = plex_year if isinstance(plex_year, int) else movie.year
 
             _trace("misidentified | running")
@@ -578,7 +670,7 @@ def analyze_input_movie(
                 _rm_inc("analyze_core.misidentified.no", 1)
                 _trace("misidentified | no")
         else:
-            _trace("misidentified | skipped (no omdb data)")
+            _trace("misidentified | skipped (no usable omdb data)")
 
         # ------------------------------------------------------------------
         # Construcción de fila base
