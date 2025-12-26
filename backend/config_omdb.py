@@ -107,6 +107,13 @@ ANALIZA_OMDB_HOT_CACHE_MAX: int = _cap_int(
     max_v=500_000,
 )
 
+# Hot-cache negative TTL (misses) para evitar "miss pegado" infinito intra-run.
+OMDB_HOT_MISS_TTL_SECONDS: float = _cap_float_min(
+    "OMDB_HOT_MISS_TTL_SECONDS",
+    _get_env_float("OMDB_HOT_MISS_TTL_SECONDS", 30.0),
+    min_v=0.0,
+)
+
 # ============================================================
 # OMDb (HTTP client tuning)
 # ============================================================
@@ -145,6 +152,14 @@ OMDB_DISABLE_AFTER_N_FAILURES: int = _cap_int(
 
 OMDB_HTTP_USER_AGENT: str = _get_env_str("OMDB_HTTP_USER_AGENT", "Analiza-Movies/1.0 (local)") or "Analiza-Movies/1.0 (local)"
 
+# Jitter aplicado a sleeps (throttle/rate-limit) para desincronizar threads (0..0.5 recomendado).
+OMDB_JITTER_RATIO: float = _cap_float_min(
+    "OMDB_JITTER_RATIO",
+    _get_env_float("OMDB_JITTER_RATIO", 0.10),
+    min_v=0.0,
+)
+# Nota: cap superior (0.5) se aplica en runtime en omdb_client.py por simplicidad.
+
 # ============================================================
 # OMDb (single-flight + circuit breaker)  ✅ NUEVO
 # ============================================================
@@ -168,6 +183,32 @@ OMDB_CIRCUIT_BREAKER_OPEN_SECONDS: float = _cap_float_min(
     "OMDB_CIRCUIT_BREAKER_OPEN_SECONDS",
     _get_env_float("OMDB_CIRCUIT_BREAKER_OPEN_SECONDS", 20.0),
     min_v=0.5,
+)
+
+# ============================================================
+# OMDb (cache JSON output + compaction amortizada) ✅ NUEVO
+# ============================================================
+
+# Escritura del JSON:
+# - pretty=True => indent configurable (útil para debug/manual inspect)
+# - pretty=False => compact (separators) para ahorrar disco/IO
+OMDB_CACHE_JSON_PRETTY: bool = _get_env_bool("OMDB_CACHE_JSON_PRETTY", False)
+
+OMDB_CACHE_JSON_INDENT: int = _cap_int(
+    "OMDB_CACHE_JSON_INDENT",
+    _get_env_int("OMDB_CACHE_JSON_INDENT", 2),
+    min_v=0,
+    max_v=8,
+)
+
+# Compaction amortizada:
+# - 0 => comportamiento previo (compaction siempre que flush)
+# - N>0 => compaction "full" cada N flushes (reduce CPU si el cache es grande)
+OMDB_CACHE_COMPACT_EVERY_N_FLUSHES: int = _cap_int(
+    "OMDB_CACHE_COMPACT_EVERY_N_FLUSHES",
+    _get_env_int("OMDB_CACHE_COMPACT_EVERY_N_FLUSHES", 0),
+    min_v=0,
+    max_v=10_000,
 )
 
 # ============================================================
