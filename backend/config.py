@@ -877,7 +877,30 @@ DLNA_CB_OPEN_SECONDS: float = _cap_float_min(
     _get_env_float("DLNA_CB_OPEN_SECONDS", 20.0),
     min_v=0.1,
 )
+# ============================================================
+# ✅ NUEVO: WIKI circuit breaker suave (Wikipedia/Wikidata + WDQS)
+# ============================================================
+# Política:
+# - WIKI_CB_FAIL_THRESHOLD: nº de fallos antes de abrir el breaker.
+# - WIKI_CB_COOLDOWN_SECONDS: cuánto tiempo permanece abierto (fail-fast).
+# - Se usan por backend/wiki_client.py para cb_name="wiki" y cb_name="wdqs".
+#
+# Defaults defensivos:
+# - threshold=5 (evita trips por flukes)
+# - cooldown=~100s por defecto (10s timeout * 10), pero configurable.
 
+WIKI_CB_FAIL_THRESHOLD: int = _cap_int(
+    "WIKI_CB_FAIL_THRESHOLD",
+    _get_env_int("WIKI_CB_FAIL_THRESHOLD", 5),
+    min_v=1,
+    max_v=50,
+)
+
+WIKI_CB_COOLDOWN_SECONDS: float = _cap_float_min(
+    "WIKI_CB_COOLDOWN_SECONDS",
+    _get_env_float("WIKI_CB_COOLDOWN_SECONDS", max(5.0, float(WIKI_HTTP_TIMEOUT_SECONDS) * 10.0)),
+    min_v=0.1,
+)
 # ============================================================
 # ✅ NUEVO: DLNA traversal fuses (anti-loop + anti-duplicados)
 # ============================================================
@@ -1314,6 +1337,9 @@ _log_config_debug("DLNA_SCAN_WORKERS", DLNA_SCAN_WORKERS)
 _log_config_debug("DLNA_BROWSE_MAX_RETRIES", DLNA_BROWSE_MAX_RETRIES)
 _log_config_debug("DLNA_CB_FAILURE_THRESHOLD", DLNA_CB_FAILURE_THRESHOLD)
 _log_config_debug("DLNA_CB_OPEN_SECONDS", DLNA_CB_OPEN_SECONDS)
+
+_log_config_debug("WIKI_CB_FAIL_THRESHOLD", WIKI_CB_FAIL_THRESHOLD)
+_log_config_debug("WIKI_CB_COOLDOWN_SECONDS", WIKI_CB_COOLDOWN_SECONDS)
 
 _log_config_debug("DLNA_TRAVERSE_MAX_DEPTH", DLNA_TRAVERSE_MAX_DEPTH)
 _log_config_debug("DLNA_TRAVERSE_MAX_CONTAINERS", DLNA_TRAVERSE_MAX_CONTAINERS)
