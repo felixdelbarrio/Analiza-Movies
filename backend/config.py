@@ -700,6 +700,14 @@ WIKI_CACHE_TTL_NEGATIVE_SECONDS: int = _cap_int(
     max_v=60 * 60 * 24 * 365,
 )
 
+# ✅ NUEVO: TTL específico para desambiguación (evita reintentos infinitos)
+WIKI_DISAMBIGUATION_NEGATIVE_TTL_SECONDS: int = _cap_int(
+    "WIKI_DISAMBIGUATION_NEGATIVE_TTL_SECONDS",
+    _get_env_int("WIKI_DISAMBIGUATION_NEGATIVE_TTL_SECONDS", 60 * 60 * 24 * 3),  # 3 días
+    min_v=60,
+    max_v=60 * 60 * 24 * 365,
+)
+
 WIKI_IMDB_QID_NEGATIVE_TTL_SECONDS: int = _cap_int(
     "WIKI_IMDB_QID_NEGATIVE_TTL_SECONDS",
     _get_env_int("WIKI_IMDB_QID_NEGATIVE_TTL_SECONDS", 60 * 60 * 24 * 7),
@@ -877,18 +885,26 @@ DLNA_CB_OPEN_SECONDS: float = _cap_float_min(
     _get_env_float("DLNA_CB_OPEN_SECONDS", 20.0),
     min_v=0.1,
 )
-# ============================================================
-# ✅ NUEVO: WIKI circuit breaker suave (Wikipedia/Wikidata + WDQS)
-# ============================================================
-# Política:
-# - WIKI_CB_FAIL_THRESHOLD: nº de fallos antes de abrir el breaker.
-# - WIKI_CB_COOLDOWN_SECONDS: cuánto tiempo permanece abierto (fail-fast).
-# - Se usan por backend/wiki_client.py para cb_name="wiki" y cb_name="wdqs".
-#
-# Defaults defensivos:
-# - threshold=5 (evita trips por flukes)
-# - cooldown=~100s por defecto (10s timeout * 10), pero configurable.
 
+# ============================================================
+# ✅ WIKI circuit breaker suave (compat + nombres nuevos)
+# ============================================================
+# Este bloque expone:
+# - Nombres "nuevos" (los que importan en wiki_client.py):
+#     WIKI_CB_FAILURE_THRESHOLD
+#     WIKI_CB_OPEN_SECONDS
+#     WIKI_WDQS_CB_FAILURE_THRESHOLD
+#     WIKI_WDQS_CB_OPEN_SECONDS
+# - Y mantiene los "antiguos" para no romper nada:
+#     WIKI_CB_FAIL_THRESHOLD
+#     WIKI_CB_COOLDOWN_SECONDS
+#
+# Preferencia:
+# - Si existe env var con nombre nuevo => se usa.
+# - Si no, se usa la env var antigua.
+# - Si ninguna, defaults defensivos.
+
+# Antiguos (se conservan)
 WIKI_CB_FAIL_THRESHOLD: int = _cap_int(
     "WIKI_CB_FAIL_THRESHOLD",
     _get_env_int("WIKI_CB_FAIL_THRESHOLD", 5),
@@ -901,15 +917,39 @@ WIKI_CB_COOLDOWN_SECONDS: float = _cap_float_min(
     _get_env_float("WIKI_CB_COOLDOWN_SECONDS", max(5.0, float(WIKI_HTTP_TIMEOUT_SECONDS) * 10.0)),
     min_v=0.1,
 )
+
+# Nuevos (los que usa wiki_client.py) — fallback a los antiguos
+WIKI_CB_FAILURE_THRESHOLD: int = _cap_int(
+    "WIKI_CB_FAILURE_THRESHOLD",
+    _get_env_int("WIKI_CB_FAILURE_THRESHOLD", WIKI_CB_FAIL_THRESHOLD),
+    min_v=1,
+    max_v=50,
+)
+
+WIKI_CB_OPEN_SECONDS: float = _cap_float_min(
+    "WIKI_CB_OPEN_SECONDS",
+    _get_env_float("WIKI_CB_OPEN_SECONDS", float(WIKI_CB_COOLDOWN_SECONDS)),
+    min_v=0.1,
+)
+
+# WDQS breaker separado (si no se define, hereda valores del breaker general)
+WIKI_WDQS_CB_FAILURE_THRESHOLD: int = _cap_int(
+    "WIKI_WDQS_CB_FAILURE_THRESHOLD",
+    _get_env_int("WIKI_WDQS_CB_FAILURE_THRESHOLD", int(WIKI_CB_FAILURE_THRESHOLD)),
+    min_v=1,
+    max_v=50,
+)
+
+WIKI_WDQS_CB_OPEN_SECONDS: float = _cap_float_min(
+    "WIKI_WDQS_CB_OPEN_SECONDS",
+    _get_env_float("WIKI_WDQS_CB_OPEN_SECONDS", float(WIKI_CB_OPEN_SECONDS)),
+    min_v=0.1,
+)
+
+
 # ============================================================
 # ✅ NUEVO: DLNA traversal fuses (anti-loop + anti-duplicados)
 # ============================================================
-# Estos límites protegen de:
-# - ciclos en el grafo de contenedores (Plex virtual folders / aliases)
-# - paginación inconsistente (TotalMatches enorme pero páginas vacías)
-# - catálogos gigantes que harían el run interminable
-#
-# Se consumen en collection_analiza_dlna.py (_iter_video_items_recursive).
 
 DLNA_TRAVERSE_MAX_DEPTH: int = _cap_int(
     "DLNA_TRAVERSE_MAX_DEPTH",
@@ -1338,8 +1378,15 @@ _log_config_debug("DLNA_BROWSE_MAX_RETRIES", DLNA_BROWSE_MAX_RETRIES)
 _log_config_debug("DLNA_CB_FAILURE_THRESHOLD", DLNA_CB_FAILURE_THRESHOLD)
 _log_config_debug("DLNA_CB_OPEN_SECONDS", DLNA_CB_OPEN_SECONDS)
 
+# Antiguos (compat)
 _log_config_debug("WIKI_CB_FAIL_THRESHOLD", WIKI_CB_FAIL_THRESHOLD)
 _log_config_debug("WIKI_CB_COOLDOWN_SECONDS", WIKI_CB_COOLDOWN_SECONDS)
+
+# Nuevos (los que usa wiki_client.py)
+_log_config_debug("WIKI_CB_FAILURE_THRESHOLD", WIKI_CB_FAILURE_THRESHOLD)
+_log_config_debug("WIKI_CB_OPEN_SECONDS", WIKI_CB_OPEN_SECONDS)
+_log_config_debug("WIKI_WDQS_CB_FAILURE_THRESHOLD", WIKI_WDQS_CB_FAILURE_THRESHOLD)
+_log_config_debug("WIKI_WDQS_CB_OPEN_SECONDS", WIKI_WDQS_CB_OPEN_SECONDS)
 
 _log_config_debug("DLNA_TRAVERSE_MAX_DEPTH", DLNA_TRAVERSE_MAX_DEPTH)
 _log_config_debug("DLNA_TRAVERSE_MAX_CONTAINERS", DLNA_TRAVERSE_MAX_CONTAINERS)
@@ -1358,6 +1405,8 @@ _log_config_debug("DLNA_DISCOVERY_ALLOW_HINT_TOKENS", DLNA_DISCOVERY_ALLOW_HINT_
 _log_config_debug("WIKI_LANGUAGE", WIKI_LANGUAGE)
 _log_config_debug("WIKI_FALLBACK_LANGUAGE", WIKI_FALLBACK_LANGUAGE)
 _log_config_debug("WIKI_DEBUG", WIKI_DEBUG)
+
+_log_config_debug("WIKI_DISAMBIGUATION_NEGATIVE_TTL_SECONDS", WIKI_DISAMBIGUATION_NEGATIVE_TTL_SECONDS)
 
 _log_config_debug("REPORTS_DIR", str(REPORTS_DIR_PATH))
 
