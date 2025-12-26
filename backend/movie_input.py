@@ -71,7 +71,7 @@ import re
 import unicodedata
 from typing import Final, Literal, TypeAlias
 
-from backend.config import (
+from backend.config_plex import (
     MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS,
     MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK,
     MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE,

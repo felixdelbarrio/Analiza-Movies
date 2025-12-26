@@ -13,6 +13,7 @@ __pycache__/
 #Ignorar los reportes 
 report_*.csv
 report_*.html
+tmp*
 metadata_*.csv
 run_*.log
 

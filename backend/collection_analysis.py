@@ -65,7 +65,7 @@ from typing import Final, TypeAlias
 
 from backend import logger
 from backend.analyze_input_core import AnalysisRow, analyze_input_movie
-from backend.config import (
+from backend.config_collection import (
     COLLECTION_ENABLE_LAZY_WIKI,
     COLLECTION_LAZY_WIKI_ALLOW_TITLE_YEAR_FALLBACK,
     COLLECTION_LAZY_WIKI_FORCE_OMDB_POST_CORE,
