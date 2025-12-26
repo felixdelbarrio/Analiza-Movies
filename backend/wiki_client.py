@@ -26,6 +26,7 @@ sin wrappers OO (no hay WikiClient / get_wiki_client).
        - ok: TTL largo
        - negativos: TTL más corto
        - imdb->qid negativos: TTL separado y conservador
+       - disambiguation: TTL corto (para no repetir búsquedas ambiguas)
    - Write-back batching: flush por umbral de escrituras sucias o por tiempo.
    - Escritura atómica del JSON (temp + replace).
    - Compaction/GC antes de escribir:
@@ -59,16 +60,18 @@ Cambios aplicados (alineados con lo propuesto)
 - ✅ Concurrencia HTTP real (WIKI_HTTP_MAX_CONCURRENCY):
   - Semáforo global (BoundedSemaphore) compartido por TODAS las llamadas HTTP del módulo.
   - Wrapper _http_get(...) para centralizar acquire/release y mantener “best-effort”.
-  - Si el acquire no ocurre en un timeout razonable, se contabiliza y se lanza RequestException
-    (que ya se maneja como fallo transitorio de red).
-- Excepciones: se estrechan where-safe (RequestException/JSONDecodeError/OSError), manteniendo “best-effort”.
-- Cache load: saneado de índices (elimina rids colgantes) + quarantining opcional en DEBUG.
-- Throttle SPARQL: usa time.monotonic() para intervalos (más robusto que time.time()).
-- Más documentación interna sin tocar la API pública.
+- ✅ Circuit breaker suave (Wiki/WDQS):
+  - Si detectamos racha de fallos (RequestException / 5xx / 429), “abrimos” el breaker un rato.
+  - Mientras está abierto, evitamos nuevos requests (fallo rápido) para proteger el run y al proveedor.
+  - Se cierra automáticamente tras el cooldown. Se resetea en éxito.
+- ✅ Negative caching explícito para disambiguation:
+  - Si Wikipedia REST devuelve type=disambiguation, guardamos un item negativo status="disambiguation"
+    con TTL corto, evitando repetir búsquedas ambiguas en runs futuros.
+  - No “congelamos” fallos de red como negativos.
 
 Notas
 -----
-- “Best-effort”: puede devolver None si hay fallos transitorios de red.
+- “Best-effort”: puede devolver None si hay fallos transitorios de red o breaker abierto.
   (No cacheamos fallos de red como negativos para no “congelar” errores.)
 - ThreadPool safe: locks globales alrededor de IO y mutaciones del cache.
 - SPARQL throttle global con lock (evita tormentas de requests concurrentes).
@@ -106,7 +109,7 @@ from backend.config import (
     WIKI_CACHE_TTL_NEGATIVE_SECONDS,
     WIKI_CACHE_TTL_OK_SECONDS,
     WIKI_FALLBACK_LANGUAGE,
-    WIKI_HTTP_MAX_CONCURRENCY,  # ✅ NUEVO (productivo)
+    WIKI_HTTP_MAX_CONCURRENCY,
     WIKI_HTTP_RETRY_BACKOFF_FACTOR,
     WIKI_HTTP_RETRY_TOTAL,
     WIKI_HTTP_TIMEOUT_SECONDS,
@@ -146,7 +149,7 @@ class WikidataBlock(dict):
     """Bloque Wikidata: qid + listas de QIDs."""
 
 
-WikiItemStatus = Literal["ok", "no_qid", "not_film", "imdb_no_qid"]
+WikiItemStatus = Literal["ok", "no_qid", "not_film", "imdb_no_qid", "disambiguation"]
 
 
 class WikiCacheItem(dict):
@@ -161,7 +164,7 @@ class WikiCacheItem(dict):
       - wikidata: WikidataBlock
       - fetched_at: int (epoch seconds)
       - ttl_s: int (seconds)
-      - status: ok | no_qid | not_film | imdb_no_qid
+      - status: ok | no_qid | not_film | imdb_no_qid | disambiguation
     """
 
 
@@ -243,6 +246,11 @@ _TTL_NEGATIVE_S: Final[int] = int(WIKI_CACHE_TTL_NEGATIVE_SECONDS)
 _TTL_IMDB_QID_NEGATIVE_S: Final[int] = int(WIKI_IMDB_QID_NEGATIVE_TTL_SECONDS)
 _TTL_IS_FILM_S: Final[int] = int(WIKI_IS_FILM_TTL_SECONDS)
 
+# TTL específico para disambiguation: corto y defensivo (no bloquea demasiado).
+# - mínimo 5 min
+# - máximo 6h o _TTL_NEGATIVE_S (lo más pequeño)
+_TTL_DISAMBIGUATION_S: Final[int] = max(300, min(int(_TTL_NEGATIVE_S), 6 * 3600))
+
 _FLUSH_MAX_DIRTY_WRITES: Final[int] = max(1, int(WIKI_CACHE_FLUSH_MAX_DIRTY_WRITES))
 _FLUSH_MAX_SECONDS: Final[float] = max(0.1, float(WIKI_CACHE_FLUSH_MAX_SECONDS))
 
@@ -273,14 +281,25 @@ _HTTP_TIMEOUT_SPARQL: Final[tuple[float, float]] = (
 # ----------------------------------------------------------------------------
 # ✅ Concurrencia HTTP real: semáforo global (backpressure a nivel de módulo)
 # ----------------------------------------------------------------------------
-# - Debe estar alineado con el pool de requests/urllib3 para evitar:
-#   (a) serialización oculta por pool pequeño
-#   (b) demasiadas conexiones simultáneas si hay bursts de threads
-# - Nota: no tenemos (aquí) una env específica de "acquire timeout" como OMDb;
-#   aplicamos un timeout razonable derivado del timeout HTTP base (capado).
 _HTTP_POOL_MAXSIZE: Final[int] = _cap_int_runtime(int(WIKI_HTTP_MAX_CONCURRENCY), min_v=1, max_v=128)
 _HTTP_SEMAPHORE_ACQUIRE_TIMEOUT: Final[float] = _cap_float_runtime(float(_HTTP_TIMEOUT) * 3.0, min_v=0.2, max_v=120.0)
 _HTTP_SEM = threading.BoundedSemaphore(_HTTP_POOL_MAXSIZE)
+
+# ----------------------------------------------------------------------------
+# ✅ Circuit breaker suave (Wiki / WDQS)
+# ----------------------------------------------------------------------------
+# Política:
+# - “Wiki” agrupa: Wikipedia REST/API + Wikidata API/entity
+# - “WDQS” es SPARQL (WIKI_WDQS_URL)
+# Umbrales defensivos (sin tocar config.py):
+_CB_FAIL_THRESHOLD: Final[int] = 5
+_CB_COOLDOWN_S: Final[float] = _cap_float_runtime(float(_HTTP_TIMEOUT) * 10.0, min_v=5.0, max_v=300.0)
+
+_CB_LOCK = threading.Lock()
+_CB_STATE: dict[str, dict[str, float | int]] = {
+    "wiki": {"failures": 0, "open_until_mono": 0.0},
+    "wdqs": {"failures": 0, "open_until_mono": 0.0},
+}
 
 
 # ============================================================================
@@ -309,10 +328,16 @@ _METRICS: dict[str, int] = {
     "items_negative_imdb_no_qid": 0,
     "items_negative_no_qid": 0,
     "items_negative_not_film": 0,
+    "items_negative_disambiguation": 0,
     "path_imdb": 0,
     "path_title_search": 0,
-    # ✅ NUEVO: backpressure / semáforo
+    # backpressure / semáforo
     "http_semaphore_timeouts": 0,
+    # circuit breaker
+    "cb_open_skips": 0,
+    "cb_trips": 0,
+    "cb_failures": 0,
+    "cb_successes": 0,
 }
 
 
@@ -404,20 +429,63 @@ def log_wiki_metrics_summary(*, force: bool = False) -> None:
 # ============================================================================
 
 def _dbg(msg: object) -> None:
-    """Diagnóstico contextual (gated por DEBUG_MODE en logger)."""
     logger.debug_ctx("WIKI", msg)
 
 
 def _info(msg: str) -> None:
-    """Info solo si no-silent (la policy la manda logger.is_silent_mode())."""
     if logger.is_silent_mode():
         return
     logger.info(msg)
 
 
 def _err(msg: str) -> None:
-    """Error siempre visible."""
     logger.error(msg, always=True)
+
+
+# ============================================================================
+# Circuit breaker helpers
+# ============================================================================
+
+def _cb_is_open(name: str) -> bool:
+    with _CB_LOCK:
+        st = _CB_STATE.get(name)
+        if not st:
+            return False
+        open_until = float(st.get("open_until_mono", 0.0) or 0.0)
+        return time.monotonic() < open_until
+
+
+def _cb_on_success(name: str) -> None:
+    with _CB_LOCK:
+        st = _CB_STATE.get(name)
+        if not st:
+            return
+        st["failures"] = 0
+        st["open_until_mono"] = 0.0
+    _m_inc("cb_successes", 1)
+
+
+def _cb_on_failure(name: str, *, reason: str) -> None:
+    trip = False
+    open_until = 0.0
+    failures = 0
+    with _CB_LOCK:
+        st = _CB_STATE.get(name)
+        if not st:
+            return
+        failures = int(st.get("failures", 0) or 0) + 1
+        st["failures"] = failures
+        if failures >= _CB_FAIL_THRESHOLD:
+            trip = True
+            open_until = time.monotonic() + float(_CB_COOLDOWN_S)
+            st["open_until_mono"] = open_until
+            st["failures"] = 0  # reset tras trip (cooldown)
+    _m_inc("cb_failures", 1)
+    if trip:
+        _m_inc("cb_trips", 1)
+        _dbg(f"CB TRIP [{name}] cooldown={_CB_COOLDOWN_S:.1f}s reason={reason} failures={failures}")
+    else:
+        _dbg(f"CB FAIL [{name}] reason={reason} failures={failures}/{_CB_FAIL_THRESHOLD}")
 
 
 # ============================================================================
@@ -429,14 +497,12 @@ def _get_session() -> requests.Session:
     requests.Session singleton con Retry y pooling.
 
     Pooling (requests/urllib3):
-    - Para evitar serialización oculta bajo ThreadPool, dimensionamos el pool con
-      WIKI_HTTP_MAX_CONCURRENCY.
-    - pool_block=True introduce backpressure (en vez de abrir conexiones infinitas).
-      Esto reduce picos y comportamientos erráticos bajo carga.
+    - pool_maxsize/pool_connections dimensionado por WIKI_HTTP_MAX_CONCURRENCY
+    - pool_block=True introduce backpressure
 
     Concurrencia real:
     - Además del pool, usamos un semáforo global (ver _http_get) para limitar
-      simultaneidad total del módulo. Es “el guardarraíl” que faltaba.
+      simultaneidad total del módulo.
     """
     global _SESSION
     if _SESSION is not None:
@@ -469,7 +535,6 @@ def _get_session() -> requests.Session:
             respect_retry_after_header=True,
         )
 
-        # Pool HTTP (requests/urllib3) dimensionado por config.
         adapter = HTTPAdapter(
             max_retries=retries,
             pool_connections=_HTTP_POOL_MAXSIZE,
@@ -488,34 +553,37 @@ def _http_get(
     *,
     params: dict[str, str] | None = None,
     timeout: float | tuple[float, float] | None = None,
+    cb_name: str = "wiki",
 ) -> requests.Response:
     """
-    Wrapper único para GET.
-
-    Motivo:
-    - requests.Session + pool_maxsize NO limita por sí solo la concurrencia total del módulo,
-      especialmente si hay bursts de threads. El pool puede bloquear, pero este semáforo:
-        1) pone un límite explícito (WIKI_HTTP_MAX_CONCURRENCY)
-        2) nos permite métricas de backpressure (timeouts de acquire)
-        3) mantiene la policy “best-effort” (se traduce en RequestException)
-
-    Política:
-    - Si no se adquiere el semáforo en _HTTP_SEMAPHORE_ACQUIRE_TIMEOUT, se incrementa métrica
-      y se lanza RequestException (que ya se maneja en los callers).
+    Wrapper único para GET:
+    - Semáforo global (WIKI_HTTP_MAX_CONCURRENCY)
+    - Circuit breaker (fallo rápido si está abierto)
     """
+    if _cb_is_open(cb_name):
+        _m_inc("cb_open_skips", 1)
+        raise RequestException(f"WIKI circuit breaker open: {cb_name}")
+
     acquired = _HTTP_SEM.acquire(timeout=_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT)
     if not acquired:
         _m_inc("http_semaphore_timeouts", 1)
         raise RequestException("WIKI HTTP semaphore acquire timeout")
 
     try:
-        return _get_session().get(url, params=params, timeout=timeout)
+        resp = _get_session().get(url, params=params, timeout=timeout)
+        # Consideramos 2xx/3xx como éxito; 429 y 5xx como fallo para breaker.
+        if resp.status_code == 429 or resp.status_code >= 500:
+            _cb_on_failure(cb_name, reason=f"status={resp.status_code}")
+        else:
+            _cb_on_success(cb_name)
+        return resp
+    except RequestException as exc:
+        _cb_on_failure(cb_name, reason=f"exc={type(exc).__name__}")
+        raise
     finally:
         try:
             _HTTP_SEM.release()
         except ValueError:
-            # Ultra defensivo: BoundedSemaphore puede lanzar si se libera de más.
-            # No debería ocurrir; preferimos no romper el run.
             _dbg("HTTP semaphore release ValueError (ignored)")
 
 
@@ -598,12 +666,6 @@ def _mark_dirty_unlocked() -> None:
 # ============================================================================
 
 def _save_cache_file_atomic(cache: WikiCacheFile) -> None:
-    """
-    Escritura atómica:
-    - temp file en el mismo directorio
-    - fsync (best-effort)
-    - replace
-    """
     dirpath = _CACHE_PATH.parent
     dirpath.mkdir(parents=True, exist_ok=True)
 
@@ -628,11 +690,6 @@ def _save_cache_file_atomic(cache: WikiCacheFile) -> None:
 
 
 def _maybe_flush_unlocked(force: bool) -> None:
-    """
-    Flush con batching:
-    - force=True o dirty_writes >= umbral o tiempo desde último flush >= X
-    - compaction/GC antes de persistir
-    """
     global _CACHE_DIRTY, _CACHE_DIRTY_WRITES, _CACHE_LAST_FLUSH_TS, _CACHE
     if _CACHE is None:
         return
@@ -662,7 +719,6 @@ def _maybe_flush_unlocked(force: bool) -> None:
 
 
 def flush_wiki_cache() -> None:
-    """API pública: flush explícito para orquestadores (best-effort)."""
     try:
         with _CACHE_LOCK:
             _maybe_flush_unlocked(force=True)
@@ -671,12 +727,6 @@ def flush_wiki_cache() -> None:
 
 
 def _flush_cache_on_exit() -> None:
-    """
-    Asegura persistencia + resumen de métricas.
-    Orden:
-      1) flush cache
-      2) log métricas
-    """
     try:
         with _CACHE_LOCK:
             _maybe_flush_unlocked(force=True)
@@ -706,10 +756,6 @@ def _empty_cache() -> WikiCacheFile:
 
 
 def _maybe_quarantine_corrupt_cache() -> None:
-    """
-    En DEBUG: renombra el cache corrupto para inspección.
-    En normal: se recrea silenciosamente (fail-safe).
-    """
     if not logger.is_debug_mode():
         return
     try:
@@ -724,14 +770,6 @@ def _maybe_quarantine_corrupt_cache() -> None:
 
 
 def _load_cache_unlocked() -> WikiCacheFile:
-    """
-    Carga cache (singleton) validando estructura.
-    Política v6: schema mismatch => recrear (sin migración).
-
-    Además:
-    - Saneado de índices (elimina rids colgantes).
-    - Compaction best-effort en memoria (sin forzar I/O).
-    """
     global _CACHE, _CACHE_DIRTY, _CACHE_DIRTY_WRITES, _CACHE_LAST_FLUSH_TS
     if _CACHE is not None:
         return _CACHE
@@ -798,7 +836,7 @@ def _load_cache_unlocked() -> WikiCacheFile:
             continue
         if not isinstance(fetched_at, int) or not isinstance(ttl_s, int):
             continue
-        if status not in ("ok", "no_qid", "not_film", "imdb_no_qid"):
+        if status not in ("ok", "no_qid", "not_film", "imdb_no_qid", "disambiguation"):
             continue
 
         records[rid] = WikiCacheItem(
@@ -856,7 +894,6 @@ def _load_cache_unlocked() -> WikiCacheFile:
             continue
         is_film[qid] = IsFilmCacheEntry(is_film=is_film_val, fetched_at=fetched_at, ttl_s=ttl_s)
 
-    # Saneado: elimina índices que apuntan a rid inexistente.
     index_imdb = {k: rid for k, rid in index_imdb.items() if rid in records}
     index_ty = {k: rid for k, rid in index_ty.items() if rid in records}
 
@@ -885,13 +922,6 @@ def _load_cache_unlocked() -> WikiCacheFile:
 # ============================================================================
 
 def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
-    """
-    GC best-effort:
-    - elimina expirados
-    - caps records / imdb_qid / is_film / entities
-    - rebuild índices coherentes
-    - prune entities a QIDs realmente referenciados
-    """
     try:
         now_epoch = _now_epoch()
 
@@ -922,7 +952,6 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
 
         cache["records"] = records
 
-        # rebuild índices desde records (source of truth)
         index_imdb: dict[str, str] = {}
         index_ty: dict[str, str] = {}
         for rid, it in records.items():
@@ -978,7 +1007,6 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
             is_film = dict(ranked[:_COMPACT_MAX_IS_FILM])
         cache["is_film"] = is_film
 
-        # referenced QIDs
         referenced_qids: set[str] = set()
         for it in records.values():
             wikidata_block = it.get("wikidata")
@@ -1121,6 +1149,13 @@ def _canon_cmp(text: str) -> str:
 # Wikipedia REST + Search
 # ============================================================================
 
+class _WikiDisambiguationError(Exception):
+    def __init__(self, *, title: str, language: str) -> None:
+        super().__init__(f"Wikipedia disambiguation: {language}:{title}")
+        self.title = title
+        self.language = language
+
+
 def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str, object] | None:
     _m_inc("wikipedia_summary_calls", 1)
 
@@ -1131,7 +1166,7 @@ def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str,
     _dbg(f"wikipedia.summary -> lang={language} title={title!r}")
 
     try:
-        resp = _http_get(url, timeout=_HTTP_TIMEOUT)
+        resp = _http_get(url, timeout=_HTTP_TIMEOUT, cb_name="wiki")
     except RequestException as exc:
         _m_inc("wikipedia_failures", 1)
         _dbg(f"wikipedia.summary EXC: {exc!r}")
@@ -1154,8 +1189,8 @@ def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str,
         return None
 
     if _safe_str(data.get("type")) == "disambiguation":
-        _dbg("wikipedia.summary -> disambiguation (skip)")
-        return None
+        _dbg("wikipedia.summary -> disambiguation")
+        raise _WikiDisambiguationError(title=title, language=language)
 
     return data
 
@@ -1176,7 +1211,7 @@ def _wikipedia_search(*, query: str, language: str, limit: int = 8) -> list[dict
     _dbg(f"wikipedia.search -> lang={language} q={query!r}")
 
     try:
-        resp = _http_get(url, params=params, timeout=_HTTP_TIMEOUT)
+        resp = _http_get(url, params=params, timeout=_HTTP_TIMEOUT, cb_name="wiki")
     except RequestException as exc:
         _m_inc("wikipedia_failures", 1)
         _dbg(f"wikipedia.search EXC: {exc!r}")
@@ -1307,7 +1342,7 @@ def _fetch_wikidata_entity_json(qid: str) -> Mapping[str, object] | None:
     _dbg(f"wikidata.entity -> qid={qid}")
 
     try:
-        resp = _http_get(url, timeout=_HTTP_TIMEOUT)
+        resp = _http_get(url, timeout=_HTTP_TIMEOUT, cb_name="wiki")
     except RequestException as exc:
         _m_inc("wikidata_failures", 1)
         _dbg(f"wikidata.entity EXC: {exc!r}")
@@ -1396,7 +1431,7 @@ def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: st
         }
 
         try:
-            resp = _http_get(str(WIKI_WIKIDATA_API_BASE_URL), params=params, timeout=_HTTP_TIMEOUT)
+            resp = _http_get(str(WIKI_WIKIDATA_API_BASE_URL), params=params, timeout=_HTTP_TIMEOUT, cb_name="wiki")
         except RequestException as exc:
             _m_inc("wikidata_failures", 1)
             _dbg(f"wikidata.labels EXC: {exc!r}")
@@ -1456,10 +1491,6 @@ def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: st
 # ============================================================================
 
 def _sparql_throttle() -> None:
-    """
-    Throttle global para WDQS.
-    - Usa monotonic para intervalos (no se ve afectado por cambios de reloj).
-    """
     global _LAST_SPARQL_MONO
     if _SPARQL_MIN_INTERVAL_S <= 0.0:
         return
@@ -1483,7 +1514,7 @@ def _wikidata_sparql(query: str) -> Mapping[str, object] | None:
     _dbg(f"wikidata.sparql -> len={len(query)}")
 
     try:
-        resp = _http_get(str(WIKI_WDQS_URL), params=params, timeout=_HTTP_TIMEOUT_SPARQL)
+        resp = _http_get(str(WIKI_WDQS_URL), params=params, timeout=_HTTP_TIMEOUT_SPARQL, cb_name="wdqs")
     except RequestException as exc:
         _m_inc("sparql_failures", 1)
         _dbg(f"wikidata.sparql EXC: {exc!r}")
@@ -1707,12 +1738,6 @@ def _rid_for_item(item: WikiCacheItem) -> str:
 
 
 def _store_item_unlocked(cache: WikiCacheFile, item: WikiCacheItem) -> None:
-    """
-    Inserta/actualiza un record:
-    - records[rid] = item
-    - index_ty / index_imdb apuntan a rid
-    - batching flush
-    """
     rid = _rid_for_item(item)
     cache["records"][rid] = item
 
@@ -1765,10 +1790,18 @@ def _build_negative_item(
     _m_inc("items_negative", 1)
     if status == "imdb_no_qid":
         _m_inc("items_negative_imdb_no_qid", 1)
+        ttl = int(_TTL_NEGATIVE_S)
     elif status == "no_qid":
         _m_inc("items_negative_no_qid", 1)
+        ttl = int(_TTL_NEGATIVE_S)
     elif status == "not_film":
         _m_inc("items_negative_not_film", 1)
+        ttl = int(_TTL_NEGATIVE_S)
+    elif status == "disambiguation":
+        _m_inc("items_negative_disambiguation", 1)
+        ttl = int(_TTL_DISAMBIGUATION_S)
+    else:
+        ttl = int(_TTL_NEGATIVE_S)
 
     return WikiCacheItem(
         Title=norm_title,
@@ -1777,7 +1810,7 @@ def _build_negative_item(
         wiki=wiki_block,
         wikidata=wikidata_block,
         fetched_at=now_epoch,
-        ttl_s=int(_TTL_NEGATIVE_S),
+        ttl_s=ttl,
         status=status,
     )
 
@@ -1934,7 +1967,25 @@ def _get_wiki_impl(
 
         chain = _detect_language_chain_from_input(movie_input)
         sl_title, sl_lang = _pick_best_sitelink_title(wd_entity, chain)
-        wiki_raw = _fetch_wikipedia_summary_by_title(sl_title, sl_lang) if sl_title else None
+
+        wiki_raw: Mapping[str, object] | None = None
+        try:
+            wiki_raw = _fetch_wikipedia_summary_by_title(sl_title, sl_lang) if sl_title else None
+        except _WikiDisambiguationError:
+            # Negative caching explícito (TTL corto) para evitar repetir ambigüedades.
+            dis = _build_negative_item(
+                norm_title=norm_title,
+                norm_year=norm_year,
+                imdb_id=imdb_norm,
+                status="disambiguation",
+                wikibase_item=qid,
+                primary_language=primary,
+                fallback_language=fallback,
+            )
+            with _CACHE_LOCK:
+                cache = _load_cache_unlocked()
+                _store_item_unlocked(cache, dis)
+            return dis
 
         with _CACHE_LOCK:
             cache = _load_cache_unlocked()
@@ -1952,7 +2003,6 @@ def _get_wiki_impl(
                 _store_item_unlocked(cache, neg_nf)
                 return neg_nf
 
-            # Si no hay summary, best-effort: no “congelamos” como negativo.
             if wiki_raw is None:
                 return None
 
@@ -1985,7 +2035,23 @@ def _get_wiki_impl(
     _dbg(f"candidates={len(candidates)} primary={primary} fallback={fallback}")
 
     for cand_title, cand_lang in candidates:
-        wiki_raw = _fetch_wikipedia_summary_by_title(cand_title, cand_lang)
+        try:
+            wiki_raw = _fetch_wikipedia_summary_by_title(cand_title, cand_lang)
+        except _WikiDisambiguationError:
+            dis2 = _build_negative_item(
+                norm_title=norm_title,
+                norm_year=norm_year,
+                imdb_id=None,
+                status="disambiguation",
+                wikibase_item=None,
+                primary_language=primary,
+                fallback_language=fallback,
+            )
+            with _CACHE_LOCK:
+                cache = _load_cache_unlocked()
+                _store_item_unlocked(cache, dis2)
+            return dis2
+
         if wiki_raw is None:
             continue
 
@@ -2034,7 +2100,6 @@ def _get_wiki_impl(
             _store_item_unlocked(cache, ok_item2)
             return ok_item2
 
-    # Nada encontrado: negative caching (no_qid)
     neg = _build_negative_item(
         norm_title=norm_title,
         norm_year=norm_year,
