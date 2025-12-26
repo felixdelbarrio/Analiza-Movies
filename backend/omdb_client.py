@@ -110,7 +110,7 @@ from requests.exceptions import RequestException  # type: ignore[import-not-foun
 from urllib3.util.retry import Retry  # type: ignore[import-not-found]
 
 from backend import logger as logger
-from backend.config import (
+from backend.config_omdb import (
     ANALIZA_OMDB_CACHE_MAX_INDEX_IMDB,
     ANALIZA_OMDB_CACHE_MAX_INDEX_TY,
     ANALIZA_OMDB_CACHE_MAX_RECORDS,

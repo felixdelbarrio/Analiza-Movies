@@ -62,14 +62,23 @@ from urllib.request import Request, urlopen
 
 from backend import logger as logger
 from backend.collection_analysis import analyze_movie, flush_external_caches
-from backend.config import (
-    DEBUG_MODE,
+from backend.config_reports import (
     METADATA_FIX_PATH,
-    OMDB_HTTP_MAX_CONCURRENCY,
-    OMDB_HTTP_MIN_INTERVAL_SECONDS,
-    PLEX_ANALYZE_WORKERS,
     REPORT_ALL_PATH,
     REPORT_FILTERED_PATH,
+)
+
+from backend.config_omdb import (
+    OMDB_HTTP_MAX_CONCURRENCY,
+    OMDB_HTTP_MIN_INTERVAL_SECONDS,
+)
+
+from backend.config_plex import (
+    PLEX_ANALYZE_WORKERS,
+)
+
+from backend.config_base import (
+    DEBUG_MODE,
     SILENT_MODE,
 )
 from backend.decision_logic import sort_filtered_rows

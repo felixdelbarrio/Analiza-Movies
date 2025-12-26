@@ -40,11 +40,14 @@ from collections.abc import Mapping
 from typing import Final
 
 from backend import logger as _logger
-from backend.config import (
-    DEBUG_MODE,
+from backend.config_scoring import (
     IMDB_MIN_VOTES_FOR_KNOWN,
     IMDB_RATING_LOW_THRESHOLD,
     RT_RATING_LOW_THRESHOLD,
+)
+
+from backend.config_base import (
+    DEBUG_MODE,
     SILENT_MODE,
 )
 
