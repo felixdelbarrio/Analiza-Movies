@@ -38,7 +38,10 @@ from typing import Literal
 from backend import logger as logger
 from backend.analiza_dlna import analyze_dlna_server
 from backend.analiza_plex import analyze_all_libraries
-from backend.config import DEBUG_MODE, SILENT_MODE
+from backend.config_base import (
+    DEBUG_MODE,
+    SILENT_MODE,
+)
 from backend.dlna_discovery import DLNADevice, discover_dlna_devices
 
 Choice = Literal["1", "2"]
