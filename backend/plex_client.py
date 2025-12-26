@@ -50,18 +50,20 @@ import requests  # type: ignore[import-not-found]
 from plexapi.server import PlexServer  # type: ignore[import-not-found]
 
 from backend import logger as _logger
-from backend.config import (
+from backend.config_plex import (
     BASEURL,
-    DEBUG_MODE,
     EXCLUDE_PLEX_LIBRARIES,
     PLEX_PORT,
     PLEX_TOKEN,
-    SILENT_MODE,
     # ✅ ya están en config.py: sin try/except
     PLEX_METRICS_ENABLED,
     PLEX_METRICS_TOP_N,
     PLEX_METRICS_LOG_ON_SILENT_DEBUG,
     PLEX_METRICS_LOG_EVEN_IF_ZERO,
+)
+from backend.config_base import (
+    DEBUG_MODE,
+    SILENT_MODE,
 )
 
 # ============================================================

@@ -30,7 +30,7 @@ from typing import Final
 import pandas as pd
 
 from backend import logger as _logger
-from backend.config import (
+from backend.config_scoring import (
     AUTO_DELETE_RATING_PERCENTILE,
     AUTO_KEEP_RATING_PERCENTILE,
     BAYES_GLOBAL_MEAN_DEFAULT,
