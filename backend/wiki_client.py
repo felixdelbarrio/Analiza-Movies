@@ -3,62 +3,30 @@ from __future__ import annotations
 """
 backend/wiki_client.py (schema v6)
 
-Cliente “best-effort” para enriquecer títulos con Wikipedia/Wikidata con caché persistente,
-sin wrappers OO (no hay WikiClient / get_wiki_client).
+Cliente best-effort para enriquecer títulos con Wikipedia/Wikidata con caché persistente,
+sin wrapper OO.
 
-✅ Objetivos (v6)
-----------------
-1) API estable y simple:
-   - get_wiki(title, year, imdb_id) -> WikiCacheItem | None
-   - get_wiki_for_input(movie_input, title, year, imdb_id) -> WikiCacheItem | None
-   - flush_wiki_cache() -> None   (para flush_external_caches() en el orquestador)
+API pública:
+  - get_wiki(title, year, imdb_id) -> WikiCacheItem | None
+  - get_wiki_for_input(movie_input, title, year, imdb_id) -> WikiCacheItem | None
+  - flush_wiki_cache() -> None
+  - métricas: get_wiki_metrics_snapshot / reset_wiki_metrics / log_wiki_metrics_summary
 
-2) Negative caching REAL (persistente + TTL):
-   - Si NO encontramos QID o el QID NO parece film -> guardamos item negativo (status != "ok")
-   - Evita repetir SPARQL / Wikipedia calls caros en futuros runs.
+Diseño (resumen):
+  - Caché persistente en JSON (schema v6) con escritura atómica.
+  - Índices por imdbID y por (Title|Year).
+  - Single-flight: evita duplicar llamadas concurrentes por misma key (imdb o title/year).
+  - SWR (stale-while-revalidate): si un "ok" expira, puede servirse durante una grace window
+    y se programa un refresh asíncrono.
+  - Circuit breaker suave para:
+      * "wiki" (Wikipedia REST/API + Wikidata API)
+      * "wdqs" (Wikidata Query Service / SPARQL)
+  - Throttle global para SPARQL.
+  - JSON de cache configurable via config_wiki.py:
+      * WIKI_CACHE_JSON_PRETTY (bool)
+      * WIKI_CACHE_JSON_INDENT (int)
 
-3) Rendimiento / robustez:
-   - Schema v6 optimizado: records + indexes (sin duplicación imdb:* y ty:* apuntando al mismo dict)
-       - records[rid] -> WikiCacheItem (1 record por película)
-       - index_imdb[imdb_id] -> rid
-       - index_ty["<norm_title>|<norm_year>"] -> rid
-   - TTL por estado:
-       - ok: TTL largo
-       - negativos: TTL más corto
-       - imdb->qid negativos: TTL separado y conservador
-   - Write-back batching: flush por umbral de escrituras sucias o por tiempo.
-   - Escritura atómica del JSON (temp + replace).
-   - Compaction/GC antes de escribir:
-       - elimina expirados
-       - caps (records / imdb_qid / is_film / entities)
-       - rebuild indexes coherentes
-       - prune entities a QIDs realmente referenciados
-
-4) Política de schema:
-   - NO migración automática.
-   - schema mismatch => cache vacío.
-
-5) Logs alineados con backend/logger.py:
-   - NO prints.
-   - Debug contextual SOLO con logger.debug_ctx("WIKI", ...).
-   - Info SOLO si NO silent y aporta valor.
-   - Error siempre visible con logger.error(..., always=True).
-
-✅ Métricas (igual que OMDb / otros módulos):
---------------------------------------------
-- Contadores thread-safe.
-- log_wiki_metrics_summary() con policy:
-  - SILENT_MODE=True y DEBUG_MODE=False -> no imprime (salvo force=True).
-  - SILENT_MODE=True y DEBUG_MODE=True  -> imprime vía progress si WIKI_METRICS_LOG_ON_SILENT_DEBUG=True.
-  - SILENT_MODE=False                  -> imprime vía info.
-  - Si todo está a 0 y WIKI_METRICS_LOG_EVEN_IF_ZERO=False -> no imprime (salvo force=True).
-
-Notas
------
-- “Best-effort”: puede devolver None si hay fallos transitorios de red.
-  (No cacheamos fallos de red como negativos para no “congelar” errores.)
-- ThreadPool safe: locks globales alrededor de IO y mutaciones del cache.
-- SPARQL throttle global con lock (evita tormentas de requests concurrentes).
+NOTA: Este archivo está pensado para pegarse ENTERO (para evitar truncados).
 """
 
 import atexit
@@ -70,111 +38,105 @@ import threading
 import time
 import unicodedata
 from collections.abc import Iterable, Mapping
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Final, Literal, Protocol
 from urllib.parse import quote
 
 import requests
 from requests.adapters import HTTPAdapter
+from requests.exceptions import RequestException
 from urllib3.util.retry import Retry
 
 from backend import logger
-from backend.config import (
-    # Paths / idioma
-    WIKI_CACHE_PATH,
-    WIKI_LANGUAGE,
-    WIKI_FALLBACK_LANGUAGE,
-    # Throttle / TTLs
-    WIKI_SPARQL_MIN_INTERVAL_SECONDS,
-    WIKI_CACHE_TTL_OK_SECONDS,
-    WIKI_CACHE_TTL_NEGATIVE_SECONDS,
-    WIKI_IMDB_QID_NEGATIVE_TTL_SECONDS,
-    WIKI_IS_FILM_TTL_SECONDS,
-    # Write-back batching
-    WIKI_CACHE_FLUSH_MAX_DIRTY_WRITES,
-    WIKI_CACHE_FLUSH_MAX_SECONDS,
-    # Compaction caps
-    ANALIZA_WIKI_CACHE_MAX_RECORDS,
+from backend.config_wiki import (
+    ANALIZA_WIKI_CACHE_MAX_ENTITIES,
     ANALIZA_WIKI_CACHE_MAX_IMDB_QID,
     ANALIZA_WIKI_CACHE_MAX_IS_FILM,
-    ANALIZA_WIKI_CACHE_MAX_ENTITIES,
-    # Debug extra
+    ANALIZA_WIKI_CACHE_MAX_RECORDS,
     ANALIZA_WIKI_DEBUG,
-    # ✅ métricas
-    WIKI_METRICS_ENABLED,
-    WIKI_METRICS_TOP_N,
-    WIKI_METRICS_LOG_ON_SILENT_DEBUG,
-    WIKI_METRICS_LOG_EVEN_IF_ZERO,
-    # ✅ NUEVO: centralización HTTP / endpoints
-    WIKI_HTTP_USER_AGENT,
+    WIKI_CACHE_FLUSH_MAX_DIRTY_WRITES,
+    WIKI_CACHE_FLUSH_MAX_SECONDS,
+    WIKI_CACHE_JSON_INDENT,
+    WIKI_CACHE_JSON_PRETTY,
+    WIKI_CACHE_PATH,
+    WIKI_CACHE_SWR_OK_GRACE_SECONDS,
+    WIKI_CACHE_TTL_NEGATIVE_SECONDS,
+    WIKI_CACHE_TTL_OK_SECONDS,
+    WIKI_CB_FAILURE_THRESHOLD,
+    WIKI_CB_OPEN_SECONDS,
+    WIKI_DISAMBIGUATION_NEGATIVE_TTL_SECONDS,
+    WIKI_FALLBACK_LANGUAGE,
+    WIKI_HTTP_MAX_CONCURRENCY,
+    WIKI_HTTP_RETRY_BACKOFF_FACTOR,
+    WIKI_HTTP_RETRY_TOTAL,
     WIKI_HTTP_TIMEOUT_SECONDS,
+    WIKI_HTTP_USER_AGENT,
+    WIKI_IMDB_QID_NEGATIVE_TTL_SECONDS,
+    WIKI_IS_FILM_TTL_SECONDS,
+    WIKI_LANGUAGE,
+    WIKI_METRICS_ENABLED,
+    WIKI_METRICS_LOG_EVEN_IF_ZERO,
+    WIKI_METRICS_LOG_ON_SILENT_DEBUG,
+    WIKI_METRICS_TOP_N,
+    WIKI_SEARCH_CANDIDATES_MAX_ENTRIES,
+    WIKI_SEARCH_CANDIDATES_TTL_SECONDS,
+    WIKI_SINGLEFLIGHT_WAIT_SECONDS,
+    WIKI_SPARQL_MIN_INTERVAL_SECONDS,
     WIKI_SPARQL_TIMEOUT_CONNECT_SECONDS,
     WIKI_SPARQL_TIMEOUT_READ_SECONDS,
-    WIKI_HTTP_RETRY_TOTAL,
-    WIKI_HTTP_RETRY_BACKOFF_FACTOR,
-    WIKI_WIKIPEDIA_REST_BASE_URL,
-    WIKI_WIKIPEDIA_API_BASE_URL,
+    WIKI_WDQS_CB_FAILURE_THRESHOLD,
+    WIKI_WDQS_CB_OPEN_SECONDS,
+    WIKI_WDQS_URL,
     WIKI_WIKIDATA_API_BASE_URL,
     WIKI_WIKIDATA_ENTITY_BASE_URL,
-    WIKI_WDQS_URL,
+    WIKI_WIKIPEDIA_API_BASE_URL,
+    WIKI_WIKIPEDIA_REST_BASE_URL,
 )
 from backend.movie_input import normalize_title_for_lookup
 
 
-# ============================================================================
-# Tipos: dict-like (compatibilidad con el pipeline)
-# ============================================================================
+# =============================================================================
+# Tipos dict-like
+# =============================================================================
 
 class WikidataEntity(dict):
     """Entidad etiquetada (qid -> label/description/type)."""
 
-
 class WikiBlock(dict):
     """Bloque Wikipedia (REST summary) normalizado."""
-
 
 class WikidataBlock(dict):
     """Bloque Wikidata: qid + listas de QIDs."""
 
-
-WikiItemStatus = Literal["ok", "no_qid", "not_film", "imdb_no_qid"]
-
+WikiItemStatus = Literal["ok", "no_qid", "not_film", "imdb_no_qid", "disambiguation"]
 
 class WikiCacheItem(dict):
     """
-    Entrada principal cacheable (records[rid]).
-
-    Campos esperados:
-      - Title: str (normalize_title_for_lookup)
-      - Year: str ("" si no hay año)
-      - imdbID: str | None (lowercase)
-      - wiki: WikiBlock
-      - wikidata: WikidataBlock
-      - fetched_at: int (epoch seconds)
-      - ttl_s: int (seconds)
-      - status: ok | no_qid | not_film | imdb_no_qid
+    Entrada principal cacheable.
+      - Title, Year, imdbID
+      - wiki, wikidata
+      - fetched_at, ttl_s, status
     """
-
 
 class ImdbQidCacheEntry(dict):
     """Cache imdbID -> QID (P345), con negative caching (qid=None)."""
 
-
 class IsFilmCacheEntry(dict):
     """Cache QID -> is_film (heurística rápida, persistente)."""
-
 
 class WikiCacheFile(dict):
     """
     Schema v6:
       - schema, language, fallback_language
       - records, index_imdb, index_ty, entities, imdb_qid, is_film
+      - search_cache (opcional)
     """
 
 
-# ============================================================================
-# Protocol para idioma por item (evita acoplamiento fuerte)
-# ============================================================================
+# =============================================================================
+# Protocol idioma por item
+# =============================================================================
 
 class MovieInputLangProto(Protocol):
     def plex_library_language(self) -> str | None: ...
@@ -187,9 +149,44 @@ class MovieInputLangProto(Protocol):
     def is_chinese_context(self) -> bool: ...
 
 
-# ============================================================================
+# =============================================================================
+# Utils runtime caps (defensivo: config ya capea, pero aquí evitamos valores absurdos)
+# =============================================================================
+
+def _cap_int_runtime(value: int, *, min_v: int, max_v: int) -> int:
+    if value < min_v:
+        return min_v
+    if value > max_v:
+        return max_v
+    return value
+
+def _cap_float_runtime(value: float, *, min_v: float, max_v: float | None = None) -> float:
+    if value < min_v:
+        return min_v
+    if max_v is not None and value > max_v:
+        return max_v
+    return value
+
+
+# =============================================================================
+# Logging centralizado
+# =============================================================================
+
+def _log_debug(msg: object) -> None:
+    logger.debug_ctx("WIKI", msg)
+
+def _log_info(msg: str) -> None:
+    if logger.is_silent_mode():
+        return
+    logger.info(msg)
+
+def _log_error(msg: str, *, always: bool = True) -> None:
+    logger.error(msg, always=always)
+
+
+# =============================================================================
 # Constantes / estado interno
-# ============================================================================
+# =============================================================================
 
 _SCHEMA_VERSION: Final[int] = 6
 _CACHE_PATH: Final[Path] = Path(WIKI_CACHE_PATH)
@@ -204,14 +201,21 @@ _CACHE_DIRTY: bool = False
 _CACHE_DIRTY_WRITES: int = 0
 _CACHE_LAST_FLUSH_TS: float = 0.0
 
-_LAST_SPARQL_TS: float = 0.0
+_LAST_SPARQL_MONO: float = 0.0
 _SPARQL_THROTTLE_LOCK = threading.Lock()
-_SPARQL_MIN_INTERVAL_S: Final[float] = float(WIKI_SPARQL_MIN_INTERVAL_SECONDS)
+_SPARQL_MIN_INTERVAL_S: Final[float] = max(0.0, float(WIKI_SPARQL_MIN_INTERVAL_SECONDS))
 
 _TTL_OK_S: Final[int] = int(WIKI_CACHE_TTL_OK_SECONDS)
 _TTL_NEGATIVE_S: Final[int] = int(WIKI_CACHE_TTL_NEGATIVE_SECONDS)
+_TTL_DISAMBIG_S: Final[int] = int(WIKI_DISAMBIGUATION_NEGATIVE_TTL_SECONDS)
 _TTL_IMDB_QID_NEGATIVE_S: Final[int] = int(WIKI_IMDB_QID_NEGATIVE_TTL_SECONDS)
 _TTL_IS_FILM_S: Final[int] = int(WIKI_IS_FILM_TTL_SECONDS)
+
+_SWR_OK_GRACE_S: Final[int] = max(0, int(WIKI_CACHE_SWR_OK_GRACE_SECONDS))
+_SINGLEFLIGHT_WAIT_S: Final[float] = max(0.05, float(WIKI_SINGLEFLIGHT_WAIT_SECONDS))
+
+_SEARCH_CAND_TTL_S: Final[int] = max(60, int(WIKI_SEARCH_CANDIDATES_TTL_SECONDS))
+_SEARCH_CAND_MAX: Final[int] = max(0, int(WIKI_SEARCH_CANDIDATES_MAX_ENTRIES))
 
 _FLUSH_MAX_DIRTY_WRITES: Final[int] = max(1, int(WIKI_CACHE_FLUSH_MAX_DIRTY_WRITES))
 _FLUSH_MAX_SECONDS: Final[float] = max(0.1, float(WIKI_CACHE_FLUSH_MAX_SECONDS))
@@ -230,20 +234,131 @@ _FILM_INSTANCE_ALLOWLIST: Final[set[str]] = {
     "Q226730",  # television film
     "Q93204",   # short film
 }
+_FILM_INSTANCE_DENYLIST: Final[set[str]] = {
+    "Q5398426",  # television series
+    "Q7725634",  # literary work
+    "Q571",      # book
+    "Q8261",     # novel
+    "Q25379",    # episode
+}
 
 _WORD_RE: Final[re.Pattern[str]] = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 
-# Centralizados en config.py
 _HTTP_TIMEOUT: Final[float] = max(0.5, float(WIKI_HTTP_TIMEOUT_SECONDS))
 _HTTP_TIMEOUT_SPARQL: Final[tuple[float, float]] = (
     max(0.5, float(WIKI_SPARQL_TIMEOUT_CONNECT_SECONDS)),
     max(1.0, float(WIKI_SPARQL_TIMEOUT_READ_SECONDS)),
 )
 
+_HTTP_POOL_MAXSIZE: Final[int] = _cap_int_runtime(int(WIKI_HTTP_MAX_CONCURRENCY), min_v=1, max_v=128)
+_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT: Final[float] = _cap_float_runtime(float(_HTTP_TIMEOUT) * 3.0, min_v=0.2, max_v=120.0)
+_HTTP_SEM = threading.BoundedSemaphore(_HTTP_POOL_MAXSIZE)
 
-# ============================================================================
-# MÉTRICAS (ThreadPool safe)
-# ============================================================================
+
+# =============================================================================
+# Circuit breaker suave
+# =============================================================================
+
+class _CircuitBreakerOpen(RequestException):
+    """Excepción interna: el circuito está abierto (no se cuenta como failure)."""
+
+_CB_LOCK = threading.Lock()
+_CB_STATE: dict[str, dict[str, object]] = {
+    "wiki": {"failure_count": 0, "open_until_mono": 0.0},
+    "wdqs": {"failure_count": 0, "open_until_mono": 0.0},
+}
+_CB_THRESH: Final[dict[str, int]] = {
+    "wiki": max(1, int(WIKI_CB_FAILURE_THRESHOLD)),
+    "wdqs": max(1, int(WIKI_WDQS_CB_FAILURE_THRESHOLD)),
+}
+_CB_OPEN_S: Final[dict[str, float]] = {
+    "wiki": max(0.1, float(WIKI_CB_OPEN_SECONDS)),
+    "wdqs": max(0.1, float(WIKI_WDQS_CB_OPEN_SECONDS)),
+}
+
+def _cb_is_open(key: str) -> bool:
+    now = time.monotonic()
+    with _CB_LOCK:
+        st = _CB_STATE.get(key)
+        if not st:
+            return False
+        open_until = float(st.get("open_until_mono") or 0.0)
+        return now < open_until
+
+def _cb_short_circuit(key: str) -> None:
+    # Importante: no debe contarse como "failure"; es una decisión deliberada de proteger servicios.
+    if key == "wiki":
+        _m_inc("cb_short_circuits_wiki", 1)
+    elif key == "wdqs":
+        _m_inc("cb_short_circuits_wdqs", 1)
+    raise _CircuitBreakerOpen(f"WIKI circuit breaker OPEN ({key})")
+
+def _cb_record_success(key: str) -> None:
+    with _CB_LOCK:
+        st = _CB_STATE.get(key)
+        if not st:
+            return
+        st["failure_count"] = 0
+        st["open_until_mono"] = 0.0
+
+def _cb_record_failure(key: str) -> None:
+    thr = _CB_THRESH.get(key, 5)
+    open_s = _CB_OPEN_S.get(key, 20.0)
+    now = time.monotonic()
+
+    with _CB_LOCK:
+        st = _CB_STATE.get(key)
+        if not st:
+            return
+        fc = int(st.get("failure_count") or 0) + 1
+        st["failure_count"] = fc
+
+        if fc >= thr:
+            open_until = float(st.get("open_until_mono") or 0.0)
+            new_until = now + open_s
+            if new_until > open_until:
+                st["open_until_mono"] = new_until
+                if key == "wiki":
+                    _m_inc("cb_open_events_wiki", 1)
+                elif key == "wdqs":
+                    _m_inc("cb_open_events_wdqs", 1)
+                _log_debug(f"CB OPEN ({key}) for {open_s:.1f}s (failures={fc}/{thr})")
+
+
+# =============================================================================
+# Single-flight / SWR
+# =============================================================================
+
+_SINGLEFLIGHT_LOCK = threading.Lock()
+_SINGLEFLIGHT_EVENTS: dict[str, threading.Event] = {}
+
+_REFRESH_IN_FLIGHT_LOCK = threading.Lock()
+_REFRESH_IN_FLIGHT: set[str] = set()
+
+def _request_key(*, imdb_norm: str | None, norm_title: str, norm_year: str) -> str:
+    if imdb_norm:
+        return f"imdb:{imdb_norm}"
+    return f"ty:{norm_title}|{norm_year}"
+
+def _singleflight_enter(key: str) -> tuple[bool, threading.Event]:
+    with _SINGLEFLIGHT_LOCK:
+        ev = _SINGLEFLIGHT_EVENTS.get(key)
+        if ev is not None:
+            return False, ev
+        ev = threading.Event()
+        _SINGLEFLIGHT_EVENTS[key] = ev
+        return True, ev
+
+def _singleflight_leave(key: str) -> None:
+    with _SINGLEFLIGHT_LOCK:
+        ev = _SINGLEFLIGHT_EVENTS.pop(key, None)
+    if ev is not None:
+        ev.set()
+
+
+# =============================================================================
+# Métricas
+# =============================================================================
 
 _METRICS_LOCK = threading.Lock()
 _METRICS: dict[str, int] = {
@@ -253,6 +368,9 @@ _METRICS: dict[str, int] = {
     "cache_flush_writes": 0,
     "cache_compactions": 0,
     "cache_expired_hits": 0,
+    "cache_stale_served": 0,
+    "singleflight_waits": 0,
+    "singleflight_wait_timeouts": 0,
     "wikipedia_summary_calls": 0,
     "wikipedia_search_calls": 0,
     "wikipedia_failures": 0,
@@ -267,40 +385,47 @@ _METRICS: dict[str, int] = {
     "items_negative_imdb_no_qid": 0,
     "items_negative_no_qid": 0,
     "items_negative_not_film": 0,
+    "items_negative_disambiguation": 0,
     "path_imdb": 0,
     "path_title_search": 0,
+    "http_semaphore_timeouts": 0,
+    "cb_short_circuits_wiki": 0,
+    "cb_short_circuits_wdqs": 0,
+    "cb_open_events_wiki": 0,
+    "cb_open_events_wdqs": 0,
+    "items_ok_with_directors": 0,
+    "items_ok_with_genres": 0,
+    "items_ok_with_countries": 0,
+    "items_ok_with_images": 0,
+    "items_ok_with_summary": 0,
+    "items_ok_with_description": 0,
 }
-
 
 def _m_inc(key: str, delta: int = 1) -> None:
     with _METRICS_LOCK:
         _METRICS[key] = int(_METRICS.get(key, 0)) + int(delta)
 
-
 def get_wiki_metrics_snapshot() -> dict[str, int]:
     with _METRICS_LOCK:
         return dict(_METRICS)
-
 
 def reset_wiki_metrics() -> None:
     with _METRICS_LOCK:
         for k in list(_METRICS.keys()):
             _METRICS[k] = 0
 
-
 def _metrics_any_nonzero(snapshot: Mapping[str, int]) -> bool:
     try:
         return any(int(v) != 0 for v in snapshot.values())
-    except Exception:
+    except (ValueError, TypeError):
         return True
-
 
 def _format_metrics_top(snapshot: Mapping[str, int], top_n: int) -> list[tuple[str, int]]:
     items: list[tuple[str, int]] = []
     for k, v in snapshot.items():
         try:
             iv = int(v)
-        except Exception:
+        except (ValueError, TypeError):
             continue
         if iv == 0:
             continue
@@ -308,12 +433,7 @@ def _format_metrics_top(snapshot: Mapping[str, int], top_n: int) -> list[tuple[s
     items.sort(key=lambda kv: (-kv[1], kv[0]))
     return items[: max(1, int(top_n))]
 
-
 def log_wiki_metrics_summary(*, force: bool = False) -> None:
-    """
-    Log de métricas estilo “otros módulos”.
-    Ver docstring al inicio del fichero para la policy.
-    """
     if not WIKI_METRICS_ENABLED and not force:
         return
 
@@ -333,7 +453,7 @@ def log_wiki_metrics_summary(*, force: bool = False) -> None:
 
     try:
         top_n = int(WIKI_METRICS_TOP_N)
-    except Exception:
+    except (ValueError, TypeError):
         top_n = 12
     top_n = max(1, min(100, top_n))
 
@@ -355,55 +475,11 @@ def log_wiki_metrics_summary(*, force: bool = False) -> None:
             logger.info(ln)
 
 
-# ============================================================================
-# Logging helpers (SIN política propia)
-# ============================================================================
-
-def _dbg(msg: object) -> None:
-    if not logger.is_debug_mode():
-        return
-    logger.debug_ctx("WIKI", msg)
-
-
-def _info(msg: str) -> None:
-    if logger.is_silent_mode():
-        return
-    logger.info(msg)
-
-
-def _err(msg: str) -> None:
-    logger.error(msg, always=True)
-
-
-# ============================================================================
+# =============================================================================
 # Session / HTTP
-# ============================================================================
-
-def _cap_int_runtime(value: int, *, min_v: int, max_v: int) -> int:
-    if value < min_v:
-        return min_v
-    if value > max_v:
-        return max_v
-    return value
-
-
-def _cap_float_runtime(value: float, *, min_v: float, max_v: float | None = None) -> float:
-    if value < min_v:
-        return min_v
-    if max_v is not None and value > max_v:
-        return max_v
-    return value
-
+# =============================================================================
 
 def _get_session() -> requests.Session:
-    """
-    requests.Session singleton con Retry.
-
-    Centralizado en config.py:
-    - User-Agent
-    - retry_total / backoff
-    - timeouts usados por cada request (ver _HTTP_TIMEOUT / _HTTP_TIMEOUT_SPARQL)
-    """
     global _SESSION
     if _SESSION is not None:
         return _SESSION
@@ -434,28 +510,60 @@ def _get_session() -> requests.Session:
             raise_on_status=False,
             respect_retry_after_header=True,
         )
-        adapter = HTTPAdapter(max_retries=retries)
+
+        adapter = HTTPAdapter(
+            max_retries=retries,
+            pool_connections=_HTTP_POOL_MAXSIZE,
+            pool_maxsize=_HTTP_POOL_MAXSIZE,
+            pool_block=True,
+        )
         session.mount("https://", adapter)
         session.mount("http://", adapter)
 
         _SESSION = session
         return session
 
+def _http_get(
+    url: str,
+    *,
+    params: dict[str, str] | None = None,
+    timeout: float | tuple[float, float] | None = None,
+    breaker: Literal["wiki", "wdqs"] = "wiki",
+) -> requests.Response:
+    """
+    GET con:
+      - circuito (antes de salir a red)
+      - semáforo de concurrencia para evitar saturar pool y/o endpoints
+    """
+    if _cb_is_open(breaker):
+        _cb_short_circuit(breaker)
 
-# ============================================================================
-# Helpers generales (defensivos)
-# ============================================================================
+    acquired = _HTTP_SEM.acquire(timeout=_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT)
+    if not acquired:
+        _m_inc("http_semaphore_timeouts", 1)
+        raise RequestException("WIKI HTTP semaphore acquire timeout")
+
+    try:
+        return _get_session().get(url, params=params, timeout=timeout)
+    finally:
+        try:
+            _HTTP_SEM.release()
+        except ValueError:
+            _log_debug("HTTP semaphore release ValueError (ignored)")
+
+
+# =============================================================================
+# Helpers generales
+# =============================================================================
 
 def _now_epoch() -> int:
     return int(time.time())
-
 
 def _safe_str(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     v = value.strip()
     return v or None
-
 
 def _safe_int(value: object) -> int | None:
     if isinstance(value, int):
@@ -471,7 +579,6 @@ def _safe_int(value: object) -> int | None:
         except ValueError:
             return None
     return None
-
 
 def _normalize_lang_code(lang: str) -> str:
     l = lang.strip().lower().replace("_", "-")
@@ -492,17 +599,14 @@ def _normalize_lang_code(lang: str) -> str:
     base = l.split("-", 1)[0]
     return iso_map.get(base, base)
 
-
 def _norm_imdb(imdb_id: str | None) -> str | None:
     if not isinstance(imdb_id, str):
         return None
     v = imdb_id.strip().lower()
     return v or None
 
-
 def _ty_key(norm_title: str, norm_year: str) -> str:
     return f"{norm_title}|{norm_year}"
-
 
 def _is_expired(fetched_at: int, ttl_s: int, now_epoch: int) -> bool:
     if fetched_at <= 0 or ttl_s <= 0:
@@ -510,28 +614,43 @@ def _is_expired(fetched_at: int, ttl_s: int, now_epoch: int) -> bool:
     return (now_epoch - fetched_at) > ttl_s
 
 
+# =============================================================================
+# Cache IO
+# =============================================================================
+
 def _mark_dirty_unlocked() -> None:
     global _CACHE_DIRTY, _CACHE_DIRTY_WRITES
     _CACHE_DIRTY = True
     _CACHE_DIRTY_WRITES += 1
 
-
-# ============================================================================
-# Cache IO (atomic write + load/validate)
-# ============================================================================
-
 def _save_cache_file_atomic(cache: WikiCacheFile) -> None:
+    """
+    Escritura atómica:
+      1) dump a tempfile en el mismo directorio
+      2) fsync
+      3) os.replace
+
+    JSON configurable via config_wiki.py:
+      - WIKI_CACHE_JSON_PRETTY: si True, usa indent=WIKI_CACHE_JSON_INDENT
+      - si False, usa separadores compactos (",", ":") para reducir tamaño/IO
+    """
     dirpath = _CACHE_PATH.parent
     dirpath.mkdir(parents=True, exist_ok=True)
+
+    dump_kwargs: dict[str, object] = {"ensure_ascii": False}
+    if bool(WIKI_CACHE_JSON_PRETTY):
+        dump_kwargs["indent"] = max(0, min(8, int(WIKI_CACHE_JSON_INDENT)))
+    else:
+        dump_kwargs["separators"] = (",", ":")
 
     temp_name: str | None = None
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(dirpath)) as tf:
-            json.dump(cache, tf, ensure_ascii=False, indent=2)
+            json.dump(cache, tf, **dump_kwargs)
             tf.flush()
             try:
                 os.fsync(tf.fileno())
-            except Exception:
+            except OSError:
                 pass
             temp_name = tf.name
 
@@ -540,61 +659,8 @@ def _save_cache_file_atomic(cache: WikiCacheFile) -> None:
         if temp_name and os.path.exists(temp_name) and temp_name != str(_CACHE_PATH):
             try:
                 os.remove(temp_name)
-            except Exception:
+            except OSError:
                 pass
-
-
-def _maybe_flush_unlocked(force: bool) -> None:
-    global _CACHE_DIRTY, _CACHE_DIRTY_WRITES, _CACHE_LAST_FLUSH_TS, _CACHE
-    if _CACHE is None:
-        return
-    if not _CACHE_DIRTY and not force:
-        return
-
-    now = time.monotonic()
-    should_flush = force
-    if not should_flush:
-        if _CACHE_DIRTY_WRITES >= _FLUSH_MAX_DIRTY_WRITES:
-            should_flush = True
-        elif (now - _CACHE_LAST_FLUSH_TS) >= _FLUSH_MAX_SECONDS:
-            should_flush = True
-
-    if not should_flush:
-        return
-
-    try:
-        _compact_cache_unlocked(_CACHE, force=force)
-        _save_cache_file_atomic(_CACHE)
-        _CACHE_DIRTY = False
-        _CACHE_DIRTY_WRITES = 0
-        _CACHE_LAST_FLUSH_TS = now
-        _m_inc("cache_flush_writes", 1)
-    except Exception as exc:
-        _dbg(f"cache flush failed: {exc!r}")
-
-
-def flush_wiki_cache() -> None:
-    try:
-        with _CACHE_LOCK:
-            _maybe_flush_unlocked(force=True)
-    except Exception as exc:
-        _dbg(f"flush_wiki_cache failed: {exc!r}")
-
-
-def _flush_cache_on_exit() -> None:
-    try:
-        with _CACHE_LOCK:
-            _maybe_flush_unlocked(force=True)
-    except Exception:
-        pass
-    try:
-        log_wiki_metrics_summary()
-    except Exception:
-        pass
-
-
-atexit.register(_flush_cache_on_exit)
-
 
 def _empty_cache() -> WikiCacheFile:
     return {
@@ -607,8 +673,22 @@ def _empty_cache() -> WikiCacheFile:
         "entities": {},
         "imdb_qid": {},
         "is_film": {},
+        "search_cache": {},
     }
 
+def _maybe_quarantine_corrupt_cache() -> None:
+    # Solo en debug: mover el fichero corrupto a *.corrupt.TIMESTAMP
+    if not logger.is_debug_mode():
+        return
+    try:
+        if not _CACHE_PATH.exists():
+            return
+        ts = int(time.time())
+        bad_path = _CACHE_PATH.with_name(f"{_CACHE_PATH.name}.corrupt.{ts}")
+        os.replace(str(_CACHE_PATH), str(bad_path))
+        _log_debug(f"Quarantined corrupt cache file -> {bad_path.name}")
+    except OSError:
+        return
 
 def _load_cache_unlocked() -> WikiCacheFile:
     global _CACHE, _CACHE_DIRTY, _CACHE_DIRTY_WRITES, _CACHE_LAST_FLUSH_TS
@@ -625,13 +705,15 @@ def _load_cache_unlocked() -> WikiCacheFile:
 
     try:
         raw_obj = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
-    except Exception as exc:
-        _dbg(f"cache read failed ({exc!r}); recreating")
+    except (OSError, JSONDecodeError) as exc:
+        _log_debug(f"cache read failed ({exc!r}); recreating")
+        _maybe_quarantine_corrupt_cache()
         _CACHE = _empty_cache()
         return _CACHE
 
     if not isinstance(raw_obj, Mapping) or raw_obj.get("schema") != _SCHEMA_VERSION:
-        _dbg(f"cache schema mismatch -> recreate (found={raw_obj.get('schema')!r})")
+        found_schema = raw_obj.get("schema") if isinstance(raw_obj, Mapping) else None
+        _log_debug(f"cache schema mismatch -> recreate (found={found_schema!r})")
         _CACHE = _empty_cache()
         return _CACHE
 
@@ -641,6 +723,7 @@ def _load_cache_unlocked() -> WikiCacheFile:
     entities_obj = raw_obj.get("entities")
     imdb_qid_obj = raw_obj.get("imdb_qid")
     is_film_obj = raw_obj.get("is_film")
+    search_cache_obj = raw_obj.get("search_cache")
 
     if (
         not isinstance(records_obj, Mapping)
@@ -675,7 +758,7 @@ def _load_cache_unlocked() -> WikiCacheFile:
             continue
         if not isinstance(fetched_at, int) or not isinstance(ttl_s, int):
             continue
-        if status not in ("ok", "no_qid", "not_film", "imdb_no_qid"):
+        if status not in ("ok", "no_qid", "not_film", "imdb_no_qid", "disambiguation"):
             continue
 
         records[rid] = WikiCacheItem(
@@ -733,6 +816,25 @@ def _load_cache_unlocked() -> WikiCacheFile:
             continue
         is_film[qid] = IsFilmCacheEntry(is_film=is_film_val, fetched_at=fetched_at, ttl_s=ttl_s)
 
+    search_cache: dict[str, dict[str, object]] = {}
+    if isinstance(search_cache_obj, Mapping):
+        for k, v in search_cache_obj.items():
+            if not isinstance(k, str) or not isinstance(v, Mapping):
+                continue
+            fa = v.get("fetched_at")
+            ttl = v.get("ttl_s")
+            titles = v.get("titles")
+            if not isinstance(fa, int) or not isinstance(ttl, int) or not isinstance(titles, list):
+                continue
+            search_cache[k] = {
+                "fetched_at": int(fa),
+                "ttl_s": int(ttl),
+                "titles": [t for t in titles if isinstance(t, str)],
+            }
+
+    index_imdb = {k: rid for k, rid in index_imdb.items() if rid in records}
+    index_ty = {k: rid for k, rid in index_ty.items() if rid in records}
+
     _CACHE = WikiCacheFile(
         schema=_SCHEMA_VERSION,
         language=str(raw_obj.get("language") or WIKI_LANGUAGE),
@@ -743,6 +845,7 @@ def _load_cache_unlocked() -> WikiCacheFile:
         entities=entities,
         imdb_qid=imdb_qid,
         is_film=is_film,
+        search_cache=search_cache,
     )
 
     try:
@@ -752,10 +855,57 @@ def _load_cache_unlocked() -> WikiCacheFile:
 
     return _CACHE
 
+def _maybe_flush_unlocked(force: bool) -> None:
+    global _CACHE_DIRTY, _CACHE_DIRTY_WRITES, _CACHE_LAST_FLUSH_TS, _CACHE
+    if _CACHE is None:
+        return
+    if not _CACHE_DIRTY and not force:
+        return
 
-# ============================================================================
-# Compaction / GC (schema v6)
-# ============================================================================
+    now = time.monotonic()
+    should_flush = force
+    if not should_flush:
+        if _CACHE_DIRTY_WRITES >= _FLUSH_MAX_DIRTY_WRITES:
+            should_flush = True
+        elif (now - _CACHE_LAST_FLUSH_TS) >= _FLUSH_MAX_SECONDS:
+            should_flush = True
+    if not should_flush:
+        return
+
+    try:
+        _compact_cache_unlocked(_CACHE, force=force)
+        _save_cache_file_atomic(_CACHE)
+        _CACHE_DIRTY = False
+        _CACHE_DIRTY_WRITES = 0
+        _CACHE_LAST_FLUSH_TS = now
+        _m_inc("cache_flush_writes", 1)
+    except Exception as exc:
+        _log_debug(f"cache flush failed: {exc!r}")
+
+def flush_wiki_cache() -> None:
+    try:
+        with _CACHE_LOCK:
+            _maybe_flush_unlocked(force=True)
+    except Exception as exc:
+        _log_debug(f"flush_wiki_cache failed: {exc!r}")
+
+def _flush_cache_on_exit() -> None:
+    try:
+        with _CACHE_LOCK:
+            _maybe_flush_unlocked(force=True)
+    except Exception:
+        pass
+    try:
+        log_wiki_metrics_summary()
+    except Exception:
+        pass
+
+atexit.register(_flush_cache_on_exit)
+
+
+# =============================================================================
+# Compaction / GC (SWR-aware)
+# =============================================================================
 
 def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
     try:
@@ -774,13 +924,21 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
             ttl_s = it.get("ttl_s")
             if not isinstance(fetched_at, int) or not isinstance(ttl_s, int):
                 continue
+
             if _is_expired(fetched_at, ttl_s, now_epoch):
-                continue
+                status = it.get("status")
+                if status == "ok" and _SWR_OK_GRACE_S > 0:
+                    age = now_epoch - int(fetched_at)
+                    if age <= (int(ttl_s) + int(_SWR_OK_GRACE_S)):
+                        pass
+                    else:
+                        continue
+                else:
+                    continue
 
             d = dict(it)
             imdb_norm = _norm_imdb(d.get("imdbID") if isinstance(d.get("imdbID"), str) else None)
-            if imdb_norm:
-                d["imdbID"] = imdb_norm
+            d["imdbID"] = imdb_norm
             records[rid] = WikiCacheItem(d)
 
         if _COMPACT_MAX_RECORDS > 0 and len(records) > _COMPACT_MAX_RECORDS:
@@ -879,25 +1037,45 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
             entities = {k: entities[k] for k in keep_keys}
         cache["entities"] = entities
 
+        sc_obj = cache.get("search_cache")
+        sc: dict[str, dict[str, object]] = {}
+        if isinstance(sc_obj, Mapping):
+            for k, v in sc_obj.items():
+                if not isinstance(k, str) or not isinstance(v, Mapping):
+                    continue
+                fa = v.get("fetched_at")
+                ttl = v.get("ttl_s")
+                titles = v.get("titles")
+                if not isinstance(fa, int) or not isinstance(ttl, int) or not isinstance(titles, list):
+                    continue
+                if _is_expired(int(fa), int(ttl), now_epoch):
+                    continue
+                sc[k] = {"fetched_at": int(fa), "ttl_s": int(ttl), "titles": [t for t in titles if isinstance(t, str)]}
+
+        if _SEARCH_CAND_MAX > 0 and len(sc) > _SEARCH_CAND_MAX:
+            ranked = sorted(sc.items(), key=lambda kv: int(kv[1].get("fetched_at", 0)), reverse=True)
+            sc = dict(ranked[:_SEARCH_CAND_MAX])
+        cache["search_cache"] = sc
+
         _m_inc("cache_compactions", 1)
 
         if _WIKI_DEBUG_EXTRA:
-            _dbg(
+            _log_debug(
                 "cache compacted"
                 + (" (force)" if force else "")
                 + f" | records={len(records)} idx_imdb={len(index_imdb)} idx_ty={len(index_ty)} "
-                  f"entities={len(entities)} imdb_qid={len(imdb_qid)} is_film={len(is_film)}"
+                f"entities={len(entities)} imdb_qid={len(imdb_qid)} is_film={len(is_film)} search_cache={len(sc)}"
             )
         else:
-            _dbg(f"cache compacted{' (force)' if force else ''} | records={len(records)} entities={len(entities)}")
+            _log_debug(f"cache compacted{' (force)' if force else ''} | records={len(records)} entities={len(entities)} search_cache={len(sc)}")
 
     except Exception as exc:
-        _dbg(f"cache compaction failed: {exc!r}")
+        _log_debug(f"cache compaction failed: {exc!r}")
 
 
-# ============================================================================
+# =============================================================================
 # Idiomas por item
-# ============================================================================
+# =============================================================================
 
 def _detect_language_chain_from_input(movie_input: MovieInputLangProto | None) -> list[str]:
     chain: list[str] = []
@@ -947,7 +1125,6 @@ def _detect_language_chain_from_input(movie_input: MovieInputLangProto | None) -
             out.append(l)
     return out
 
-
 def _best_wikipedia_languages_for_item(movie_input: MovieInputLangProto | None) -> tuple[str, str]:
     chain = _detect_language_chain_from_input(movie_input)
     primary = chain[0] if chain else (_normalize_lang_code(WIKI_LANGUAGE) or "en")
@@ -967,14 +1144,13 @@ def _best_wikipedia_languages_for_item(movie_input: MovieInputLangProto | None) 
     return primary, fallback
 
 
-# ============================================================================
+# =============================================================================
 # Canonicalización para ranking de búsquedas
-# ============================================================================
+# =============================================================================
 
 def _strip_accents(text: str) -> str:
     norm = unicodedata.normalize("NFKD", text)
     return "".join(ch for ch in norm if not unicodedata.combining(ch))
-
 
 def _canon_cmp(text: str) -> str:
     base = _strip_accents(text).lower()
@@ -982,9 +1158,16 @@ def _canon_cmp(text: str) -> str:
     return " ".join(tokens)
 
 
-# ============================================================================
+# =============================================================================
 # Wikipedia REST + Search
-# ============================================================================
+# =============================================================================
+
+_DISAMBIG_SENTINEL: Final[dict[str, object]] = {"__wiki_disambiguation__": True}
+
+def _is_disambiguation_payload(payload: Mapping[str, object] | None) -> bool:
+    if payload is None:
+        return False
+    return bool(payload.get("__wiki_disambiguation__") is True)
 
 def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str, object] | None:
     _m_inc("wikipedia_summary_calls", 1)
@@ -993,37 +1176,44 @@ def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str,
     base = str(WIKI_WIKIPEDIA_REST_BASE_URL).rstrip("/")
     url = f"{base.format(lang=language)}/page/summary/{safe_title}"
 
-    _dbg(f"wikipedia.summary -> lang={language} title={title!r}")
+    _log_debug(f"wikipedia.summary -> lang={language} title={title!r}")
 
     try:
-        resp = _get_session().get(url, timeout=_HTTP_TIMEOUT)
-    except Exception as exc:
+        resp = _http_get(url, timeout=_HTTP_TIMEOUT, breaker="wiki")
+    except _CircuitBreakerOpen:
+        return None
+    except RequestException as exc:
         _m_inc("wikipedia_failures", 1)
-        _dbg(f"wikipedia.summary EXC: {exc!r}")
+        _cb_record_failure("wiki")
+        _log_debug(f"wikipedia.summary EXC: {exc!r}")
         return None
 
     if resp.status_code != 200:
         _m_inc("wikipedia_failures", 1)
-        _dbg(f"wikipedia.summary <- status={resp.status_code}")
+        _cb_record_failure("wiki")
+        _log_debug(f"wikipedia.summary <- status={resp.status_code}")
         return None
 
     try:
         data = resp.json()
-    except Exception as exc:
+    except (ValueError, JSONDecodeError) as exc:
         _m_inc("wikipedia_failures", 1)
-        _dbg(f"wikipedia.summary JSON EXC: {exc!r}")
+        _cb_record_failure("wiki")
+        _log_debug(f"wikipedia.summary JSON EXC: {exc!r}")
         return None
 
     if not isinstance(data, Mapping):
         _m_inc("wikipedia_failures", 1)
+        _cb_record_failure("wiki")
         return None
 
     if _safe_str(data.get("type")) == "disambiguation":
-        _dbg("wikipedia.summary -> disambiguation (skip)")
-        return None
+        _log_debug("wikipedia.summary -> disambiguation")
+        _cb_record_success("wiki")
+        return _DISAMBIG_SENTINEL
 
+    _cb_record_success("wiki")
     return data
-
 
 def _wikipedia_search(*, query: str, language: str, limit: int = 8) -> list[dict[str, object]]:
     _m_inc("wikipedia_search_calls", 1)
@@ -1038,29 +1228,37 @@ def _wikipedia_search(*, query: str, language: str, limit: int = 8) -> list[dict
     }
     url = str(WIKI_WIKIPEDIA_API_BASE_URL).format(lang=language)
 
-    _dbg(f"wikipedia.search -> lang={language} q={query!r}")
+    _log_debug(f"wikipedia.search -> lang={language} q={query!r}")
 
     try:
-        resp = _get_session().get(url, params=params, timeout=_HTTP_TIMEOUT)
-    except Exception as exc:
+        resp = _http_get(url, params=params, timeout=_HTTP_TIMEOUT, breaker="wiki")
+    except _CircuitBreakerOpen:
+        return []
+    except RequestException as exc:
         _m_inc("wikipedia_failures", 1)
-        _dbg(f"wikipedia.search EXC: {exc!r}")
+        _cb_record_failure("wiki")
+        _log_debug(f"wikipedia.search EXC: {exc!r}")
         return []
 
     if resp.status_code != 200:
         _m_inc("wikipedia_failures", 1)
-        _dbg(f"wikipedia.search <- status={resp.status_code}")
+        _cb_record_failure("wiki")
+        _log_debug(f"wikipedia.search <- status={resp.status_code}")
         return []
 
     try:
         payload = resp.json()
-    except Exception as exc:
+    except (ValueError, JSONDecodeError) as exc:
         _m_inc("wikipedia_failures", 1)
-        _dbg(f"wikipedia.search JSON EXC: {exc!r}")
+        _cb_record_failure("wiki")
+        _log_debug(f"wikipedia.search JSON EXC: {exc!r}")
         return []
 
     if not isinstance(payload, Mapping):
+        _cb_record_failure("wiki")
         return []
+
+    _cb_record_success("wiki")
 
     q = payload.get("query")
     if not isinstance(q, Mapping):
@@ -1075,7 +1273,6 @@ def _wikipedia_search(*, query: str, language: str, limit: int = 8) -> list[dict
         if isinstance(it, Mapping):
             out.append(dict(it))
     return out
-
 
 def _score_search_hit(*, hit_title: str, hit_snippet: str, wanted_title: str, year: int | None) -> float:
     score = 0.0
@@ -1108,9 +1305,24 @@ def _score_search_hit(*, hit_title: str, hit_snippet: str, wanted_title: str, ye
 
     return score
 
-
 def _rank_wikipedia_candidates(*, lookup_title: str, year: int | None, language: str) -> list[str]:
     clean_title = " ".join(lookup_title.strip().split())
+    year_s = str(year) if year is not None else ""
+    cache_key = f"{language}|{_canon_cmp(clean_title)}|{year_s}"
+
+    now_epoch = _now_epoch()
+    with _CACHE_LOCK:
+        cache = _load_cache_unlocked()
+        sc = cache.get("search_cache")
+        if isinstance(sc, Mapping):
+            entry = sc.get(cache_key)
+            if isinstance(entry, Mapping):
+                fa = entry.get("fetched_at")
+                ttl = entry.get("ttl_s")
+                titles = entry.get("titles")
+                if isinstance(fa, int) and isinstance(ttl, int) and isinstance(titles, list):
+                    if not _is_expired(int(fa), int(ttl), now_epoch):
+                        return [t for t in titles if isinstance(t, str)]
 
     queries: list[str] = []
     if year is not None:
@@ -1139,8 +1351,19 @@ def _rank_wikipedia_candidates(*, lookup_title: str, year: int | None, language:
                 scored[ht] = s
 
     ranked = sorted(scored.items(), key=lambda kv: kv[1], reverse=True)
-    return [t for (t, s) in ranked if s >= 4.0]
+    out_titles = [t for (t, s) in ranked if s >= 4.0]
 
+    with _CACHE_LOCK:
+        cache = _load_cache_unlocked()
+        sc = cache.get("search_cache")
+        if not isinstance(sc, dict):
+            cache["search_cache"] = {}
+            sc = cache["search_cache"]
+        sc[cache_key] = {"titles": out_titles[:32], "fetched_at": now_epoch, "ttl_s": int(_SEARCH_CAND_TTL_S)}
+        _mark_dirty_unlocked()
+        _maybe_flush_unlocked(force=False)
+
+    return out_titles
 
 def _choose_wikipedia_summary_candidates(
     *,
@@ -1149,6 +1372,10 @@ def _choose_wikipedia_summary_candidates(
     primary_language: str,
     fallback_language: str,
 ) -> list[tuple[str, str]]:
+    """
+    Devuelve una lista de (title, lang) ya rankeados.
+    Se intenta primero primary y luego fallback (si procede).
+    """
     out: list[tuple[str, str]] = []
     for t in _rank_wikipedia_candidates(lookup_title=title_for_lookup, year=year, language=primary_language)[:8]:
         out.append((t, primary_language))
@@ -1160,52 +1387,60 @@ def _choose_wikipedia_summary_candidates(
     return out
 
 
-# ============================================================================
+# =============================================================================
 # Wikidata entity + labels
-# ============================================================================
+# =============================================================================
 
 def _fetch_wikidata_entity_json(qid: str) -> Mapping[str, object] | None:
     _m_inc("wikidata_entity_calls", 1)
 
     base = str(WIKI_WIKIDATA_ENTITY_BASE_URL).rstrip("/")
     url = f"{base}/{qid}.json"
-    _dbg(f"wikidata.entity -> qid={qid}")
+    _log_debug(f"wikidata.entity -> qid={qid}")
 
     try:
-        resp = _get_session().get(url, timeout=_HTTP_TIMEOUT)
-    except Exception as exc:
+        resp = _http_get(url, timeout=_HTTP_TIMEOUT, breaker="wiki")
+    except _CircuitBreakerOpen:
+        return None
+    except RequestException as exc:
         _m_inc("wikidata_failures", 1)
-        _dbg(f"wikidata.entity EXC: {exc!r}")
+        _cb_record_failure("wiki")
+        _log_debug(f"wikidata.entity EXC: {exc!r}")
         return None
 
     if resp.status_code != 200:
         _m_inc("wikidata_failures", 1)
-        _dbg(f"wikidata.entity <- status={resp.status_code}")
+        _cb_record_failure("wiki")
+        _log_debug(f"wikidata.entity <- status={resp.status_code}")
         return None
 
     try:
         data = resp.json()
-    except Exception as exc:
+    except (ValueError, JSONDecodeError) as exc:
         _m_inc("wikidata_failures", 1)
-        _dbg(f"wikidata.entity JSON EXC: {exc!r}")
+        _cb_record_failure("wiki")
+        _log_debug(f"wikidata.entity JSON EXC: {exc!r}")
         return None
 
     if not isinstance(data, Mapping):
         _m_inc("wikidata_failures", 1)
+        _cb_record_failure("wiki")
         return None
 
     entities = data.get("entities")
     if not isinstance(entities, Mapping):
         _m_inc("wikidata_failures", 1)
+        _cb_record_failure("wiki")
         return None
 
     entity = entities.get(qid)
     if not isinstance(entity, Mapping):
         _m_inc("wikidata_failures", 1)
+        _cb_record_failure("wiki")
         return None
 
+    _cb_record_success("wiki")
     return entity
-
 
 def _extract_qids_from_claims(entity: Mapping[str, object], property_id: str) -> list[str]:
     claims_obj = entity.get("claims")
@@ -1234,12 +1469,10 @@ def _extract_qids_from_claims(entity: Mapping[str, object], property_id: str) ->
             qids.append(qid)
     return qids
 
-
 def _chunked(values: list[str], size: int) -> Iterable[list[str]]:
     step = max(1, size)
     for i in range(0, len(values), step):
         yield values[i : i + step]
-
 
 def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: str) -> dict[str, WikidataEntity]:
     if not qids:
@@ -1261,30 +1494,39 @@ def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: st
         }
 
         try:
-            resp = _get_session().get(str(WIKI_WIKIDATA_API_BASE_URL), params=params, timeout=_HTTP_TIMEOUT)
-        except Exception as exc:
+            resp = _http_get(str(WIKI_WIKIDATA_API_BASE_URL), params=params, timeout=_HTTP_TIMEOUT, breaker="wiki")
+        except _CircuitBreakerOpen:
+            continue
+        except RequestException as exc:
             _m_inc("wikidata_failures", 1)
-            _dbg(f"wikidata.labels EXC: {exc!r}")
+            _cb_record_failure("wiki")
+            _log_debug(f"wikidata.labels EXC: {exc!r}")
             continue
 
         if resp.status_code != 200:
             _m_inc("wikidata_failures", 1)
-            _dbg(f"wikidata.labels <- status={resp.status_code}")
+            _cb_record_failure("wiki")
+            _log_debug(f"wikidata.labels <- status={resp.status_code}")
             continue
 
         try:
             payload = resp.json()
-        except Exception as exc:
+        except (ValueError, JSONDecodeError) as exc:
             _m_inc("wikidata_failures", 1)
-            _dbg(f"wikidata.labels JSON EXC: {exc!r}")
+            _cb_record_failure("wiki")
+            _log_debug(f"wikidata.labels JSON EXC: {exc!r}")
             continue
 
         if not isinstance(payload, Mapping):
+            _cb_record_failure("wiki")
             continue
 
         entities_obj = payload.get("entities")
         if not isinstance(entities_obj, Mapping):
+            _cb_record_failure("wiki")
             continue
+
+        _cb_record_success("wiki")
 
         for qid in batch:
             ent = entities_obj.get(qid)
@@ -1316,55 +1558,66 @@ def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: st
     return out
 
 
-# ============================================================================
+# =============================================================================
 # SPARQL (con throttle global)
-# ============================================================================
+# =============================================================================
 
 def _sparql_throttle() -> None:
-    global _LAST_SPARQL_TS
+    global _LAST_SPARQL_MONO
+    if _SPARQL_MIN_INTERVAL_S <= 0.0:
+        return
+
     with _SPARQL_THROTTLE_LOCK:
-        now = time.time()
-        delta = now - _LAST_SPARQL_TS
+        now = time.monotonic()
+        delta = now - _LAST_SPARQL_MONO
         if delta < _SPARQL_MIN_INTERVAL_S:
             sleep_s = _SPARQL_MIN_INTERVAL_S - delta
             _m_inc("sparql_throttle_sleeps", 1)
             time.sleep(sleep_s)
-        _LAST_SPARQL_TS = time.time()
-
+        _LAST_SPARQL_MONO = time.monotonic()
 
 def _wikidata_sparql(query: str) -> Mapping[str, object] | None:
     _m_inc("sparql_calls", 1)
 
+    if _cb_is_open("wdqs"):
+        _cb_short_circuit("wdqs")
+
     params = {"format": "json", "query": query}
 
     _sparql_throttle()
-    _dbg(f"wikidata.sparql -> len={len(query)}")
+    _log_debug(f"wikidata.sparql -> len={len(query)}")
 
     try:
-        resp = _get_session().get(str(WIKI_WDQS_URL), params=params, timeout=_HTTP_TIMEOUT_SPARQL)
-    except Exception as exc:
+        resp = _http_get(str(WIKI_WDQS_URL), params=params, timeout=_HTTP_TIMEOUT_SPARQL, breaker="wdqs")
+    except _CircuitBreakerOpen:
+        return None
+    except RequestException as exc:
         _m_inc("sparql_failures", 1)
-        _dbg(f"wikidata.sparql EXC: {exc!r}")
+        _cb_record_failure("wdqs")
+        _log_debug(f"wikidata.sparql EXC: {exc!r}")
         return None
 
     if resp.status_code != 200:
         _m_inc("sparql_failures", 1)
-        _dbg(f"wikidata.sparql <- status={resp.status_code}")
+        _cb_record_failure("wdqs")
+        _log_debug(f"wikidata.sparql <- status={resp.status_code}")
         return None
 
     try:
         data = resp.json()
-    except Exception as exc:
+    except (ValueError, JSONDecodeError) as exc:
         _m_inc("sparql_failures", 1)
-        _dbg(f"wikidata.sparql JSON EXC: {exc!r}")
+        _cb_record_failure("wdqs")
+        _log_debug(f"wikidata.sparql JSON EXC: {exc!r}")
         return None
 
+    _cb_record_success("wdqs")
     return data if isinstance(data, Mapping) else None
 
 
-# ============================================================================
-# “is film” heurística (cacheada)
-# ============================================================================
+# =============================================================================
+# is_film (cacheado)
+# =============================================================================
 
 def _looks_like_film_from_wikipedia(wiki_raw: Mapping[str, object], language: str) -> bool:
     desc = str(wiki_raw.get("description") or "").strip().lower()
@@ -1397,6 +1650,12 @@ def _looks_like_film_from_wikipedia(wiki_raw: Mapping[str, object], language: st
 
     return False
 
+def _has_claim(entity: Mapping[str, object], pid: str) -> bool:
+    claims_obj = entity.get("claims")
+    if not isinstance(claims_obj, Mapping):
+        return False
+    v = claims_obj.get(pid)
+    return isinstance(v, list) and len(v) > 0
 
 def _is_film_without_sparql(
     *,
@@ -1405,14 +1664,37 @@ def _is_film_without_sparql(
     wiki_lang: str,
 ) -> bool:
     p31 = set(_extract_qids_from_claims(wd_entity, "P31"))
+
+    if p31 & _FILM_INSTANCE_DENYLIST:
+        return False
     if p31 & _FILM_INSTANCE_ALLOWLIST:
         return True
 
-    if wiki_raw is not None and _looks_like_film_from_wikipedia(wiki_raw, wiki_lang):
+    has_director = _has_claim(wd_entity, "P57")
+    has_cast = _has_claim(wd_entity, "P161")
+    has_genre = _has_claim(wd_entity, "P136")
+    has_date = _has_claim(wd_entity, "P577")
+    has_duration = _has_claim(wd_entity, "P2047")
+
+    if has_director and (has_cast or has_genre) and (has_date or has_duration):
+        return True
+
+    if wiki_raw is not None and (not _is_disambiguation_payload(wiki_raw)) and _looks_like_film_from_wikipedia(wiki_raw, wiki_lang):
         return True
 
     return False
 
+def _is_film_cached_value(cache: WikiCacheFile, qid: str) -> bool | None:
+    now_epoch = _now_epoch()
+    cached = cache["is_film"].get(qid)
+    if cached is None:
+        return None
+    try:
+        if _is_expired(int(cached["fetched_at"]), int(cached["ttl_s"]), now_epoch):
+            return None
+        return bool(cached.get("is_film") is True)
+    except Exception:
+        return None
 
 def _is_film_cached(
     *,
@@ -1423,7 +1705,6 @@ def _is_film_cached(
     wiki_lang: str,
 ) -> bool:
     now_epoch = _now_epoch()
-
     cached = cache["is_film"].get(qid)
     if cached is not None and not _is_expired(int(cached["fetched_at"]), int(cached["ttl_s"]), now_epoch):
         return bool(cached.get("is_film") is True)
@@ -1435,19 +1716,39 @@ def _is_film_cached(
     return ok
 
 
-# ============================================================================
-# imdbID -> QID (P345) + negative caching
-# ============================================================================
+# =============================================================================
+# imdbID -> QID (P345) (sin red bajo lock)
+# =============================================================================
 
-def _fetch_qid_by_imdb_id(cache: WikiCacheFile, imdb_id: str) -> str | None:
-    imdb_norm = _norm_imdb(imdb_id)
+def _imdb_qid_cached_unlocked(cache: WikiCacheFile, imdb_norm: str) -> str | None | object:
+    _MISS = object()
+    now_epoch = _now_epoch()
+    cached = cache["imdb_qid"].get(imdb_norm)
+    if cached is None:
+        return _MISS
+    try:
+        if _is_expired(int(cached["fetched_at"]), int(cached["ttl_s"]), now_epoch):
+            return _MISS
+        return cached.get("qid")
+    except Exception:
+        return _MISS
+
+def _imdb_qid_store_unlocked(cache: WikiCacheFile, imdb_norm: str, qid: str | None, *, ttl_s: int) -> None:
+    cache["imdb_qid"][imdb_norm] = ImdbQidCacheEntry(qid=qid, fetched_at=_now_epoch(), ttl_s=int(ttl_s))
+    _mark_dirty_unlocked()
+    _maybe_flush_unlocked(force=False)
+
+def _resolve_qid_by_imdb_id(imdb_norm: str) -> str | None:
     if not imdb_norm:
         return None
 
-    now_epoch = _now_epoch()
-    cached = cache["imdb_qid"].get(imdb_norm)
-    if cached is not None and not _is_expired(int(cached["fetched_at"]), int(cached["ttl_s"]), now_epoch):
-        return cached.get("qid")
+    _MISS = object()
+
+    with _CACHE_LOCK:
+        cache = _load_cache_unlocked()
+        v = _imdb_qid_cached_unlocked(cache, imdb_norm)
+        if v is not _MISS:
+            return v if isinstance(v, str) else None
 
     query = f"""
 SELECT ?item WHERE {{
@@ -1464,36 +1765,26 @@ LIMIT 2
     if not isinstance(results, Mapping):
         return None
     bindings = results.get("bindings")
-    if not isinstance(bindings, list) or not bindings:
-        cache["imdb_qid"][imdb_norm] = ImdbQidCacheEntry(
-            qid=None,
-            fetched_at=now_epoch,
-            ttl_s=int(_TTL_IMDB_QID_NEGATIVE_S),
-        )
-        _mark_dirty_unlocked()
-        _maybe_flush_unlocked(force=False)
-        return None
 
-    first = bindings[0]
-    if not isinstance(first, Mapping):
-        return None
-    item = first.get("item")
-    if not isinstance(item, Mapping):
-        return None
-    val = _safe_str(item.get("value"))
-    if not val:
-        return None
+    qid: str | None = None
+    if isinstance(bindings, list) and bindings:
+        first = bindings[0]
+        if isinstance(first, Mapping):
+            item = first.get("item")
+            if isinstance(item, Mapping):
+                val = _safe_str(item.get("value"))
+                if val:
+                    m = re.search(r"/entity/(Q\d+)$", val)
+                    qid = m.group(1) if m else None
 
-    m = re.search(r"/entity/(Q\d+)$", val)
-    qid = m.group(1) if m else None
-    if not qid:
-        return None
+    with _CACHE_LOCK:
+        cache = _load_cache_unlocked()
+        if qid:
+            _imdb_qid_store_unlocked(cache, imdb_norm, qid, ttl_s=int(_TTL_OK_S))
+        else:
+            _imdb_qid_store_unlocked(cache, imdb_norm, None, ttl_s=int(_TTL_IMDB_QID_NEGATIVE_S))
 
-    cache["imdb_qid"][imdb_norm] = ImdbQidCacheEntry(qid=qid, fetched_at=now_epoch, ttl_s=int(_TTL_OK_S))
-    _mark_dirty_unlocked()
-    _maybe_flush_unlocked(force=False)
     return qid
-
 
 def _extract_sitelink_title(entity: Mapping[str, object], language: str) -> str | None:
     sitelinks = entity.get("sitelinks")
@@ -1504,7 +1795,6 @@ def _extract_sitelink_title(entity: Mapping[str, object], language: str) -> str 
         return None
     return _safe_str(sl.get("title"))
 
-
 def _pick_best_sitelink_title(entity: Mapping[str, object], languages: list[str]) -> tuple[str | None, str]:
     for lang in languages:
         title = _extract_sitelink_title(entity, lang)
@@ -1513,9 +1803,9 @@ def _pick_best_sitelink_title(entity: Mapping[str, object], languages: list[str]
     return None, (languages[0] if languages else (_normalize_lang_code(WIKI_LANGUAGE) or "en"))
 
 
-# ============================================================================
-# Cache lookup/store (schema v6)
-# ============================================================================
+# =============================================================================
+# Cache lookup/store + SWR
+# =============================================================================
 
 def _get_cached_item(
     *,
@@ -1523,34 +1813,47 @@ def _get_cached_item(
     norm_title: str,
     norm_year: str,
     imdb_id: str | None,
-) -> WikiCacheItem | None:
+) -> tuple[WikiCacheItem | None, bool]:
     now_epoch = _now_epoch()
-
     records = cache["records"]
     idx_imdb = cache["index_imdb"]
     idx_ty = cache["index_ty"]
 
+    def _pick(rid: str) -> tuple[WikiCacheItem | None, bool]:
+        it = records.get(rid)
+        if it is None:
+            return None, False
+
+        fetched_at = int(it.get("fetched_at", 0) or 0)
+        ttl_s = int(it.get("ttl_s", 0) or 0)
+
+        if not _is_expired(fetched_at, ttl_s, now_epoch):
+            return it, False
+
+        _m_inc("cache_expired_hits", 1)
+
+        if it.get("status") == "ok" and _SWR_OK_GRACE_S > 0:
+            age = now_epoch - fetched_at
+            if age <= (ttl_s + int(_SWR_OK_GRACE_S)):
+                _m_inc("cache_stale_served", 1)
+                return it, True
+
+        return None, False
+
     if imdb_id:
         rid = idx_imdb.get(imdb_id)
         if isinstance(rid, str):
-            it = records.get(rid)
+            it, stale = _pick(rid)
             if it is not None:
-                if _is_expired(int(it["fetched_at"]), int(it["ttl_s"]), now_epoch):
-                    _m_inc("cache_expired_hits", 1)
-                    return None
-                return it
+                return it, stale
 
     rid2 = idx_ty.get(_ty_key(norm_title, norm_year))
     if isinstance(rid2, str):
-        it2 = records.get(rid2)
+        it2, stale2 = _pick(rid2)
         if it2 is not None:
-            if _is_expired(int(it2["fetched_at"]), int(it2["ttl_s"]), now_epoch):
-                _m_inc("cache_expired_hits", 1)
-                return None
-            return it2
+            return it2, stale2
 
-    return None
-
+    return None, False
 
 def _rid_for_item(item: WikiCacheItem) -> str:
     imdb = _norm_imdb(item.get("imdbID") if isinstance(item.get("imdbID"), str) else None)
@@ -1562,7 +1865,6 @@ def _rid_for_item(item: WikiCacheItem) -> str:
     t = title if isinstance(title, str) else ""
     y = year if isinstance(year, str) else ""
     return f"ty:{t}|{y}"
-
 
 def _store_item_unlocked(cache: WikiCacheFile, item: WikiCacheItem) -> None:
     rid = _rid_for_item(item)
@@ -1582,9 +1884,9 @@ def _store_item_unlocked(cache: WikiCacheFile, item: WikiCacheItem) -> None:
     _maybe_flush_unlocked(force=False)
 
 
-# ============================================================================
+# =============================================================================
 # Builders
-# ============================================================================
+# =============================================================================
 
 def _build_negative_item(
     *,
@@ -1615,12 +1917,17 @@ def _build_negative_item(
         wikidata_block["qid"] = wikibase_item
 
     _m_inc("items_negative", 1)
+    ttl = int(_TTL_NEGATIVE_S)
+
     if status == "imdb_no_qid":
         _m_inc("items_negative_imdb_no_qid", 1)
     elif status == "no_qid":
         _m_inc("items_negative_no_qid", 1)
     elif status == "not_film":
         _m_inc("items_negative_not_film", 1)
+    elif status == "disambiguation":
+        _m_inc("items_negative_disambiguation", 1)
+        ttl = int(_TTL_DISAMBIG_S)
 
     return WikiCacheItem(
         Title=norm_title,
@@ -1629,10 +1936,9 @@ def _build_negative_item(
         wiki=wiki_block,
         wikidata=wikidata_block,
         fetched_at=now_epoch,
-        ttl_s=int(_TTL_NEGATIVE_S),
+        ttl_s=ttl,
         status=status,
     )
-
 
 def _build_ok_item_and_merge_entities(
     *,
@@ -1652,6 +1958,9 @@ def _build_ok_item_and_merge_entities(
     if isinstance(titles_obj, Mapping):
         wikipedia_title = _safe_str(titles_obj.get("normalized")) or _safe_str(titles_obj.get("canonical"))
 
+    summary_text = str(wiki_raw.get("extract") or "")
+    description_text = str(wiki_raw.get("description") or "")
+
     wiki_block: WikiBlock = WikiBlock(
         language=primary_language,
         fallback_language=fallback_language,
@@ -1659,20 +1968,24 @@ def _build_ok_item_and_merge_entities(
         wikipedia_title=wikipedia_title,
         wikipedia_pageid=_safe_int(wiki_raw.get("pageid")),
         wikibase_item=wikibase_item,
-        summary=str(wiki_raw.get("extract") or ""),
-        description=str(wiki_raw.get("description") or ""),
+        summary=summary_text,
+        description=description_text,
         urls=dict(wiki_raw.get("content_urls")) if isinstance(wiki_raw.get("content_urls"), Mapping) else {},
     )
 
+    has_images = False
     if "originalimage" in wiki_raw or "thumbnail" in wiki_raw:
         images: dict[str, object] = {}
         original = wiki_raw.get("originalimage")
         thumb = wiki_raw.get("thumbnail")
         if isinstance(original, Mapping):
             images["original"] = dict(original)
+            has_images = True
         if isinstance(thumb, Mapping):
             images["thumbnail"] = dict(thumb)
-        wiki_block["images"] = images
+            has_images = True
+        if images:
+            wiki_block["images"] = images
 
     wikidata_block: WikidataBlock = WikidataBlock(qid=wikibase_item)
 
@@ -1705,6 +2018,19 @@ def _build_ok_item_and_merge_entities(
 
     _m_inc("items_ok", 1)
 
+    if directors:
+        _m_inc("items_ok_with_directors", 1)
+    if genres:
+        _m_inc("items_ok_with_genres", 1)
+    if countries:
+        _m_inc("items_ok_with_countries", 1)
+    if has_images:
+        _m_inc("items_ok_with_images", 1)
+    if summary_text.strip():
+        _m_inc("items_ok_with_summary", 1)
+    if description_text.strip():
+        _m_inc("items_ok_with_description", 1)
+
     item = WikiCacheItem(
         Title=norm_title,
         Year=norm_year,
@@ -1716,126 +2042,70 @@ def _build_ok_item_and_merge_entities(
         status="ok",
     )
 
-    if not logger.is_silent_mode():
-        year_label = norm_year if norm_year else "?"
-        _info(f"[WIKI] cached ({source_language}): {norm_title} ({year_label})")
+    year_label = norm_year if norm_year else "?"
+    _log_info(f"[WIKI] cached ({source_language}): {norm_title} ({year_label})")
 
     return item
 
 
-# ============================================================================
-# Core único
-# ============================================================================
+# =============================================================================
+# Title/year path
+# =============================================================================
 
-def _get_wiki_impl(
+def _try_title_year_path(
     *,
-    title: str,
+    lookup_title: str,
+    norm_title: str,
+    norm_year: str,
     year: int | None,
-    imdb_id: str | None,
+    imdb_id_for_store: str | None,
     movie_input: MovieInputLangProto | None,
     primary: str,
     fallback: str,
 ) -> WikiCacheItem | None:
-    lookup_title = normalize_title_for_lookup(title)
-    if not lookup_title:
-        _dbg(f"empty lookup_title from title={title!r}")
-        return None
-
-    norm_title = lookup_title
-    norm_year = str(year) if year is not None else ""
-    imdb_norm = _norm_imdb(imdb_id)
-
-    with _CACHE_LOCK:
-        cache = _load_cache_unlocked()
-        cached = _get_cached_item(cache=cache, norm_title=norm_title, norm_year=norm_year, imdb_id=imdb_norm)
-        if cached is not None:
-            _m_inc("cache_hits", 1)
-            _dbg("cache HIT")
-            return cached
-
-    _m_inc("cache_misses", 1)
-
-    if imdb_norm:
-        _m_inc("path_imdb", 1)
-
-        with _CACHE_LOCK:
-            cache = _load_cache_unlocked()
-            qid = _fetch_qid_by_imdb_id(cache, imdb_norm)
-
-        if not qid:
-            neg = _build_negative_item(
-                norm_title=norm_title,
-                norm_year=norm_year,
-                imdb_id=imdb_norm,
-                status="imdb_no_qid",
-                wikibase_item=None,
-                primary_language=primary,
-                fallback_language=fallback,
-            )
-            with _CACHE_LOCK:
-                cache = _load_cache_unlocked()
-                _store_item_unlocked(cache, neg)
-            return neg
-
-        wd_entity = _fetch_wikidata_entity_json(qid)
-        if wd_entity is None:
-            return None
-
-        chain = _detect_language_chain_from_input(movie_input)
-        sl_title, sl_lang = _pick_best_sitelink_title(wd_entity, chain)
-        wiki_raw = _fetch_wikipedia_summary_by_title(sl_title, sl_lang) if sl_title else None
-
-        with _CACHE_LOCK:
-            cache = _load_cache_unlocked()
-
-            if not _is_film_cached(cache=cache, qid=qid, wd_entity=wd_entity, wiki_raw=wiki_raw, wiki_lang=sl_lang):
-                neg_nf = _build_negative_item(
-                    norm_title=norm_title,
-                    norm_year=norm_year,
-                    imdb_id=imdb_norm,
-                    status="not_film",
-                    wikibase_item=qid,
-                    primary_language=primary,
-                    fallback_language=fallback,
-                )
-                _store_item_unlocked(cache, neg_nf)
-                return neg_nf
-
-            if wiki_raw is None:
-                return None
-
-            ok_item = _build_ok_item_and_merge_entities(
-                cache=cache,
-                norm_title=norm_title,
-                norm_year=norm_year,
-                imdb_id=imdb_norm,
-                wiki_raw=wiki_raw,
-                source_language=sl_lang,
-                wikibase_item=qid,
-                wd_entity=wd_entity,
-                primary_language=primary,
-                fallback_language=fallback,
-            )
-            _store_item_unlocked(cache, ok_item)
-            return ok_item
-
-    _m_inc("path_title_search", 1)
-
     candidates = _choose_wikipedia_summary_candidates(
         title_for_lookup=lookup_title,
         year=year,
         primary_language=primary,
         fallback_language=fallback,
     )
-    _dbg(f"candidates={len(candidates)} primary={primary} fallback={fallback}")
+    _log_debug(f"[title/year] candidates={len(candidates)} primary={primary} fallback={fallback}")
+
+    disambig_seen = False
+    any_non_disambig_summary = False
 
     for cand_title, cand_lang in candidates:
         wiki_raw = _fetch_wikipedia_summary_by_title(cand_title, cand_lang)
         if wiki_raw is None:
             continue
 
+        if _is_disambiguation_payload(wiki_raw):
+            disambig_seen = True
+            continue
+
+        any_non_disambig_summary = True
+
         wikibase_item = _safe_str(wiki_raw.get("wikibase_item"))
         if not wikibase_item:
+            continue
+
+        with _CACHE_LOCK:
+            cache = _load_cache_unlocked()
+            cached_is_film = _is_film_cached_value(cache, wikibase_item)
+
+        if cached_is_film is False:
+            with _CACHE_LOCK:
+                cache = _load_cache_unlocked()
+                neg_nf_sc = _build_negative_item(
+                    norm_title=norm_title,
+                    norm_year=norm_year,
+                    imdb_id=imdb_id_for_store,
+                    status="not_film",
+                    wikibase_item=wikibase_item,
+                    primary_language=primary,
+                    fallback_language=fallback,
+                )
+                _store_item_unlocked(cache, neg_nf_sc)
             continue
 
         wd_entity = _fetch_wikidata_entity_json(wikibase_item)
@@ -1845,30 +2115,24 @@ def _get_wiki_impl(
         with _CACHE_LOCK:
             cache = _load_cache_unlocked()
 
-            if not _is_film_cached(
-                cache=cache,
-                qid=wikibase_item,
-                wd_entity=wd_entity,
-                wiki_raw=wiki_raw,
-                wiki_lang=cand_lang,
-            ):
-                neg_nf2 = _build_negative_item(
+            if not _is_film_cached(cache=cache, qid=wikibase_item, wd_entity=wd_entity, wiki_raw=wiki_raw, wiki_lang=cand_lang):
+                neg_nf = _build_negative_item(
                     norm_title=norm_title,
                     norm_year=norm_year,
-                    imdb_id=None,
+                    imdb_id=imdb_id_for_store,
                     status="not_film",
                     wikibase_item=wikibase_item,
                     primary_language=primary,
                     fallback_language=fallback,
                 )
-                _store_item_unlocked(cache, neg_nf2)
+                _store_item_unlocked(cache, neg_nf)
                 continue
 
-            ok_item2 = _build_ok_item_and_merge_entities(
+            ok = _build_ok_item_and_merge_entities(
                 cache=cache,
                 norm_title=norm_title,
                 norm_year=norm_year,
-                imdb_id=None,
+                imdb_id=imdb_id_for_store,
                 wiki_raw=wiki_raw,
                 source_language=cand_lang,
                 wikibase_item=wikibase_item,
@@ -1876,14 +2140,18 @@ def _get_wiki_impl(
                 primary_language=primary,
                 fallback_language=fallback,
             )
-            _store_item_unlocked(cache, ok_item2)
-            return ok_item2
+            _store_item_unlocked(cache, ok)
+            return ok
+
+    final_status: WikiItemStatus = "no_qid"
+    if disambig_seen and not any_non_disambig_summary:
+        final_status = "disambiguation"
 
     neg = _build_negative_item(
         norm_title=norm_title,
         norm_year=norm_year,
-        imdb_id=None,
-        status="no_qid",
+        imdb_id=imdb_id_for_store,
+        status=final_status,
         wikibase_item=None,
         primary_language=primary,
         fallback_language=fallback,
@@ -1894,15 +2162,229 @@ def _get_wiki_impl(
     return neg
 
 
-# ============================================================================
-# API pública (sin wrappers OO)
-# ============================================================================
+# =============================================================================
+# SWR refresh scheduler
+# =============================================================================
+
+def _schedule_refresh_if_needed(
+    *,
+    key: str,
+    title: str,
+    year: int | None,
+    imdb_id: str | None,
+    movie_input: MovieInputLangProto | None,
+    primary: str,
+    fallback: str,
+) -> None:
+    with _REFRESH_IN_FLIGHT_LOCK:
+        if key in _REFRESH_IN_FLIGHT:
+            return
+        _REFRESH_IN_FLIGHT.add(key)
+
+    def _worker() -> None:
+        try:
+            _get_wiki_impl(
+                title=title,
+                year=year,
+                imdb_id=imdb_id,
+                movie_input=movie_input,
+                primary=primary,
+                fallback=fallback,
+                force_refresh=True,
+            )
+        except Exception as exc:
+            _log_debug(f"SWR refresh failed: {exc!r}")
+        finally:
+            with _REFRESH_IN_FLIGHT_LOCK:
+                _REFRESH_IN_FLIGHT.discard(key)
+
+    try:
+        threading.Thread(target=_worker, name=f"wiki-refresh:{key}", daemon=True).start()
+    except Exception as exc:
+        _log_debug(f"refresh thread spawn failed: {exc!r}")
+        with _REFRESH_IN_FLIGHT_LOCK:
+            _REFRESH_IN_FLIGHT.discard(key)
+
+
+# =============================================================================
+# Core (single-flight + SWR)
+# =============================================================================
+
+def _get_wiki_impl(
+    *,
+    title: str,
+    year: int | None,
+    imdb_id: str | None,
+    movie_input: MovieInputLangProto | None,
+    primary: str,
+    fallback: str,
+    force_refresh: bool = False,
+) -> WikiCacheItem | None:
+    lookup_title = normalize_title_for_lookup(title)
+    if not lookup_title:
+        _log_debug(f"empty lookup_title from title={title!r}")
+        return None
+
+    norm_title = lookup_title
+    norm_year = str(year) if year is not None else ""
+    imdb_norm = _norm_imdb(imdb_id)
+
+    key = _request_key(imdb_norm=imdb_norm, norm_title=norm_title, norm_year=norm_year)
+
+    if not force_refresh:
+        with _CACHE_LOCK:
+            cache = _load_cache_unlocked()
+            cached, served_stale_ok = _get_cached_item(cache=cache, norm_title=norm_title, norm_year=norm_year, imdb_id=imdb_norm)
+            if cached is not None:
+                _m_inc("cache_hits", 1)
+                _log_debug("cache HIT" + (" (stale-ok)" if served_stale_ok else ""))
+                if served_stale_ok:
+                    _schedule_refresh_if_needed(
+                        key=key,
+                        title=title,
+                        year=year,
+                        imdb_id=imdb_id,
+                        movie_input=movie_input,
+                        primary=primary,
+                        fallback=fallback,
+                    )
+                return cached
+
+    _m_inc("cache_misses", 1)
+
+    is_leader, ev = _singleflight_enter(key)
+    if not is_leader:
+        _m_inc("singleflight_waits", 1)
+        ev.wait(timeout=float(_SINGLEFLIGHT_WAIT_S))
+        if not ev.is_set():
+            _m_inc("singleflight_wait_timeouts", 1)
+
+        if not force_refresh:
+            with _CACHE_LOCK:
+                cache = _load_cache_unlocked()
+                cached2, _ = _get_cached_item(cache=cache, norm_title=norm_title, norm_year=norm_year, imdb_id=imdb_norm)
+                if cached2 is not None:
+                    _m_inc("cache_hits", 1)
+                    _log_debug("cache HIT (after single-flight wait)")
+                    return cached2
+
+    try:
+        if imdb_norm:
+            _m_inc("path_imdb", 1)
+
+            qid = _resolve_qid_by_imdb_id(imdb_norm)
+            if not qid:
+                neg = _build_negative_item(
+                    norm_title=norm_title,
+                    norm_year=norm_year,
+                    imdb_id=imdb_norm,
+                    status="imdb_no_qid",
+                    wikibase_item=None,
+                    primary_language=primary,
+                    fallback_language=fallback,
+                )
+                with _CACHE_LOCK:
+                    cache = _load_cache_unlocked()
+                    _store_item_unlocked(cache, neg)
+                return neg
+
+            with _CACHE_LOCK:
+                cache = _load_cache_unlocked()
+                cached_is_film = _is_film_cached_value(cache, qid)
+
+            if cached_is_film is False:
+                neg_nf_sc = _build_negative_item(
+                    norm_title=norm_title,
+                    norm_year=norm_year,
+                    imdb_id=imdb_norm,
+                    status="not_film",
+                    wikibase_item=qid,
+                    primary_language=primary,
+                    fallback_language=fallback,
+                )
+                with _CACHE_LOCK:
+                    cache = _load_cache_unlocked()
+                    _store_item_unlocked(cache, neg_nf_sc)
+                return neg_nf_sc
+
+            wd_entity = _fetch_wikidata_entity_json(qid)
+            if wd_entity is None:
+                return None
+
+            chain = _detect_language_chain_from_input(movie_input)
+            sl_title, sl_lang = _pick_best_sitelink_title(wd_entity, chain)
+            wiki_raw = _fetch_wikipedia_summary_by_title(sl_title, sl_lang) if sl_title else None
+
+            if wiki_raw is None or _is_disambiguation_payload(wiki_raw):
+                _log_debug("[imdb->qid] missing/ambiguous summary; trying title/year fallback")
+                _m_inc("path_title_search", 1)
+                return _try_title_year_path(
+                    lookup_title=lookup_title,
+                    norm_title=norm_title,
+                    norm_year=norm_year,
+                    year=year,
+                    imdb_id_for_store=imdb_norm,
+                    movie_input=movie_input,
+                    primary=primary,
+                    fallback=fallback,
+                )
+
+            with _CACHE_LOCK:
+                cache = _load_cache_unlocked()
+
+                if not _is_film_cached(cache=cache, qid=qid, wd_entity=wd_entity, wiki_raw=wiki_raw, wiki_lang=sl_lang):
+                    neg_nf = _build_negative_item(
+                        norm_title=norm_title,
+                        norm_year=norm_year,
+                        imdb_id=imdb_norm,
+                        status="not_film",
+                        wikibase_item=qid,
+                        primary_language=primary,
+                        fallback_language=fallback,
+                    )
+                    _store_item_unlocked(cache, neg_nf)
+                    return neg_nf
+
+                ok_item = _build_ok_item_and_merge_entities(
+                    cache=cache,
+                    norm_title=norm_title,
+                    norm_year=norm_year,
+                    imdb_id=imdb_norm,
+                    wiki_raw=wiki_raw,
+                    source_language=sl_lang,
+                    wikibase_item=qid,
+                    wd_entity=wd_entity,
+                    primary_language=primary,
+                    fallback_language=fallback,
+                )
+                _store_item_unlocked(cache, ok_item)
+                return ok_item
+
+        _m_inc("path_title_search", 1)
+        return _try_title_year_path(
+            lookup_title=lookup_title,
+            norm_title=norm_title,
+            norm_year=norm_year,
+            year=year,
+            imdb_id_for_store=None,
+            movie_input=movie_input,
+            primary=primary,
+            fallback=fallback,
+        )
+
+    finally:
+        if is_leader:
+            _singleflight_leave(key)
+
+
+# =============================================================================
+# API pública
+# =============================================================================
 
 def get_wiki(*, title: str, year: int | None, imdb_id: str | None) -> WikiCacheItem | None:
     primary = _normalize_lang_code(WIKI_LANGUAGE) or "en"
     fallback = _normalize_lang_code(WIKI_FALLBACK_LANGUAGE) or ("en" if primary != "en" else "")
     return _get_wiki_impl(title=title, year=year, imdb_id=imdb_id, movie_input=None, primary=primary, fallback=fallback)
-
 
 def get_wiki_for_input(
     *,
@@ -1920,3 +2402,19 @@ def get_wiki_for_input(
         primary=primary,
         fallback=fallback,
     )
+
+
+# =============================================================================
+# Export
+# =============================================================================
+
+__all__ = [
+    "get_wiki",
+    "get_wiki_for_input",
+    "flush_wiki_cache",
+    "get_wiki_metrics_snapshot",
+    "reset_wiki_metrics",
+    "log_wiki_metrics_summary",
+    "WikiCacheItem",
+    "WikiItemStatus",
+]
