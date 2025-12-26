@@ -55,10 +55,13 @@ sin wrappers OO (no hay WikiClient / get_wiki_client).
 
 Cambios aplicados (alineados con lo propuesto)
 ----------------------------------------------
-- Pooling HTTP: HTTPAdapter con pool_connections/pool_maxsize (cap defensivo) para evitar
-  serialización oculta en runs con ThreadPool.
-- Excepciones: se estrechan where-safe (RequestException/JSONDecodeError/OSError), manteniendo
-  “best-effort” para no romper el run.
+- Pooling HTTP: HTTPAdapter con pool_connections/pool_maxsize (cap defensivo) y pool_block=True para backpressure.
+- ✅ Concurrencia HTTP real (WIKI_HTTP_MAX_CONCURRENCY):
+  - Semáforo global (BoundedSemaphore) compartido por TODAS las llamadas HTTP del módulo.
+  - Wrapper _http_get(...) para centralizar acquire/release y mantener “best-effort”.
+  - Si el acquire no ocurre en un timeout razonable, se contabiliza y se lanza RequestException
+    (que ya se maneja como fallo transitorio de red).
+- Excepciones: se estrechan where-safe (RequestException/JSONDecodeError/OSError), manteniendo “best-effort”.
 - Cache load: saneado de índices (elimina rids colgantes) + quarantining opcional en DEBUG.
 - Throttle SPARQL: usa time.monotonic() para intervalos (más robusto que time.time()).
 - Más documentación interna sin tocar la API pública.
@@ -103,7 +106,7 @@ from backend.config import (
     WIKI_CACHE_TTL_NEGATIVE_SECONDS,
     WIKI_CACHE_TTL_OK_SECONDS,
     WIKI_FALLBACK_LANGUAGE,
-    WIKI_HTTP_MAX_CONCURRENCY,  # ✅ NUEVO
+    WIKI_HTTP_MAX_CONCURRENCY,  # ✅ NUEVO (productivo)
     WIKI_HTTP_RETRY_BACKOFF_FACTOR,
     WIKI_HTTP_RETRY_TOTAL,
     WIKI_HTTP_TIMEOUT_SECONDS,
@@ -194,6 +197,26 @@ class MovieInputLangProto(Protocol):
 
 
 # ============================================================================
+# Utils runtime caps (evitan valores absurdos aunque config ya los cape)
+# ============================================================================
+
+def _cap_int_runtime(value: int, *, min_v: int, max_v: int) -> int:
+    if value < min_v:
+        return min_v
+    if value > max_v:
+        return max_v
+    return value
+
+
+def _cap_float_runtime(value: float, *, min_v: float, max_v: float | None = None) -> float:
+    if value < min_v:
+        return min_v
+    if max_v is not None and value > max_v:
+        return max_v
+    return value
+
+
+# ============================================================================
 # Constantes / estado interno
 # ============================================================================
 
@@ -247,6 +270,18 @@ _HTTP_TIMEOUT_SPARQL: Final[tuple[float, float]] = (
     max(1.0, float(WIKI_SPARQL_TIMEOUT_READ_SECONDS)),
 )
 
+# ----------------------------------------------------------------------------
+# ✅ Concurrencia HTTP real: semáforo global (backpressure a nivel de módulo)
+# ----------------------------------------------------------------------------
+# - Debe estar alineado con el pool de requests/urllib3 para evitar:
+#   (a) serialización oculta por pool pequeño
+#   (b) demasiadas conexiones simultáneas si hay bursts de threads
+# - Nota: no tenemos (aquí) una env específica de "acquire timeout" como OMDb;
+#   aplicamos un timeout razonable derivado del timeout HTTP base (capado).
+_HTTP_POOL_MAXSIZE: Final[int] = _cap_int_runtime(int(WIKI_HTTP_MAX_CONCURRENCY), min_v=1, max_v=128)
+_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT: Final[float] = _cap_float_runtime(float(_HTTP_TIMEOUT) * 3.0, min_v=0.2, max_v=120.0)
+_HTTP_SEM = threading.BoundedSemaphore(_HTTP_POOL_MAXSIZE)
+
 
 # ============================================================================
 # MÉTRICAS (ThreadPool safe)
@@ -276,6 +311,8 @@ _METRICS: dict[str, int] = {
     "items_negative_not_film": 0,
     "path_imdb": 0,
     "path_title_search": 0,
+    # ✅ NUEVO: backpressure / semáforo
+    "http_semaphore_timeouts": 0,
 }
 
 
@@ -387,22 +424,6 @@ def _err(msg: str) -> None:
 # Session / HTTP
 # ============================================================================
 
-def _cap_int_runtime(value: int, *, min_v: int, max_v: int) -> int:
-    if value < min_v:
-        return min_v
-    if value > max_v:
-        return max_v
-    return value
-
-
-def _cap_float_runtime(value: float, *, min_v: float, max_v: float | None = None) -> float:
-    if value < min_v:
-        return min_v
-    if max_v is not None and value > max_v:
-        return max_v
-    return value
-
-
 def _get_session() -> requests.Session:
     """
     requests.Session singleton con Retry y pooling.
@@ -413,10 +434,9 @@ def _get_session() -> requests.Session:
     - pool_block=True introduce backpressure (en vez de abrir conexiones infinitas).
       Esto reduce picos y comportamientos erráticos bajo carga.
 
-    Centralizado en config.py:
-    - User-Agent
-    - retry_total / backoff
-    - timeouts usados por cada request (ver _HTTP_TIMEOUT / _HTTP_TIMEOUT_SPARQL)
+    Concurrencia real:
+    - Además del pool, usamos un semáforo global (ver _http_get) para limitar
+      simultaneidad total del módulo. Es “el guardarraíl” que faltaba.
     """
     global _SESSION
     if _SESSION is not None:
@@ -448,19 +468,12 @@ def _get_session() -> requests.Session:
             raise_on_status=False,
             respect_retry_after_header=True,
         )
-        # Pool HTTP (requests/urllib3) dimensionado por config.
-        # - pool_maxsize: conexiones simultáneas reutilizables por host
-        # - pool_connections: nº de pools cacheados (mantenemos igual a maxsize por simplicidad)
-        # Cap defensivo runtime para evitar valores absurdos aunque config ya los cape.
-        _HTTP_POOL_MAXSIZE: Final[int] = _cap_int_runtime(int(WIKI_HTTP_MAX_CONCURRENCY), min_v=1, max_v=128)
-        
-        # Pool size runtime (cap defensivo).
-        pool_size = _HTTP_POOL_MAXSIZE
 
+        # Pool HTTP (requests/urllib3) dimensionado por config.
         adapter = HTTPAdapter(
             max_retries=retries,
-            pool_connections=pool_size,
-            pool_maxsize=pool_size,
+            pool_connections=_HTTP_POOL_MAXSIZE,
+            pool_maxsize=_HTTP_POOL_MAXSIZE,
             pool_block=True,
         )
         session.mount("https://", adapter)
@@ -468,6 +481,43 @@ def _get_session() -> requests.Session:
 
         _SESSION = session
         return session
+
+
+def _http_get(
+    url: str,
+    *,
+    params: dict[str, str] | None = None,
+    timeout: float | tuple[float, float] | None = None,
+) -> requests.Response:
+    """
+    Wrapper único para GET.
+
+    Motivo:
+    - requests.Session + pool_maxsize NO limita por sí solo la concurrencia total del módulo,
+      especialmente si hay bursts de threads. El pool puede bloquear, pero este semáforo:
+        1) pone un límite explícito (WIKI_HTTP_MAX_CONCURRENCY)
+        2) nos permite métricas de backpressure (timeouts de acquire)
+        3) mantiene la policy “best-effort” (se traduce en RequestException)
+
+    Política:
+    - Si no se adquiere el semáforo en _HTTP_SEMAPHORE_ACQUIRE_TIMEOUT, se incrementa métrica
+      y se lanza RequestException (que ya se maneja en los callers).
+    """
+    acquired = _HTTP_SEM.acquire(timeout=_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT)
+    if not acquired:
+        _m_inc("http_semaphore_timeouts", 1)
+        raise RequestException("WIKI HTTP semaphore acquire timeout")
+
+    try:
+        return _get_session().get(url, params=params, timeout=timeout)
+    finally:
+        try:
+            _HTTP_SEM.release()
+        except ValueError:
+            # Ultra defensivo: BoundedSemaphore puede lanzar si se libera de más.
+            # No debería ocurrir; preferimos no romper el run.
+            _dbg("HTTP semaphore release ValueError (ignored)")
+
 
 # ============================================================================
 # Helpers generales (defensivos)
@@ -1081,7 +1131,7 @@ def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str,
     _dbg(f"wikipedia.summary -> lang={language} title={title!r}")
 
     try:
-        resp = _get_session().get(url, timeout=_HTTP_TIMEOUT)
+        resp = _http_get(url, timeout=_HTTP_TIMEOUT)
     except RequestException as exc:
         _m_inc("wikipedia_failures", 1)
         _dbg(f"wikipedia.summary EXC: {exc!r}")
@@ -1126,7 +1176,7 @@ def _wikipedia_search(*, query: str, language: str, limit: int = 8) -> list[dict
     _dbg(f"wikipedia.search -> lang={language} q={query!r}")
 
     try:
-        resp = _get_session().get(url, params=params, timeout=_HTTP_TIMEOUT)
+        resp = _http_get(url, params=params, timeout=_HTTP_TIMEOUT)
     except RequestException as exc:
         _m_inc("wikipedia_failures", 1)
         _dbg(f"wikipedia.search EXC: {exc!r}")
@@ -1257,7 +1307,7 @@ def _fetch_wikidata_entity_json(qid: str) -> Mapping[str, object] | None:
     _dbg(f"wikidata.entity -> qid={qid}")
 
     try:
-        resp = _get_session().get(url, timeout=_HTTP_TIMEOUT)
+        resp = _http_get(url, timeout=_HTTP_TIMEOUT)
     except RequestException as exc:
         _m_inc("wikidata_failures", 1)
         _dbg(f"wikidata.entity EXC: {exc!r}")
@@ -1346,7 +1396,7 @@ def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: st
         }
 
         try:
-            resp = _get_session().get(str(WIKI_WIKIDATA_API_BASE_URL), params=params, timeout=_HTTP_TIMEOUT)
+            resp = _http_get(str(WIKI_WIKIDATA_API_BASE_URL), params=params, timeout=_HTTP_TIMEOUT)
         except RequestException as exc:
             _m_inc("wikidata_failures", 1)
             _dbg(f"wikidata.labels EXC: {exc!r}")
@@ -1433,7 +1483,7 @@ def _wikidata_sparql(query: str) -> Mapping[str, object] | None:
     _dbg(f"wikidata.sparql -> len={len(query)}")
 
     try:
-        resp = _get_session().get(str(WIKI_WDQS_URL), params=params, timeout=_HTTP_TIMEOUT_SPARQL)
+        resp = _http_get(str(WIKI_WDQS_URL), params=params, timeout=_HTTP_TIMEOUT_SPARQL)
     except RequestException as exc:
         _m_inc("sparql_failures", 1)
         _dbg(f"wikidata.sparql EXC: {exc!r}")
