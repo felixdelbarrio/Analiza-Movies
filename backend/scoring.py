@@ -36,7 +36,7 @@ Este módulo debe:
 
 from typing import Final, TypeAlias
 
-from backend.config import (
+from backend.config_scoring import (
     BAYES_DELETE_MAX_SCORE,
     IMDB_DELETE_MAX_RATING,
     IMDB_KEEP_MIN_RATING,
