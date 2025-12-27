@@ -114,6 +114,32 @@ class RunMetrics:
             t["avg"] = float(t.get("sum", 0.0)) / cnt
 
         return {"counters": counters, "timings_ms": timings, "errors": errors, "derived": derived}
+    
+# -----------------------------------------------------------------------------
+# Compat shims (para módulos que esperan inc/observe_seconds)
+# -----------------------------------------------------------------------------
+
+def inc(name: str, *, value: int = 1) -> None:
+    """Compat: incrementa contador."""
+    try:
+        METRICS.incr(name, n=int(value))
+    except Exception:
+        return
+
+def counter_inc(name: str, *, value: int = 1) -> None:
+    """Alias compat."""
+    inc(name, value=value)
+
+def observe_seconds(name: str, *, seconds: float) -> None:
+    """Compat: observa timing en segundos (se guarda en ms)."""
+    try:
+        METRICS.observe_ms(name, float(seconds) * 1000.0)
+    except Exception:
+        return
+
+def timing(name: str, *, seconds: float) -> None:
+    """Alias compat."""
+    observe_seconds(name, seconds=seconds)
 
 
 # Singleton del run (módulo)

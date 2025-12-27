@@ -60,7 +60,7 @@ def _ask_source() -> Choice | None:
         prompt = "Selecciona una opción (1/2): "
 
     while True:
-        logger.info(menu, always=True)
+        logger.info("\n" + menu, always=True)
         raw = input(prompt).strip()
 
         if raw == "":
