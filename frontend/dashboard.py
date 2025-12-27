@@ -16,10 +16,20 @@ from __future__ import annotations
 # - Si SILENT_MODE=True y DEBUG_MODE=True: mostrar instrumentación útil (paths, shapes, thresholds).
 
 import os
+import sys
 import warnings
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+
+# ---------------------------------------------------------------------------
+# Import path fix (al ejecutar: streamlit run frontend/dashboard.py)
+# ---------------------------------------------------------------------------
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_project_root_str = str(_PROJECT_ROOT)
+if _project_root_str not in sys.path:
+    sys.path.insert(0, _project_root_str)
 
 from backend.config import (
     DEBUG_MODE,
@@ -36,6 +46,8 @@ from backend.stats import (
     get_auto_keep_rating_threshold,
     get_global_imdb_mean_info,
 )
+
+# OJO: si compute_summary NO está en frontend/summary.py, cambia a backend.summary
 from frontend.summary import compute_summary
 from frontend.data_utils import format_count_size
 
