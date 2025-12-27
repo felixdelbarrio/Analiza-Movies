@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-backend/analiza.py
+backend/main.py
 
 Punto de entrada unificado (CLI) para análisis de películas.
 
@@ -25,6 +25,14 @@ Reglas de consola (alineado con backend/logger.py)
 - Estado global (inicio / modo / fin): logger.progress(...)
 - Debug contextual: logger.debug_ctx("ANALYZE", "...") (respeta DEBUG/SILENT)
 - Salidas por cancelación/CTRL+C: limpias, sin stacktrace.
+
+CLI
+---
+Instalación (editable):
+  pip install -e .
+
+Ejecución:
+  start
 """
 
 from typing import Literal
@@ -73,9 +81,9 @@ def _ask_source() -> Choice | None:
         logger.info("Opción no válida (usa 1 ó 2, o Enter para cancelar).", always=True)
 
 
-def main() -> None:
+def start() -> None:
     """
-    Entry-point principal.
+    Entry-point principal (console_scripts).
 
     Responsabilidades:
     - Mostrar marco global (inicio / modo / fin).
@@ -119,4 +127,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Permite ejecutar: python -m backend.main (o python backend/main.py)
+    start()
