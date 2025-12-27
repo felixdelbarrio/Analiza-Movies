@@ -215,6 +215,9 @@ SILENT_MODE: bool = _get_env_bool("SILENT_MODE", False)
 HTTP_DEBUG: bool = _get_env_bool("HTTP_DEBUG", False)
 LOG_LEVEL: str | None = _get_env_str("LOG_LEVEL", None)
 
+# Ejecutar automáticamente el dashboard tras Plex/DLNA (por defecto: activado)
+ANALIZA_AUTO_DASHBOARD: bool = _get_env_bool("ANALIZA_AUTO_DASHBOARD", True)
+
 
 # ============================================================
 # Reports (paths)
@@ -238,7 +241,9 @@ LOGGER_FILE_ENABLED: bool = _get_env_bool("LOGGER_FILE_ENABLED", False)
 _LOGGER_FILE_DIR_RAW: Final[str] = _get_env_str("LOGGER_FILE_DIR", "logs") or "logs"
 _LOGGER_FILE_DIR_CANDIDATE = Path(_LOGGER_FILE_DIR_RAW)
 LOGGER_FILE_DIR: Final[Path] = (
-    _LOGGER_FILE_DIR_CANDIDATE if _LOGGER_FILE_DIR_CANDIDATE.is_absolute() else (BASE_DIR / _LOGGER_FILE_DIR_CANDIDATE)
+    _LOGGER_FILE_DIR_CANDIDATE
+    if _LOGGER_FILE_DIR_CANDIDATE.is_absolute()
+    else (BASE_DIR / _LOGGER_FILE_DIR_CANDIDATE)
 )
 
 LOGGER_FILE_PREFIX: Final[str] = _get_env_str("LOGGER_FILE_PREFIX", "run") or "run"
