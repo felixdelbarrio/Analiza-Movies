@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from backend import summary
+from frontend import summary
 
 
 # ---------------------------------------------------------
