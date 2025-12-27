@@ -8,7 +8,7 @@ long_description = readme_path.read_text(encoding="utf-8") if readme_path.exists
 
 setup(
     name="analiza-movies",
-    version="0.1.0",
+    version="0.2.0",  # ⬅️ bump recomendado al romper CLI (sin retrocompatibilidad)
     author="Félix del Barrio",
     description=(
         "Toolset for analyzing Plex movie libraries, scoring titles and suggesting deletions "
@@ -16,11 +16,13 @@ setup(
     ),
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/<tu_usuario>/analiza-movies",  # opcional: ajusta o elimina si no aplica
+    url="https://github.com/<tu_usuario>/analiza-movies",  # ajusta o elimina si no aplica
     license="MIT",
+
     # Packages
     packages=find_packages(exclude=("tests",)),
     include_package_data=True,
+
     # Runtime dependencies
     install_requires=[
         "python-dotenv>=1.0",
@@ -33,6 +35,7 @@ setup(
         # Optional but strongly recommended: improves Streamlit hot-reload performance
         "watchdog>=3.0",
     ],
+
     extras_require={
         "dev": [
             "black",
@@ -42,12 +45,16 @@ setup(
             "ruff",
         ],
     },
+
+    # 🔥 CLI ENTRYPOINT (SIN RETROCOMPATIBILIDAD)
     entry_points={
         "console_scripts": [
-            "analiza=backend.analiza:main",
+            "start=backend.main:start",
         ]
     },
+
     python_requires=">=3.9",
+
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Environment :: Console",
@@ -60,5 +67,6 @@ setup(
         "Topic :: Multimedia :: Video",
         "Topic :: Utilities",
     ],
+
     keywords="plex movies streamlit analysis metadata cleanup",
 )

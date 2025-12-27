@@ -36,7 +36,7 @@ from backend.stats import (
     get_auto_keep_rating_threshold,
     get_global_imdb_mean_info,
 )
-from backend.summary import compute_summary
+from frontend.summary import compute_summary
 from frontend.data_utils import format_count_size
 
 
