@@ -32,8 +32,18 @@ from backend import logger as _logger  # noqa: E402
 # Paths base (DEBEN definirse pronto)
 # ============================================================
 
+# Directorio del módulo backend/
 BASE_DIR: Final[Path] = Path(__file__).resolve().parent
-DATA_DIR: Final[Path] = BASE_DIR / "data"
+
+# Raíz del proyecto (un nivel por encima de backend/)
+PROJECT_DIR: Final[Path] = BASE_DIR.parent
+
+# data/ en la raíz del proyecto
+_DATA_DIR_RAW: Final[str] = (os.getenv("DATA_DIR") or "data").strip() or "data"
+_DATA_DIR_CANDIDATE = Path(_DATA_DIR_RAW)
+DATA_DIR: Final[Path] = (
+    _DATA_DIR_CANDIDATE if _DATA_DIR_CANDIDATE.is_absolute() else (PROJECT_DIR / _DATA_DIR_CANDIDATE)
+)
 
 
 # ============================================================
@@ -220,7 +230,7 @@ ANALIZA_AUTO_DASHBOARD: bool = _get_env_bool("ANALIZA_AUTO_DASHBOARD", True)
 
 
 # ============================================================
-# Reports (paths)
+# Reports (paths) -> en la raíz del proyecto
 # ============================================================
 
 _REPORTS_DIR_RAW: Final[str] = _get_env_str("REPORTS_DIR", "reports") or "reports"
@@ -228,22 +238,21 @@ _REPORTS_DIR_PATH_CANDIDATE = Path(_REPORTS_DIR_RAW)
 REPORTS_DIR_PATH: Final[Path] = (
     _REPORTS_DIR_PATH_CANDIDATE
     if _REPORTS_DIR_PATH_CANDIDATE.is_absolute()
-    else (BASE_DIR / _REPORTS_DIR_PATH_CANDIDATE)
+    else (PROJECT_DIR / _REPORTS_DIR_PATH_CANDIDATE)
 )
 
 
 # ============================================================
 # LOGGER (persistencia opcional a fichero por ejecución)
 # ============================================================
+# Logs se quedan dentro de backend/ (BASE_DIR) a propósito.
 
 LOGGER_FILE_ENABLED: bool = _get_env_bool("LOGGER_FILE_ENABLED", False)
 
 _LOGGER_FILE_DIR_RAW: Final[str] = _get_env_str("LOGGER_FILE_DIR", "logs") or "logs"
 _LOGGER_FILE_DIR_CANDIDATE = Path(_LOGGER_FILE_DIR_RAW)
 LOGGER_FILE_DIR: Final[Path] = (
-    _LOGGER_FILE_DIR_CANDIDATE
-    if _LOGGER_FILE_DIR_CANDIDATE.is_absolute()
-    else (BASE_DIR / _LOGGER_FILE_DIR_CANDIDATE)
+    _LOGGER_FILE_DIR_CANDIDATE if _LOGGER_FILE_DIR_CANDIDATE.is_absolute() else (BASE_DIR / _LOGGER_FILE_DIR_CANDIDATE)
 )
 
 LOGGER_FILE_PREFIX: Final[str] = _get_env_str("LOGGER_FILE_PREFIX", "run") or "run"
