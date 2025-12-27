@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import streamlit as st
 
-import dashboard  # se importa el script principal
+import frontend.dashboard as dashboard  # se importa el script principal
 
 
 # -------------------------------------------------------------------
