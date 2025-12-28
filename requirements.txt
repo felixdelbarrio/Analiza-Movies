@@ -1,7 +1,7 @@
 # Runtime dependencies for Analiza Movies
 # --------------------------------------
 # Core runtime libraries required to run the application
-# (CLI analysis + Streamlit dashboard)
+# (CLI analysis + Streamlit dashboard + FastAPI public API)
 
 python-dotenv>=1.0
 requests>=2.31
@@ -12,6 +12,10 @@ pandas>=2.1
 streamlit>=1.32
 streamlit-aggrid>=0.3.4
 altair>=5.2
+
+# FastAPI server stack (Public API for frontend / Postman / integrations)
+fastapi>=0.110
+uvicorn[standard]>=0.27
 
 # Optional but strongly recommended:
 # Improves Streamlit hot-reload performance and removes startup warning
