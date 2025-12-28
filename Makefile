@@ -41,14 +41,14 @@ help:
 
 venv:
 	@test -d "$(VENV)" || python3 -m venv "$(VENV)"
-	@$(PY) -m pip install -q --upgrade pip
+	@$(PY) -m pip install -q --upgrade pip setuptools wheel
 
 install: venv
 	@$(PIP) install -q -r requirements.txt
-	@$(PIP) install -q -e .
+	@$(PIP) install -q -e .[dev]
 
 reinstall: venv
-	@$(PIP) install -q -e .
+	@$(PIP) install -q -e .[dev]
 
 # -------------------------------------------------
 # Targets principales
