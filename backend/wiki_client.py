@@ -729,18 +729,18 @@ def _empty_cache() -> WikiCacheFile:
     is_film: dict[str, IsFilmCacheEntry] = {}
     search_cache: dict[str, dict[str, Any]] = {}
 
-    return WikiCacheFile(
-        schema=_SCHEMA_VERSION,
-        language=str(WIKI_LANGUAGE),
-        fallback_language=str(WIKI_FALLBACK_LANGUAGE),
-        records=records,
-        index_imdb=index_imdb,
-        index_ty=index_ty,
-        entities=entities,
-        imdb_qid=imdb_qid,
-        is_film=is_film,
-        search_cache=search_cache,
-    )
+    return WikiCacheFile({
+        "schema": _SCHEMA_VERSION,
+        "language": str(WIKI_LANGUAGE),
+        "fallback_language": str(WIKI_FALLBACK_LANGUAGE),
+        "records": records,
+        "index_imdb": index_imdb,
+        "index_ty": index_ty,
+        "entities": entities,
+        "imdb_qid": imdb_qid,
+        "is_film": is_film,
+        "search_cache": search_cache,
+    })
 
 
 def _maybe_quarantine_corrupt_cache() -> None:
@@ -1141,7 +1141,7 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
             # FIX typing: evitamos `int(object)` en el lambda (Pyright 3.12 lo marca).
             ranked = sorted(
                 sc.items(),
-                key=lambda kv: int(kv[1].get("fetched_at") or 0) if isinstance(kv[1], Mapping) else 0,
+                key=lambda kv: (_safe_int(kv[1].get("fetched_at")) or 0) if isinstance(kv[1], Mapping) else 0,
                 reverse=True,
             )
             sc = dict(ranked[:_SEARCH_CAND_MAX])
