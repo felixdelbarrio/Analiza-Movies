@@ -196,9 +196,3 @@ AUTO_DELETE_RATING_PERCENTILE: float = _get_env_float("AUTO_DELETE_RATING_PERCEN
 METADATA_DRY_RUN: bool = _get_env_bool("METADATA_DRY_RUN", True)
 METADATA_APPLY_CHANGES: bool = _get_env_bool("METADATA_APPLY_CHANGES", False)
 
-# ============================================================
-# Dashboard / borrado seguro
-# ============================================================
-
-DELETE_DRY_RUN: bool = _get_env_bool("DELETE_DRY_RUN", True)
-DELETE_REQUIRE_CONFIRM: bool = _get_env_bool("DELETE_REQUIRE_CONFIRM", True)
