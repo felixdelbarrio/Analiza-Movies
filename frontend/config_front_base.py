@@ -44,15 +44,11 @@ _TRUE_SET: Final[set[str]] = {"1", "true", "t", "yes", "y", "on"}
 _FALSE_SET: Final[set[str]] = {"0", "false", "f", "no", "n", "off"}
 
 
-def _clean(v: object | None) -> str | None:
-    if v is None:
+def _clean(raw: str | None) -> str | None:
+    if raw is None:
         return None
-    s = str(v).strip()
-    if not s:
-        return None
-    if len(s) >= 2 and (s[0] == s[-1]) and s[0] in ("'", '"'):
-        s = s[1:-1].strip()
-    return s or None
+    v = raw.strip()
+    return v if v else None
 
 
 def _get_env_str(name: str, default: str | None = None) -> str | None:
@@ -78,6 +74,26 @@ def _get_env_bool(name: str, default: bool) -> bool:
     return default
 
 
+def _get_env_int(name: str, default: int) -> int:
+    raw = _get_env_str(name, None)
+    if raw is None:
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
+
+
+def _get_env_float(name: str, default: float) -> float:
+    raw = _get_env_str(name, None)
+    if raw is None:
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        return default
+
+
 def _resolve_dir(raw: str, *, base: Path) -> Path:
     p = Path(raw)
     return p if p.is_absolute() else (base / p)
@@ -90,6 +106,20 @@ def _resolve_dir(raw: str, *, base: Path) -> Path:
 FRONT_DEBUG: bool = _get_env_bool("FRONT_DEBUG", False)
 
 # ---------------------------------------------------------------------
+# API mode (opcional)
+#
+# Permite que el front consuma los reports vía HTTP (FastAPI) en vez de leer
+# directamente del filesystem. Si falla la API, se hace fallback a disco.
+# ---------------------------------------------------------------------
+
+FRONT_USE_API: bool = _get_env_bool("FRONT_USE_API", False)
+FRONT_API_BASE_URL: str = (_get_env_str("FRONT_API_BASE_URL", "http://localhost:8000") or "http://localhost:8000").rstrip(
+    "/"
+)
+FRONT_API_TIMEOUT_S: float = _get_env_float("FRONT_API_TIMEOUT_S", 30.0)
+FRONT_API_PAGE_SIZE: int = _get_env_int("FRONT_API_PAGE_SIZE", 2000)
+
+# ---------------------------------------------------------------------
 # Paths: data/ y reports/ (defaults alineados con tu estructura actual)
 # ---------------------------------------------------------------------
 
@@ -98,3 +128,17 @@ _REPORTS_DIR_RAW: Final[str] = _get_env_str("FRONT_REPORTS_DIR", "reports") or "
 
 DATA_DIR: Final[Path] = _resolve_dir(_DATA_DIR_RAW, base=PROJECT_DIR)
 REPORTS_DIR: Final[Path] = _resolve_dir(_REPORTS_DIR_RAW, base=PROJECT_DIR)
+
+# ============================================================
+# Dashboard / borrado seguro
+# ============================================================
+
+DELETE_DRY_RUN: bool = _get_env_bool("DELETE_DRY_RUN", True)
+DELETE_REQUIRE_CONFIRM: bool = _get_env_bool("DELETE_REQUIRE_CONFIRM", True)
+
+# ============================================================
+# MODO DE EJECUCIÓN
+# ============================================================
+
+DEBUG_MODE: bool = _get_env_bool("DEBUG_MODE", False)
+SILENT_MODE: bool = _get_env_bool("SILENT_MODE", False)
