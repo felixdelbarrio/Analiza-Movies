@@ -20,31 +20,20 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     license="MIT",
-
-    # Packages
     packages=find_packages(exclude=("tests",)),
     include_package_data=True,
-
-    # Runtime dependencies
     install_requires=[
         "python-dotenv>=1.0",
         "requests>=2.31",
         "plexapi>=4.15",
         "pandas>=2.1",
-
-        # API
         "fastapi>=0.110",
         "uvicorn[standard]>=0.27",
-
-        # Frontend
         "streamlit>=1.32",
         "altair>=5.2",
         "streamlit-aggrid>=0.3.4",
-
-        # Optional
         "watchdog>=3.0",
     ],
-
     extras_require={
         "dev": [
             "black",
@@ -53,20 +42,14 @@ setup(
             "mypy",
         ],
     },
-
-    # Entry points
     entry_points={
         "console_scripts": [
-            # Backend CLI (menú Plex / DLNA / Streamlit)
             "start=backend.main:start",
-
-            # FastAPI server
-            "start-server=server.api_fastapi:main",
+            # ⬇️ CAMBIO CLAVE
+            "start-server=server.__main__:main",
         ]
     },
-
     python_requires=">=3.9",
-
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Environment :: Console",
