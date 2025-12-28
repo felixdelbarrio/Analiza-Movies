@@ -22,7 +22,7 @@ Principios
 from collections import Counter
 import json
 import re
-from typing import Iterable, List
+from typing import Iterable
 
 import altair as alt
 import pandas as pd
@@ -92,7 +92,6 @@ def _parse_metacritic_value(value: object) -> float | None:
     if not s or s.upper() == "N/A":
         return None
 
-    # Formatos tipo "68/100"
     if "/" in s:
         left = s.split("/", 1)[0].strip()
         try:
@@ -101,7 +100,6 @@ def _parse_metacritic_value(value: object) -> float | None:
             return None
         return v if 0.0 <= v <= 100.0 else None
 
-    # Formato simple "68"
     try:
         v = float(s)
     except Exception:
@@ -121,12 +119,10 @@ def _extract_metacritic_from_omdb_json(raw: object) -> float | None:
     if not isinstance(data, dict):
         return None
 
-    # 1) Campo directo
     direct = _parse_metacritic_value(data.get("Metascore"))
     if direct is not None:
         return direct
 
-    # 2) Ratings list
     ratings = data.get("Ratings")
     if not isinstance(ratings, list):
         return None
@@ -139,6 +135,18 @@ def _extract_metacritic_from_omdb_json(raw: object) -> float | None:
             return _parse_metacritic_value(item.get("Value"))
 
     return None
+
+
+def _to_numeric_series(values: object) -> pd.Series:
+    """
+    Helper de tipado: fuerza el resultado a Series para stubs de pandas.
+
+    Nota: en runtime, pasar un Series aquí produce un Series siempre.
+    """
+    s = pd.to_numeric(values, errors="coerce")
+    if isinstance(s, pd.Series):
+        return s
+    return pd.Series([s])
 
 
 def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -157,33 +165,28 @@ def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
 
-    # Metacritic desde OMDb JSON (antes de to_numeric; luego se normaliza)
     if "omdb_json" in df.columns and "metacritic_score" not in df.columns:
         df["metacritic_score"] = df["omdb_json"].apply(_extract_metacritic_from_omdb_json)
 
-    # Aseguramos tipos numéricos en columnas básicas (si existen)
     for col in _NUMERIC_COLS:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Tamaño en GB (si hay file_size en bytes)
     if "file_size" in df.columns:
-        file_size_num = pd.to_numeric(df["file_size"], errors="coerce")
+        file_size_num = _to_numeric_series(df["file_size"])
         df["file_size_gb"] = file_size_num.astype("float64") / (1024**3)
 
-    # Década y etiqueta de década
     if "year" in df.columns:
-        year_num = pd.to_numeric(df["year"], errors="coerce")
+        year_num = _to_numeric_series(df["year"])
         decade = (year_num // 10) * 10
         df["decade"] = decade
 
-        def _format_decade(val: float | int | None) -> str | None:
-            if pd.isna(val):
+        def _format_decade(val: object) -> str | None:
+            if val is None or pd.isna(val):
                 return None
-            try:
-                return f"{int(val)}s"
-            except Exception:
+            if not isinstance(val, (int, float)):
                 return None
+            return f"{int(val)}s"
 
         df["decade_label"] = df["decade"].apply(_format_decade)
 
@@ -224,8 +227,9 @@ def explode_genres_from_omdb_json(df: pd.DataFrame) -> pd.DataFrame:
     df_g = df_g.explode("genre_list").reset_index(drop=True)
     df_g = df_g.rename(columns={"genre_list": "genre"})
 
-    mask = df_g["genre"].notna() & (df_g["genre"] != "")
-    return df_g.loc[mask].copy()
+    mask = (df_g["genre"].notna() & (df_g["genre"] != "")).astype(bool)
+    filtered = df_g.loc[mask, :]
+    return pd.DataFrame(filtered).copy()
 
 
 # ============================================================================
@@ -262,7 +266,7 @@ _STOPWORDS = frozenset(
 _WORD_SPLIT_RE = re.compile(r"[^\w\s]", re.UNICODE)
 
 
-def build_word_counts(df: pd.DataFrame, decisions: List[str] | Iterable[str]) -> pd.DataFrame:
+def build_word_counts(df: pd.DataFrame, decisions: Iterable[str]) -> pd.DataFrame:
     """
     Construye un DataFrame con recuento de palabras en títulos.
 
@@ -279,15 +283,20 @@ def build_word_counts(df: pd.DataFrame, decisions: List[str] | Iterable[str]) ->
         return pd.DataFrame(columns=["word", "decision", "count"])
 
     decisions_set = set(decisions)
-    df2 = df[df["decision"].isin(decisions_set)].copy()
+    mask = df["decision"].isin(decisions_set)
+    df2 = df.loc[mask].copy()
+
     if df2.empty:
         return pd.DataFrame(columns=["word", "decision", "count"])
 
     rows: list[dict[str, object]] = []
 
     for dec, sub in df2.groupby("decision"):
+        dec_str = str(dec)
         words: list[str] = []
-        for title in sub["title"].dropna().astype(str):
+
+        for title_obj in sub["title"].dropna():
+            title = str(title_obj)
             t_clean = _WORD_SPLIT_RE.sub(" ", title)
             for w in t_clean.split():
                 w_norm = w.strip().lower()
@@ -302,7 +311,7 @@ def build_word_counts(df: pd.DataFrame, decisions: List[str] | Iterable[str]) ->
 
         counts = Counter(words)
         for word, count in counts.items():
-            rows.append({"word": word, "decision": dec, "count": int(count)})
+            rows.append({"word": word, "decision": dec_str, "count": int(count)})
 
     if not rows:
         return pd.DataFrame(columns=["word", "decision", "count"])

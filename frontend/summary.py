@@ -19,7 +19,7 @@ Convenciones:
 - DECISION_COL  = "decision" (generada por scoring/analysis)
 """
 
-from typing import Final
+from typing import Final, TypedDict
 
 import pandas as pd
 
@@ -28,6 +28,20 @@ from frontend.front_stats import compute_global_imdb_mean_from_df
 
 FILE_SIZE_COL: Final[str] = "file_size_gb"
 DECISION_COL: Final[str] = "decision"
+
+
+class Summary(TypedDict):
+    total_count: int
+    total_size_gb: float | None
+    keep_count: int
+    keep_size_gb: float | None
+    dm_count: int
+    dm_size_gb: float | None
+    delete_count: int
+    delete_size_gb: float | None
+    maybe_count: int
+    maybe_size_gb: float | None
+    imdb_mean_df: float | None
 
 
 def _sum_size(df: pd.DataFrame, mask: pd.Series | None = None) -> float | None:
@@ -57,7 +71,7 @@ def _sum_size(df: pd.DataFrame, mask: pd.Series | None = None) -> float | None:
         return None
 
 
-def compute_summary(df_all: pd.DataFrame) -> dict[str, object]:
+def compute_summary(df_all: pd.DataFrame) -> Summary:
     """
     Calcula métricas resumen a partir del DataFrame completo.
 

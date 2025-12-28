@@ -21,10 +21,13 @@ Notas
   * URLs: a veces vienen como NaN y el frontend espera str.
   * omdb_json: puede ser muy largo y no queremos inferencia a NaN/float.
 - `_clean_base_dataframe` elimina columnas que el dashboard no necesita (thumb).
+
+Fix typing (Pylance)
+- Usamos df.loc[:, cols] + cast(DataFrame) para que el type-checker no infiera Series[Any].
 """
 
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import pandas as pd
 
@@ -45,8 +48,9 @@ def _clean_base_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     Importante:
     - Se devuelve una vista/selección del DF (sin copiar) para ser barato.
     """
-    cols = [c for c in df.columns if c != "thumb"]
-    return df[cols]
+    cols: list[str] = [c for c in df.columns if c != "thumb"]
+    # .loc con lista de columnas fuerza DataFrame a nivel runtime; cast calma a Pylance.
+    return cast(pd.DataFrame, df.loc[:, cols])
 
 
 def _cast_text_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -88,7 +92,10 @@ def _read_csv_safe(path: Path, *, dtype_map: dict[str, object]) -> pd.DataFrame:
         raise
 
 
-def load_reports(all_csv_path: str, filtered_csv_path: str | None) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+def load_reports(
+    all_csv_path: str,
+    filtered_csv_path: str | None,
+) -> tuple[pd.DataFrame, pd.DataFrame | None]:
     """
     Carga y prepara los DataFrames usados por el dashboard.
 

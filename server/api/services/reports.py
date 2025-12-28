@@ -1,7 +1,6 @@
-# _df_to_page + búsqueda pandas + helpers
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -10,11 +9,6 @@ _INTERNAL_SEARCH_COL = "__search_blob"
 
 
 def prepare_search_blob(df: pd.DataFrame) -> None:
-    """
-    Precompute para acelerar query:
-    - concatena columnas candidatas en una sola columna interna.
-    - no se expone al cliente (se elimina antes de serializar).
-    """
     cols = [c for c in _SEARCH_COLUMNS if c in df.columns]
     if not cols:
         return
@@ -28,7 +22,6 @@ def prepare_search_blob(df: pd.DataFrame) -> None:
         for s in parts[1:]:
             df[_INTERNAL_SEARCH_COL] = df[_INTERNAL_SEARCH_COL] + " | " + s
     except Exception:
-        # Si falla, no bloqueamos el endpoint; simplemente no optimizamos
         return
 
 
@@ -39,7 +32,13 @@ def strip_internal_cols(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=internal_cols, errors="ignore")
 
 
-def df_to_page(df: pd.DataFrame, *, offset: int, limit: int, query: str | None) -> dict[str, Any]:
+def df_to_page(
+    df: pd.DataFrame,
+    *,
+    offset: int,
+    limit: int,
+    query: str | None,
+) -> dict[str, Any]:
     view = df
 
     if query:
@@ -47,7 +46,12 @@ def df_to_page(df: pd.DataFrame, *, offset: int, limit: int, query: str | None) 
         if q:
             if _INTERNAL_SEARCH_COL in view.columns:
                 try:
-                    mask = view[_INTERNAL_SEARCH_COL].astype("string").fillna("").str.contains(q)
+                    mask = (
+                        view[_INTERNAL_SEARCH_COL]
+                        .astype("string")
+                        .fillna("")
+                        .str.contains(q)
+                    )
                     view = view[mask]
                 except Exception:
                     pass
@@ -55,16 +59,29 @@ def df_to_page(df: pd.DataFrame, *, offset: int, limit: int, query: str | None) 
             if _INTERNAL_SEARCH_COL not in view.columns:
                 candidate_cols = [c for c in _SEARCH_COLUMNS if c in view.columns]
                 if candidate_cols:
-                    mask = None
+                    mask: pd.Series | None = None
                     for c in candidate_cols:
-                        s = view[c].astype("string").fillna("").str.lower().str.contains(q)
+                        s = (
+                            view[c]
+                            .astype("string")
+                            .fillna("")
+                            .str.lower()
+                            .str.contains(q)
+                        )
                         mask = s if mask is None else (mask | s)
+
                     if mask is not None:
                         view = view[mask]
 
     total = int(len(view))
-    page = view.iloc[offset : offset + limit]
+
+    page = cast(pd.DataFrame, view.iloc[offset : offset + limit])
     page = strip_internal_cols(page)
 
     items = page.where(pd.notnull(page), None).to_dict(orient="records")
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
