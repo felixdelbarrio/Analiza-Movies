@@ -5,17 +5,13 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from backend import logger as _logger
-from backend.config_scoring import (
+from frontend import front_logger as _logger
+
+from frontend.config_front_artifacts import REPORT_FILTERED_PATH
+
+from frontend.config_front_base import (
     DELETE_DRY_RUN,
     DELETE_REQUIRE_CONFIRM,
-)
-
-from backend.config_reports import (
-    REPORT_FILTERED_PATH,
-)
-
-from backend.config_base import (
     SILENT_MODE,
 )
 

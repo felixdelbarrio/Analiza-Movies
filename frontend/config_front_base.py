@@ -35,7 +35,6 @@ _ENV: Final[dict[str, str]] = {
     k: v for k, v in (dotenv_values(_ENV_FRONT_PATH).items() if _ENV_FRONT_PATH.exists() else []) if v is not None
 }
 
-
 # ---------------------------------------------------------------------
 # Helpers defensivos (sin backend/logger)
 # ---------------------------------------------------------------------
@@ -78,6 +77,26 @@ def _get_env_bool(name: str, default: bool) -> bool:
     return default
 
 
+def _get_env_int(name: str, default: int) -> int:
+    raw = _get_env_str(name, None)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _get_env_float(name: str, default: float) -> float:
+    raw = _get_env_str(name, None)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def _resolve_dir(raw: str, *, base: Path) -> Path:
     p = Path(raw)
     return p if p.is_absolute() else (base / p)
@@ -90,6 +109,32 @@ def _resolve_dir(raw: str, *, base: Path) -> Path:
 FRONT_DEBUG: bool = _get_env_bool("FRONT_DEBUG", False)
 
 # ---------------------------------------------------------------------
+# Modo de ejecución (sin fallback)
+#
+# Valores válidos:
+# - "api"
+# - "disk"
+# ---------------------------------------------------------------------
+
+_FRONT_MODE_RAW: str = (_get_env_str("FRONT_MODE", "disk") or "disk").lower().strip()
+if _FRONT_MODE_RAW not in {"api", "disk"}:
+    raise RuntimeError(
+        f"FRONT_MODE inválido: {_FRONT_MODE_RAW!r}. Valores válidos: 'api' | 'disk'"
+    )
+
+FRONT_MODE: Final[str] = _FRONT_MODE_RAW
+
+# ---------------------------------------------------------------------
+# API config (solo relevante si FRONT_MODE == "api")
+# ---------------------------------------------------------------------
+
+FRONT_API_BASE_URL: str = (_get_env_str("FRONT_API_BASE_URL", "http://localhost:8000") or "http://localhost:8000").rstrip(
+    "/"
+)
+FRONT_API_TIMEOUT_S: float = _get_env_float("FRONT_API_TIMEOUT_S", 30.0)
+FRONT_API_PAGE_SIZE: int = _get_env_int("FRONT_API_PAGE_SIZE", 2000)
+
+# ---------------------------------------------------------------------
 # Paths: data/ y reports/ (defaults alineados con tu estructura actual)
 # ---------------------------------------------------------------------
 
@@ -98,3 +143,18 @@ _REPORTS_DIR_RAW: Final[str] = _get_env_str("FRONT_REPORTS_DIR", "reports") or "
 
 DATA_DIR: Final[Path] = _resolve_dir(_DATA_DIR_RAW, base=PROJECT_DIR)
 REPORTS_DIR: Final[Path] = _resolve_dir(_REPORTS_DIR_RAW, base=PROJECT_DIR)
+
+# ---------------------------------------------------------------------
+# Dashboard / borrado seguro
+# (si ya los tienes en otro config, puedes moverlos, pero no lo hago aquí)
+# ---------------------------------------------------------------------
+
+DELETE_DRY_RUN: bool = _get_env_bool("DELETE_DRY_RUN", True)
+DELETE_REQUIRE_CONFIRM: bool = _get_env_bool("DELETE_REQUIRE_CONFIRM", True)
+
+# ---------------------------------------------------------------------
+# MODO DE EJECUCIÓN (compat)
+# ---------------------------------------------------------------------
+
+DEBUG_MODE: bool = _get_env_bool("DEBUG_MODE", False)
+SILENT_MODE: bool = _get_env_bool("SILENT_MODE", False)

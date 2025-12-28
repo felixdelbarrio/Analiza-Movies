@@ -172,7 +172,7 @@ def render(
         delete_require_confirm: Si True, requiere checkbox de confirmación antes de borrar.
     """
     # Lazy import para evitar circular imports (backend <-> frontend).
-    from backend.delete_logic import delete_files_from_rows
+    from frontend.delete_logic import delete_files_from_rows
 
     st.write("### Borrado controlado de archivos")
 

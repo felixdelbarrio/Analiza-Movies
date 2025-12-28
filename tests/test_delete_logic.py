@@ -7,7 +7,7 @@ from typing import Iterable
 import pandas as pd
 import pytest
 
-from backend import delete_logic
+from frontend import delete_logic
 
 
 def make_rows_from_dicts(dicts: Iterable[dict[str, object]]) -> list[dict[str, object]]:
