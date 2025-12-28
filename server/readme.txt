@@ -61,3 +61,18 @@ Bonus (muy útil): comprobar qué ficheros está viendo la API
         •	GET /meta/files
 
     Ahí verás exactamente si existen, tamaño, mtime y hash.
+
+3️⃣ Importar en Postman
+	1.	Abre Postman
+	2.	Clic en Import
+	3.	Elige una de estas opciones:
+	•	Link → pega http://localhost:8000/openapi.json
+	•	File → descarga primero el openapi.json y súbelo
+	4.	Pulsa Import
+
+✅ Postman creará automáticamente:
+	•	Una Collection
+	•	Todas las rutas
+	•	Métodos (GET, POST, etc.)
+	•	Parámetros
+	•	Esquemas de request/response
