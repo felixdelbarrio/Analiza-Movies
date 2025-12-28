@@ -8,9 +8,9 @@ from __future__ import annotations
 # PRINCIPIOS:
 # - 0 imports de backend.*
 # - Config autocontenida en frontend/config_front_*.py (lee .env.front)
-# - Modo API opcional con fallback a disco
+# - FRONT_MODE = "api" | "disk" (sin fallback)
 # - Import robusto de tabs (no depende de frontend.tabs.__init__)
-# - Tab "Resumen": si no existe módulo UI, render inline (evita crash)
+# - NO existe tab "Resumen" (como en el dashboard antiguo). El resumen es el KPI superior.
 # =============================================================================
 
 import importlib
@@ -18,7 +18,7 @@ import inspect
 import sys
 import warnings
 from pathlib import Path
-from typing import Any, Final, Iterable
+from typing import Any, Final
 
 import pandas as pd
 import streamlit as st
@@ -47,7 +47,7 @@ from frontend.config_front_base import (
     FRONT_API_PAGE_SIZE,
     FRONT_API_TIMEOUT_S,
     FRONT_DEBUG,
-    FRONT_USE_API,
+    FRONT_MODE,
 )
 from frontend.data_utils import add_derived_columns, format_count_size
 from frontend.front_api_client import (
@@ -95,6 +95,8 @@ def _read_csv_or_raise(path: Path, *, label: str) -> pd.DataFrame:
     """
     Lee un CSV obligatorio (si no existe, error).
     Cachea por mtime para evitar re-lecturas innecesarias.
+
+    En modo DISK, si falla, se debe ver en UI y parar el flujo.
     """
     key = f"{label}:{path}"
     if not path.exists():
@@ -138,7 +140,7 @@ def _debug_banner(*, df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> 
     f_rows = 0 if df_filtered is None else len(df_filtered)
     st.caption(
         "DEBUG | "
-        f"all={len(df_all)} filtered={f_rows} | "
+        f"mode={FRONT_MODE} all={len(df_all)} filtered={f_rows} | "
         f"REPORT_ALL={REPORT_ALL_PATH} | REPORT_FILTERED={REPORT_FILTERED_PATH} | META_FIX={METADATA_FIX_PATH}"
     )
 
@@ -214,60 +216,6 @@ def _call_candidates_render(module: Any, *, df_all: pd.DataFrame, df_filtered: p
         render_fn(df_all)
 
 
-def _requires_columns(df: pd.DataFrame, cols: Iterable[str]) -> bool:
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        st.info(f"Faltan columna(s) requerida(s): {', '.join(missing)}.")
-        return False
-    return True
-
-
-def _render_summary_tab_inline(df_all: pd.DataFrame) -> None:
-    """
-    Render inline para la pestaña "Resumen" cuando no existe frontend.tabs.summary.
-    Evita crash y da un resumen útil sin inventar dependencias.
-    """
-    st.write("### Resumen")
-
-    if df_all.empty:
-        st.info("No hay datos para mostrar.")
-        return
-
-    # Tabla por decisión
-    if _requires_columns(df_all, ["decision", "title"]):
-        agg = (
-            df_all.groupby("decision", dropna=False)["title"]
-            .count()
-            .reset_index()
-            .rename(columns={"title": "count"})
-            .sort_values("count", ascending=False, ignore_index=True)
-        )
-        st.write("**Conteo por decisión**")
-        st.dataframe(agg, width="stretch", height=220)
-
-    # Tabla por biblioteca (si existe)
-    if _requires_columns(df_all, ["library", "title"]):
-        agg_lib = (
-            df_all.groupby("library", dropna=False)["title"]
-            .count()
-            .reset_index()
-            .rename(columns={"title": "count"})
-            .sort_values("count", ascending=False, ignore_index=True)
-        )
-        st.write("**Conteo por biblioteca**")
-        st.dataframe(agg_lib, width="stretch", height=260)
-
-    # Top deletes (si existe imdb_rating)
-    if "decision" in df_all.columns and "imdb_rating" in df_all.columns and "title" in df_all.columns:
-        df_del = df_all[df_all["decision"] == "DELETE"].copy()
-        if not df_del.empty:
-            df_del["imdb_rating"] = pd.to_numeric(df_del["imdb_rating"], errors="coerce")
-            df_del = df_del.sort_values("imdb_rating", ascending=True, ignore_index=True).head(25)
-            st.write("**Top 25 DELETE por peor IMDb (si disponible)**")
-            show_cols = [c for c in ["title", "year", "library", "imdb_rating", "imdb_votes", "file_size_gb"] if c in df_del.columns]
-            st.dataframe(df_del[show_cols], width="stretch", height=320)
-
-
 # =============================================================================
 # 4) Streamlit settings
 # =============================================================================
@@ -295,10 +243,10 @@ if st.session_state.get("modal_open"):
     st.stop()
 
 # =============================================================================
-# 7) Carga de datos (API + fallback)
+# 7) Carga de datos (SIN FALLBACK): FRONT_MODE = api | disk
 # =============================================================================
 
-if FRONT_USE_API:
+if FRONT_MODE == "api":
     try:
         df_all = fetch_report_all_df(
             base_url=FRONT_API_BASE_URL,
@@ -315,22 +263,32 @@ if FRONT_USE_API:
         )
 
         if FRONT_DEBUG:
-            st.caption("DEBUG | Datos cargados desde API (fallback a disco disponible).")
+            st.caption("DEBUG | Datos cargados exclusivamente desde API.")
     except ApiClientError as exc:
-        if FRONT_DEBUG:
-            st.caption(f"DEBUG | Falló carga desde API ({exc}); usando ficheros locales.")
+        st.error(f"Error cargando datos desde API (FRONT_MODE=api): {exc}")
+        st.stop()
+
+elif FRONT_MODE == "disk":
+    try:
         df_all = _read_csv_or_raise(REPORT_ALL_PATH, label="report_all.csv")
         df_filtered = _read_csv_or_none(REPORT_FILTERED_PATH)
+
+        if FRONT_DEBUG:
+            st.caption("DEBUG | Datos cargados exclusivamente desde disco.")
+    except Exception as exc:
+        st.error(f"Error cargando datos desde disco (FRONT_MODE=disk): {exc!r}")
+        st.stop()
+
 else:
-    df_all = _read_csv_or_raise(REPORT_ALL_PATH, label="report_all.csv")
-    df_filtered = _read_csv_or_none(REPORT_FILTERED_PATH)
+    st.error(f"FRONT_MODE desconocido: {FRONT_MODE!r}")
+    st.stop()
 
 df_all = add_derived_columns(df_all)
 
 _debug_banner(df_all=df_all, df_filtered=df_filtered)
 
 # =============================================================================
-# 8) Resumen general (KPIs)
+# 8) Resumen general (KPIs) — como en el dashboard antiguo
 # =============================================================================
 
 st.subheader("Resumen general")
@@ -338,7 +296,7 @@ st.subheader("Resumen general")
 summary = compute_summary(df_all)
 
 col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("TOTAL", format_count_size(int(summary["total_count"]), summary.get("total_size_gb")))
+col1.metric("Películas", format_count_size(int(summary["total_count"]), summary.get("total_size_gb")))
 col2.metric("KEEP", format_count_size(int(summary["keep_count"]), summary.get("keep_size_gb")))
 col3.metric("DELETE", format_count_size(int(summary.get("delete_count", 0)), summary.get("delete_size_gb")))
 col4.metric("MAYBE", format_count_size(int(summary.get("maybe_count", 0)), summary.get("maybe_size_gb")))
@@ -352,56 +310,65 @@ else:
 st.markdown("---")
 
 # =============================================================================
-# 9) Pestañas (tabs)
+# 9) Pestañas (tabs) — nombres como en el dashboard antiguo
 # =============================================================================
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    ["Candidatos", "Resumen", "Advanced", "Delete", "Charts", "Metadata"],
+    [
+        "📚 Todas",
+        "⚠️ Candidatas",
+        "🔎 Búsqueda avanzada",
+        "🧹 Borrado",
+        "📊 Gráficos",
+        "🧠 Metadata",
+    ]
 )
 
 with tab1:
+    all_movies_mod = _import_tabs_module("all_movies")
+    render_fn = getattr(all_movies_mod, "render", None) if all_movies_mod is not None else None
+    if not callable(render_fn):
+        st.error("No existe frontend.tabs.all_movies.render(df_all)")
+    else:
+        render_fn(df_all)
+
+with tab2:
     candidates_mod = _import_tabs_module("candidates")
     if candidates_mod is None:
         st.error("No existe el módulo frontend.tabs.candidates")
     else:
         _call_candidates_render(candidates_mod, df_all=df_all, df_filtered=df_filtered)
 
-with tab2:
-    # Si existe una tab summary real, úsala. Si no, render inline.
-    summary_tab_mod = _import_tabs_module("summary")
-    render_fn = getattr(summary_tab_mod, "render", None) if summary_tab_mod is not None else None
-    if callable(render_fn):
-        render_fn(df_all)
-    else:
-        _render_summary_tab_inline(df_all)
-
 with tab3:
     advanced_mod = _import_tabs_module("advanced")
-    if advanced_mod is None or not callable(getattr(advanced_mod, "render", None)):
+    render_fn = getattr(advanced_mod, "render", None) if advanced_mod is not None else None
+    if not callable(render_fn):
         st.error("No existe frontend.tabs.advanced.render(df_all)")
     else:
-        advanced_mod.render(df_all)
+        render_fn(df_all)
 
 with tab4:
     delete_mod = _import_tabs_module("delete")
-    if delete_mod is None or not callable(getattr(delete_mod, "render", None)):
+    render_fn = getattr(delete_mod, "render", None) if delete_mod is not None else None
+    if not callable(render_fn):
         st.error("No existe frontend.tabs.delete.render(df_filtered, ...)")
     else:
-        delete_mod.render(df_filtered, DELETE_DRY_RUN, DELETE_REQUIRE_CONFIRM)
+        render_fn(df_filtered, DELETE_DRY_RUN, DELETE_REQUIRE_CONFIRM)
 
 with tab5:
     charts_mod = _import_tabs_module("charts")
-    if charts_mod is None or not callable(getattr(charts_mod, "render", None)):
+    render_fn = getattr(charts_mod, "render", None) if charts_mod is not None else None
+    if not callable(render_fn):
         st.error("No existe frontend.tabs.charts.render(df_all)")
     else:
-        charts_mod.render(df_all)
+        render_fn(df_all)
 
 with tab6:
     metadata_mod = _import_tabs_module("metadata")
     if metadata_mod is None:
         st.error("No existe frontend.tabs.metadata")
     else:
-        if FRONT_USE_API:
+        if FRONT_MODE == "api":
             try:
                 df_meta_fix = fetch_metadata_fix_df(
                     base_url=FRONT_API_BASE_URL,
@@ -418,13 +385,7 @@ with tab6:
                     else:
                         st.error("metadata: no existe render_df(df) ni render(path)")
             except ApiClientError as exc:
-                if FRONT_DEBUG:
-                    st.caption(f"DEBUG | Falló metadata-fix desde API ({exc}); usando fichero local.")
-                render = getattr(metadata_mod, "render", None)
-                if callable(render):
-                    render(METADATA_FIX_PATH)
-                else:
-                    st.error("metadata: no existe render(path)")
+                st.error(f"Error cargando metadata desde API (FRONT_MODE=api): {exc}")
         else:
             render = getattr(metadata_mod, "render", None)
             if callable(render):
