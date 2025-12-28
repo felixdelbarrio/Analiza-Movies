@@ -35,6 +35,27 @@ from frontend.data_utils import safe_json_loads_single
 
 
 # ============================================================================
+# Compatibilidad rerun (Streamlit)
+# ============================================================================
+
+
+def _rerun() -> None:
+    """
+    Compatibilidad Streamlit:
+    - Streamlit nuevo: st.rerun()
+    - Streamlit antiguo: st.experimental_rerun()
+    """
+    rerun_fn = getattr(st, "rerun", None)
+    if callable(rerun_fn):
+        rerun_fn()
+        return
+
+    exp_rerun_fn = getattr(st, "experimental_rerun", None)
+    if callable(exp_rerun_fn):
+        exp_rerun_fn()
+
+
+# ============================================================================
 # Tabla principal con selección de fila
 # ============================================================================
 
@@ -341,7 +362,7 @@ def render_detail_card(
             if st.button("🪟 Abrir en ventana", key=button_key):
                 st.session_state["modal_row"] = row
                 st.session_state["modal_open"] = True
-                st.experimental_rerun()
+                _rerun()
 
     # Detalle
     with col_right:
@@ -468,6 +489,6 @@ def render_modal() -> None:
         if st.button("✖", key="close_modal"):
             st.session_state["modal_open"] = False
             st.session_state["modal_row"] = None
-            st.experimental_rerun()
+            _rerun()
 
     render_detail_card(row, show_modal_button=False)
