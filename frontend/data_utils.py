@@ -69,7 +69,76 @@ _NUMERIC_COLS: tuple[str, ...] = (
     "year",
     "plex_rating",
     "file_size",
+    "metacritic_score",
 )
+
+
+def _parse_metacritic_value(value: object) -> float | None:
+    """
+    Parsea valores típicos de Metacritic:
+      - "68" / "68/100" / 68
+      - "N/A" -> None
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        if pd.isna(value):
+            return None
+        v = float(value)
+        return v if 0.0 <= v <= 100.0 else None
+
+    s = str(value).strip()
+    if not s or s.upper() == "N/A":
+        return None
+
+    # Formatos tipo "68/100"
+    if "/" in s:
+        left = s.split("/", 1)[0].strip()
+        try:
+            v = float(left)
+        except Exception:
+            return None
+        return v if 0.0 <= v <= 100.0 else None
+
+    # Formato simple "68"
+    try:
+        v = float(s)
+    except Exception:
+        return None
+    return v if 0.0 <= v <= 100.0 else None
+
+
+def _extract_metacritic_from_omdb_json(raw: object) -> float | None:
+    """
+    Extrae Metacritic score desde omdb_json.
+
+    Prioridad:
+      1) Campo "Metascore" (string tipo "68" o "N/A")
+      2) Array "Ratings": [{"Source":"Metacritic","Value":"68/100"}, ...]
+    """
+    data = safe_json_loads_single(raw)
+    if not isinstance(data, dict):
+        return None
+
+    # 1) Campo directo
+    direct = _parse_metacritic_value(data.get("Metascore"))
+    if direct is not None:
+        return direct
+
+    # 2) Ratings list
+    ratings = data.get("Ratings")
+    if not isinstance(ratings, list):
+        return None
+
+    for item in ratings:
+        if not isinstance(item, dict):
+            continue
+        src = str(item.get("Source") or "").strip().lower()
+        if src == "metacritic":
+            return _parse_metacritic_value(item.get("Value"))
+
+    return None
 
 
 def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -81,11 +150,16 @@ def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
     - Crea:
         * file_size_gb (si existe file_size en bytes)
         * decade y decade_label (si existe year)
+        * metacritic_score (si existe omdb_json)
 
     Returns:
         DataFrame con columnas derivadas añadidas.
     """
     df = df.copy()
+
+    # Metacritic desde OMDb JSON (antes de to_numeric; luego se normaliza)
+    if "omdb_json" in df.columns and "metacritic_score" not in df.columns:
+        df["metacritic_score"] = df["omdb_json"].apply(_extract_metacritic_from_omdb_json)
 
     # Aseguramos tipos numéricos en columnas básicas (si existen)
     for col in _NUMERIC_COLS:

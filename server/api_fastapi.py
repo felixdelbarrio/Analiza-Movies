@@ -6,19 +6,20 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import Response
 
 
 # ============================================================
 # Configuración de paths (con fallbacks)
 # ============================================================
 
-BASE_DIR = Path(__file__).resolve().parent
+# server/api_fastapi.py  -> repo_root = parents[1]
+BASE_DIR = Path(__file__).resolve().parents[1]
 
 
 def _first_existing(candidates: List[Path]) -> Optional[Path]:
@@ -50,8 +51,6 @@ OMDB_CACHE_PATH = resolve_path(
     [
         BASE_DIR / "data" / "omdb_cache.json",
         BASE_DIR / "omdb_cache.json",
-        BASE_DIR.parent / "data" / "omdb_cache.json",
-        BASE_DIR.parent / "omdb_cache.json",
     ],
 )
 
@@ -60,8 +59,6 @@ WIKI_CACHE_PATH = resolve_path(
     [
         BASE_DIR / "data" / "wiki_cache.json",
         BASE_DIR / "wiki_cache.json",
-        BASE_DIR.parent / "data" / "wiki_cache.json",
-        BASE_DIR.parent / "wiki_cache.json",
     ],
 )
 
@@ -70,8 +67,6 @@ REPORT_ALL_PATH = resolve_path(
     [
         BASE_DIR / "reports" / "report_all.csv",
         BASE_DIR / "report_all.csv",
-        BASE_DIR.parent / "reports" / "report_all.csv",
-        BASE_DIR.parent / "report_all.csv",
     ],
 )
 
@@ -80,8 +75,6 @@ REPORT_FILTERED_PATH = resolve_path(
     [
         BASE_DIR / "reports" / "report_filtered.csv",
         BASE_DIR / "report_filtered.csv",
-        BASE_DIR.parent / "reports" / "report_filtered.csv",
-        BASE_DIR.parent / "report_filtered.csv",
     ],
 )
 
@@ -90,8 +83,6 @@ METADATA_FIX_PATH = resolve_path(
     [
         BASE_DIR / "reports" / "metadata_fix.csv",
         BASE_DIR / "metadata_fix.csv",
-        BASE_DIR.parent / "reports" / "metadata_fix.csv",
-        BASE_DIR.parent / "metadata_fix.csv",
     ],
 )
 
@@ -185,7 +176,6 @@ def _df_to_page(df: pd.DataFrame, *, offset: int, limit: int, query: Optional[st
     if query:
         q = query.strip().lower()
         if q:
-            # Filtrado simple: busca en algunas columnas típicas si existen
             candidate_cols = [c for c in ["title", "name", "file", "path", "imdb_id", "imdbID"] if c in view.columns]
             if candidate_cols:
                 mask = None
@@ -264,7 +254,7 @@ def meta_files() -> Dict[str, Any]:
 def reports_all(
     limit: int = Query(100, ge=1, le=2000),
     offset: int = Query(0, ge=0),
-    query: Optional[str] = Query(None, description="Búsqueda simple (title/file/imdb)")
+    query: Optional[str] = Query(None, description="Búsqueda simple (title/file/imdb)"),
 ) -> Dict[str, Any]:
     try:
         df = load_csv_cached(REPORT_ALL_PATH)
@@ -279,11 +269,12 @@ def reports_filtered(
     limit: int = Query(100, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     query: Optional[str] = Query(None),
-    empty_as_204: bool = Query(True, description="Si no existe, devuelve 204")
+    empty_as_204: bool = Query(True, description="Si no existe, devuelve 204"),
 ) -> Any:
     if not REPORT_FILTERED_PATH.exists():
         if empty_as_204:
-            return JSONResponse(status_code=204, content=None)
+            # 204 debe ir sin body para máxima compatibilidad
+            return Response(status_code=204)
         raise HTTPException(status_code=404, detail=f"No encontrado: {REPORT_FILTERED_PATH}")
 
     try:
@@ -298,7 +289,7 @@ def reports_filtered(
 def metadata_fix(
     limit: int = Query(100, ge=1, le=2000),
     offset: int = Query(0, ge=0),
-    query: Optional[str] = Query(None)
+    query: Optional[str] = Query(None),
 ) -> Dict[str, Any]:
     try:
         df = load_csv_cached(METADATA_FIX_PATH)
@@ -324,14 +315,13 @@ def _omdb_payload() -> Dict[str, Any]:
 def omdb_records(
     limit: int = Query(100, ge=1, le=5000),
     offset: int = Query(0, ge=0),
-    status: Optional[str] = Query(None, description="Filtra por record.status (ok/not_found/error)")
+    status: Optional[str] = Query(None, description="Filtra por record.status (ok/not_found/error)"),
 ) -> Dict[str, Any]:
     payload = _omdb_payload()
     records = payload.get("records")
     if not isinstance(records, dict):
         raise HTTPException(status_code=500, detail="omdb_cache.json: falta 'records' dict")
 
-    # Orden estable por rid (string)
     rids = sorted(records.keys())
 
     if status:
@@ -369,7 +359,7 @@ def omdb_by_imdb(imdb_id: str) -> Dict[str, Any]:
 @app.get("/cache/omdb/by-title-year")
 def omdb_by_title_year(
     title: str = Query(..., min_length=1),
-    year: Optional[str] = Query(None, description="Año (p.ej. 1999)")
+    year: Optional[str] = Query(None, description="Año (p.ej. 1999)"),
 ) -> Dict[str, Any]:
     payload = _omdb_payload()
     records = payload.get("records") or {}
@@ -381,7 +371,6 @@ def omdb_by_title_year(
 
     rid = index_ty.get(key)
     if not rid:
-        # Intento alternativo: si el key incluye año vacío y el usuario pasó año, o viceversa
         alt = t if y else f"{t}|"
         rid = index_ty.get(alt)
 
@@ -421,7 +410,7 @@ def _wiki_payload() -> Dict[str, Any]:
 def wiki_records(
     limit: int = Query(100, ge=1, le=5000),
     offset: int = Query(0, ge=0),
-    status: Optional[str] = Query(None)
+    status: Optional[str] = Query(None),
 ) -> Dict[str, Any]:
     payload = _wiki_payload()
     records = payload.get("records")
@@ -470,3 +459,22 @@ def wiki_by_rid(rid: str) -> Dict[str, Any]:
     if not rec:
         raise HTTPException(status_code=404, detail=f"rid no encontrado: {rid}")
     return {"rid": str(rid), **rec}
+
+
+# ============================================================
+# Entrypoint para integración con setup.py (console_scripts)
+# ============================================================
+
+def main() -> None:
+    """
+    Runner para poder ejecutar:
+      analiza-api
+    (configurable por env vars)
+    """
+    import uvicorn
+
+    host = os.getenv("API_HOST", "127.0.0.1")
+    port = int(os.getenv("API_PORT", "8000"))
+    reload = os.getenv("API_RELOAD", "1") == "1"
+
+    uvicorn.run("server.api_fastapi:app", host=host, port=port, reload=reload)
