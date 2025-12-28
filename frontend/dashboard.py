@@ -296,10 +296,10 @@ st.subheader("Resumen general")
 summary = compute_summary(df_all)
 
 col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Películas", format_count_size(int(summary["total_count"]), summary.get("total_size_gb")))
-col2.metric("KEEP", format_count_size(int(summary["keep_count"]), summary.get("keep_size_gb")))
-col3.metric("DELETE", format_count_size(int(summary.get("delete_count", 0)), summary.get("delete_size_gb")))
-col4.metric("MAYBE", format_count_size(int(summary.get("maybe_count", 0)), summary.get("maybe_size_gb")))
+col1.metric("Películas", format_count_size(summary["total_count"], summary["total_size_gb"]))
+col2.metric("KEEP", format_count_size(summary["keep_count"], summary["keep_size_gb"]))
+col3.metric("DELETE", format_count_size(summary["delete_count"], summary["delete_size_gb"]))
+col4.metric("MAYBE", format_count_size(summary["maybe_count"], summary["maybe_size_gb"]))
 
 imdb_mean_df = compute_global_imdb_mean_from_df(df_all)
 if imdb_mean_df is not None and not pd.isna(imdb_mean_df):
