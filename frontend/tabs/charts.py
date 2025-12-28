@@ -37,6 +37,7 @@ VIEW_OPTIONS: Final[list[str]] = [
     "Distribución por decisión",
     "Rating IMDb por decisión",
     "Ratings IMDb vs RT",
+    "Ratings IMDb vs Metacritic",
     "Distribución por década",
     "Distribución por biblioteca",
     "Distribución por género (OMDb)",
@@ -85,7 +86,11 @@ def render(df_all: pd.DataFrame) -> None:
 
     df_g = df_all.copy()
 
-    view = st.selectbox("Vista", VIEW_OPTIONS)
+    # Default: "Ratings IMDb vs RT"
+    default_view = "Ratings IMDb vs RT"
+    default_index = VIEW_OPTIONS.index(default_view)
+
+    view = st.selectbox("Vista", VIEW_OPTIONS, index=default_index)
 
     # 1) Distribución por decisión
     if view == "Distribución por decisión":
@@ -160,6 +165,36 @@ def render(df_all: pd.DataFrame) -> None:
                     "library",
                     "imdb_rating",
                     "rt_score",
+                    "imdb_votes",
+                    "decision",
+                ],
+            )
+        )
+        _chart(chart)
+
+    # 3b) Ratings IMDb vs Metacritic
+    elif view == "Ratings IMDb vs Metacritic":
+        if not _requires_columns(df_g, ["imdb_rating", "metacritic_score", "decision"]):
+            return
+
+        data = df_g.dropna(subset=["imdb_rating", "metacritic_score"])
+        if data.empty:
+            st.info("No hay suficientes datos de IMDb y Metacritic para mostrar.")
+            return
+
+        chart = (
+            alt.Chart(data)
+            .mark_circle(size=60, opacity=0.7)
+            .encode(
+                x=alt.X("imdb_rating:Q", title="IMDb rating"),
+                y=alt.Y("metacritic_score:Q", title="Metacritic score"),
+                color=decision_color("decision"),
+                tooltip=[
+                    "title",
+                    "year",
+                    "library",
+                    "imdb_rating",
+                    "metacritic_score",
                     "imdb_votes",
                     "decision",
                 ],
