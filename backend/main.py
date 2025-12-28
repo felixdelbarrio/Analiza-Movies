@@ -27,6 +27,7 @@ Reglas de consola (alineado con backend/logger.py)
 - Salidas por cancelación/CTRL+C: limpias, sin stacktrace.
 """
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -35,10 +36,37 @@ from typing import Literal
 from backend import logger as logger
 from backend.analiza_dlna import analyze_dlna_server
 from backend.analiza_plex import analyze_all_libraries
-from backend.config_reports import REPORT_ALL_PATH, REPORT_FILTERED_PATH
 from backend.config_base import ANALIZA_AUTO_DASHBOARD, DEBUG_MODE, SILENT_MODE
+from backend.config_reports import REPORT_ALL_PATH, REPORT_FILTERED_PATH
 
 Choice = Literal["0", "1", "2"]
+
+
+def _parse_args() -> argparse.Namespace:
+    """
+    Flags opcionales para automatizar ejecución (sin menú).
+
+    - Sin flags: UX actual por menú.
+    - Con flags: ejecución directa.
+    """
+    parser = argparse.ArgumentParser(
+        prog="start",
+        add_help=True,
+        description="Analiza Movies - CLI backend (Plex/DLNA/Streamlit)",
+    )
+
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--plex", action="store_true", help="Analizar Plex directamente (sin menú)")
+    mode.add_argument("--dlna", action="store_true", help="Analizar DLNA directamente (sin menú)")
+    mode.add_argument("--dashboard", action="store_true", help="Abrir solo el dashboard (sin análisis)")
+
+    parser.add_argument(
+        "--no-dashboard",
+        action="store_true",
+        help="No abrir el dashboard tras el análisis (aunque esté activado por config)",
+    )
+
+    return parser.parse_args()
 
 
 def _reports_available() -> bool:
@@ -177,12 +205,12 @@ def start() -> None:
     """
     Entry-point principal (console_scripts).
 
-    Responsabilidades:
-    - Mostrar marco global (inicio / modo / fin).
-    - Encapsular UX mínima (menú).
-    - Invocar orquestadores que realizan el trabajo pesado.
+    - Sin flags: comportamiento actual (menú).
+    - Con flags: ejecución directa.
     """
     logger.progress("[AnalizaMovies] Inicio")
+
+    args = _parse_args()
 
     if SILENT_MODE:
         logger.progress("[AnalizaMovies] SILENT_MODE=True" + (" DEBUG_MODE=True" if DEBUG_MODE else ""))
@@ -190,6 +218,38 @@ def start() -> None:
         logger.debug_ctx("ANALYZE", "SILENT_MODE=False DEBUG_MODE=True")
 
     try:
+        # =========================
+        # MODO FLAGS (sin menú)
+        # =========================
+        if args.dashboard:
+            _run_streamlit_dashboard()
+            return
+
+        if args.plex:
+            logger.progress("[AnalizaMovies] Modo: Plex")
+            try:
+                analyze_all_libraries()
+            finally:
+                logger.progress("[AnalizaMovies] Fin (Plex)")
+
+            if not args.no_dashboard:
+                _maybe_run_dashboard_after_analysis()
+            return
+
+        if args.dlna:
+            logger.progress("[AnalizaMovies] Modo: DLNA")
+            try:
+                analyze_dlna_server()
+            finally:
+                logger.progress("[AnalizaMovies] Fin (DLNA)")
+
+            if not args.no_dashboard:
+                _maybe_run_dashboard_after_analysis()
+            return
+
+        # =========================
+        # MODO INTERACTIVO (actual)
+        # =========================
         choice = _ask_source()
         if choice is None:
             return

@@ -68,7 +68,6 @@
 │   ├── config_wiki.py
 │   ├── config.py
 │   ├── decision_logic.py
-│   ├── delete_logic.py
 │   ├── dlna_client.py
 │   ├── dlna_discovery.py
 │   ├── logger.py
@@ -98,19 +97,19 @@
 │   │   ├── config_front_base.cpython-314.pyc
 │   │   ├── dashboard.cpython-314.pyc
 │   │   ├── data_utils.cpython-314.pyc
+│   │   ├── delete_logic.cpython-314.pyc
+│   │   ├── front_api_client.cpython-314.pyc
 │   │   ├── front_logger.cpython-314.pyc
 │   │   ├── front_stats.cpython-314.pyc
 │   │   └── summary.cpython-314.pyc
 │   ├── components.py
 │   ├── config_front_artifacts.py
 │   ├── config_front_base.py
-│   ├── config_front_io.py
-│   ├── config_front_scoring.py
 │   ├── dashboard.py
 │   ├── data_utils.py
-│   ├── front_io.py
+│   ├── delete_logic.py
+│   ├── front_api_client.py
 │   ├── front_logger.py
-│   ├── front_manifest.py
 │   ├── front_stats.py
 │   ├── summary.py
 │   ├── tabs
@@ -121,6 +120,7 @@
 │   │   │   ├── all_movies.cpython-314.pyc
 │   │   │   ├── candidates.cpython-314.pyc
 │   │   │   ├── charts.cpython-314.pyc
+│   │   │   ├── delete_logic.cpython-314.pyc
 │   │   │   ├── delete.cpython-314.pyc
 │   │   │   └── metadata.cpython-314.pyc
 │   │   ├── advanced.py
@@ -146,6 +146,13 @@
 │   ├── report_all.csv
 │   └── report_filtered.csv
 ├── requirements.txt
+├── server
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── __pycache__
+│   │   └── api_fastapi.cpython-314.pyc
+│   ├── api_fastapi.py
+│   └── readme.txt
 ├── setup.py
 ├── tests
 │   ├── __pycache__
@@ -13754,4 +13761,4 @@
                     ├── index.js
                     └── index.js.map
 
-1268 directories, 12487 files
+1270 directories, 12492 files
