@@ -114,6 +114,43 @@ def _log_debug(msg: object) -> None:
 
 
 # ============================================================
+#                 INT PARSING (mypy-friendly)
+# ============================================================
+
+
+def _int_or_none(value: object) -> int | None:
+    """
+    Convierte a int SOLO si es seguro.
+    Evita: int(object) -> mypy call-overload.
+    """
+    try:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            s = value.strip().replace(",", "")
+            if not s:
+                return None
+            # acepta "12" o "12.0"
+            try:
+                f = float(s)
+            except Exception:
+                return None
+            return int(f)
+        return None
+    except Exception:
+        return None
+
+
+def _to_int(value: object, default: int = 0) -> int:
+    out = _int_or_none(value)
+    return out if out is not None else default
+
+
+# ============================================================
 #                 MÉTRICAS (in-memory, thread-safe)
 # ============================================================
 
@@ -229,15 +266,9 @@ def log_plex_metrics(*, force: bool = False) -> None:
     """
     snap = get_plex_metrics_snapshot()
 
-    def _safe_int(v: object) -> int:
-        try:
-            return int(v)  # type: ignore[arg-type]
-        except Exception:
-            return 0
-
-    net_total = _safe_int(snap.get("network_attr_errors_total"))
-    helper_total = _safe_int(snap.get("helper_failures_total"))
-    conn_total = _safe_int(snap.get("connect_failures_total"))
+    net_total = _to_int(snap.get("network_attr_errors_total", 0), 0)
+    helper_total = _to_int(snap.get("helper_failures_total", 0), 0)
+    conn_total = _to_int(snap.get("connect_failures_total", 0), 0)
 
     if (
         not force
@@ -258,10 +289,10 @@ def log_plex_metrics(*, force: bool = False) -> None:
             return []
         items: list[tuple[str, int]] = []
         for k, v in d.items():
-            try:
-                items.append((str(k), int(v)))  # type: ignore[arg-type]
-            except Exception:
+            iv = _int_or_none(v)
+            if iv is None:
                 continue
+            items.append((str(k), iv))
         items.sort(key=lambda kv: (-kv[1], kv[0]))
         return items[:n]
 
@@ -348,9 +379,7 @@ def _safe_getattr(obj: object, attr: str, default: Any = None) -> Any:
     except Exception as exc:
         if _is_networkish_exception(exc):
             _metrics_inc_network_attr_error(attr, exc)
-            _log_always(
-                f"[PLEX] Network error reading attribute {attr!r} (lazy reload skipped): {exc!r}"
-            )
+            _log_always(f"[PLEX] Network error reading attribute {attr!r} (lazy reload skipped): {exc!r}")
             return default
 
         _metrics_inc_helper_failure("_safe_getattr", exc)
@@ -494,21 +523,22 @@ def get_movie_file_info(movie: object) -> tuple[str | None, int | None]:
                 if best_path is None and isinstance(file_path, str) and file_path.strip():
                     best_path = file_path.strip()
 
-                # ✅ Pylance: size puede venir como float/str; normalizamos defensivo a int
                 if isinstance(size_val, bool):
                     continue
+
                 if isinstance(size_val, (int, float)):
                     iv = int(size_val)
                     if iv > 0:
                         total_size += iv
                         size_seen = True
-                elif isinstance(size_val, str):
-                    s = size_val.strip().replace(",", "")
-                    if s.isdigit():
-                        iv = int(s)
-                        if iv > 0:
-                            total_size += iv
-                            size_seen = True
+                    continue
+
+                # ✅ str/object (plexapi a veces devuelve str; evitamos Optional -> int)
+                if isinstance(size_val, str):
+                    iv2 = _int_or_none(size_val)
+                    if iv2 is not None and iv2 > 0:
+                        total_size += iv2
+                        size_seen = True
 
         if best_path is None:
             return None, None

@@ -61,7 +61,7 @@ import json
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
-from typing import Final, TypeAlias
+from typing import Any, Final, TypeAlias, cast
 
 from backend import logger
 from backend.analyze_input_core import AnalysisRow, analyze_input_movie
@@ -80,6 +80,20 @@ from backend.metadata_fix import generate_metadata_suggestions_row
 from backend.movie_input import MovieInput, normalize_title_for_lookup
 from backend.omdb_client import omdb_query_with_cache
 from backend.wiki_client import get_wiki, get_wiki_for_input
+
+# -----------------------------------------------------------------------------
+# ✅ Anti-"unreachable" definitivo:
+# 1) Evitamos `return` en helpers (Pyright puede marcarlos unreachable si
+#    constant-fold de configs o callable()).
+# 2) Usamos wrapper _cfg_bool que "ensancha" a bool para que no se trate como Literal.
+# -----------------------------------------------------------------------------
+_LOGGER: Any = logger
+
+
+def _cfg_bool(v: object) -> bool:
+    # cast -> bool (no Literal) a ojos del type-checker
+    return bool(cast(bool, v))
+
 
 # ---------------------------------------------------------------------------
 # Opcionales (compat / despliegues parciales)
@@ -180,31 +194,60 @@ _TRACE_LINE_MAX_CHARS: Final[int] = int(COLLECTION_TRACE_LINE_MAX_CHARS)
 
 
 def _append_log(logs: list[str], line: object, *, force: bool = False, tag: str | None = None) -> None:
-    try:
-        logger.append_bounded_log(logs, line, force=force, tag=tag)
-    except Exception:
-        return
+    """
+    ✅ NO early-return: evita "Statement is unreachable" si Pyright constant-fold.
+    """
+    fn_obj: object = getattr(_LOGGER, "append_bounded_log", None)
+    if callable(fn_obj):
+        try:
+            cast(Callable[..., object], fn_obj)(logs, line, force=force, tag=tag)
+        except Exception:
+            pass
 
 
 def _append_trace(logs: list[str], line: object) -> None:
     try:
-        text = logger.truncate_line(str(line), max_chars=_TRACE_LINE_MAX_CHARS)
+        trunc_fn: object = getattr(_LOGGER, "truncate_line", None)
+        if callable(trunc_fn):
+            text = cast(Callable[..., str], trunc_fn)(str(line), max_chars=_TRACE_LINE_MAX_CHARS)
+        else:
+            text = str(line)
     except Exception:
         text = "<unprintable>"
     _append_log(logs, f"[TRACE] {text}")
 
 
 def _dbg_ctx(msg: object) -> None:
-    try:
-        logger.debug_ctx("COLLECTION", msg)
-    except Exception:
-        return
+    fn_obj: object = getattr(_LOGGER, "debug_ctx", None)
+    if callable(fn_obj):
+        try:
+            cast(Callable[..., object], fn_obj)("COLLECTION", msg)
+        except Exception:
+            pass
 
 
 def _dbg_trace(msg: object) -> None:
-    if not COLLECTION_TRACE_ALSO_DEBUG_CTX:
-        return
-    _dbg_ctx(msg)
+    # ✅ sin `return` -> no hay "return unreachable"
+    if _cfg_bool(COLLECTION_TRACE_ALSO_DEBUG_CTX):
+        _dbg_ctx(msg)
+
+
+def _log_error_always(message: object) -> None:
+    fn_obj: object = getattr(_LOGGER, "error", None)
+    if callable(fn_obj):
+        try:
+            cast(Callable[..., object], fn_obj)(message, always=True)
+        except Exception:
+            pass
+
+
+def _log_warning_always(message: object) -> None:
+    fn_obj: object = getattr(_LOGGER, "warning", None)
+    if callable(fn_obj):
+        try:
+            cast(Callable[..., object], fn_obj)(message, always=True)
+        except Exception:
+            pass
 
 
 # ============================================================================
@@ -213,19 +256,19 @@ def _dbg_trace(msg: object) -> None:
 
 
 def _safe_float(value: object) -> float | None:
-    try:
-        if value is None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s or s.upper() == "N/A":
             return None
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
-            s = value.strip()
-            if not s or s.upper() == "N/A":
-                return None
+        try:
             return float(s)
-        return None
-    except Exception:
-        return None
+        except (ValueError, TypeError):
+            return None
+    return None
 
 
 def _norm_title(title: str) -> str:
@@ -312,32 +355,28 @@ def _persist_minimal_wiki_into_omdb_cache(
     minimal_wiki: Mapping[str, object],
     lookup_key: str,
 ) -> None:
-    if not COLLECTION_PERSIST_MINIMAL_WIKI_IN_OMDB_CACHE:
-        return
-    if patch_cached_omdb_record is None:
-        return
+    if _cfg_bool(COLLECTION_PERSIST_MINIMAL_WIKI_IN_OMDB_CACHE) and patch_cached_omdb_record is not None:
+        imdb_id_final = imdb_id_for_cache or imdb_hint
+        norm_title = _norm_title(title_for_fetch)
+        norm_year = _norm_year_str(year_for_fetch)
 
-    imdb_id_final = imdb_id_for_cache or imdb_hint
-    norm_title = _norm_title(title_for_fetch)
-    norm_year = _norm_year_str(year_for_fetch)
-
-    try:
-        with _OMDB_CACHE_WRITE_LOCK:
-            patch_cached_omdb_record(
-                norm_title=norm_title,
-                norm_year=norm_year,
-                imdb_id=imdb_id_final,
-                patch={
-                    "__wiki": dict(minimal_wiki),
-                    "__prov": {
-                        "lookup_key": lookup_key,
-                        "had_imdb_hint": bool(imdb_hint),
+        try:
+            with _OMDB_CACHE_WRITE_LOCK:
+                patch_cached_omdb_record(
+                    norm_title=norm_title,
+                    norm_year=norm_year,
+                    imdb_id=imdb_id_final,
+                    patch={
+                        "__wiki": dict(minimal_wiki),
+                        "__prov": {
+                            "lookup_key": lookup_key,
+                            "had_imdb_hint": bool(imdb_hint),
+                        },
                     },
-                },
-            )
-        _dbg_ctx(f"Persisted minimal wiki into OMDb cache | lookup_key={lookup_key}")
-    except Exception as exc:  # pragma: no cover
-        _dbg_ctx(f"patch_cached_omdb_record failed | lookup_key={lookup_key} exc={exc!r}")
+                )
+            _dbg_ctx(f"Persisted minimal wiki into OMDb cache | lookup_key={lookup_key}")
+        except Exception as exc:  # pragma: no cover
+            _dbg_ctx(f"patch_cached_omdb_record failed | lookup_key={lookup_key} exc={exc!r}")
 
 
 def _wiki_item_is_usable(wiki_item: Mapping[str, object]) -> bool:
@@ -518,7 +557,7 @@ def analyze_movie(
             f"[ERROR] {movie_input.library} / {display_title} ({display_year}): "
             f"fallo en core de análisis: {exc!r}"
         )
-        logger.error(msg, always=True)
+        _log_error_always(msg)
         _append_log(logs, msg, force=True)
         return None, None, logs
 
@@ -532,7 +571,7 @@ def analyze_movie(
         return None, None, logs
 
     # 4) Lazy Wiki
-    if COLLECTION_ENABLE_LAZY_WIKI and not wiki_meta and _should_fetch_wiki_for_reporting(base_row):
+    if _cfg_bool(COLLECTION_ENABLE_LAZY_WIKI) and not wiki_meta and _should_fetch_wiki_for_reporting(base_row):
         key_post = _cache_key(movie_input.title, movie_input.year, imdb_hint)
 
         with _LOCAL_CACHE_LOCK:
@@ -543,7 +582,7 @@ def analyze_movie(
         elif isinstance(wiki_local, dict) and wiki_local:
             wiki_meta = dict(wiki_local)
         else:
-            if omdb_data is None and COLLECTION_LAZY_WIKI_FORCE_OMDB_POST_CORE:
+            if omdb_data is None and _cfg_bool(COLLECTION_LAZY_WIKI_FORCE_OMDB_POST_CORE):
                 _dbg_ctx("Lazy Wiki -> forcing OMDb fetch (post-core) due to config.")
                 _ = fetch_omdb(movie_input.title, movie_input.year)
 
@@ -557,7 +596,7 @@ def analyze_movie(
 
             imdb_used_for_wiki = imdb_id_from_omdb or imdb_hint
 
-            if not imdb_used_for_wiki and not COLLECTION_LAZY_WIKI_ALLOW_TITLE_YEAR_FALLBACK:
+            if not imdb_used_for_wiki and not _cfg_bool(COLLECTION_LAZY_WIKI_ALLOW_TITLE_YEAR_FALLBACK):
                 with _LOCAL_CACHE_LOCK:
                     _lru_set(_WIKI_LOCAL_CACHE, key_post, _CACHE_MISS, max_items=_WIKI_LOCAL_CACHE_MAX)
                 _dbg_ctx("Lazy Wiki skipped: no imdb id available (omdb/imdb_hint) and fallback disabled.")
@@ -584,11 +623,6 @@ def analyze_movie(
                     wiki_block = wiki_item.get("wiki")
                     wikidata_block = wiki_item.get("wikidata")
 
-                    # ----
-                    # FIX [no-redef]:
-                    # Evitamos nombres que luego se vuelven a declarar más abajo en analyze_movie()
-                    # (wikidata_id, wikipedia_title, source_language, etc.)
-                    # ----
                     imdb_id_from_wiki: str | None = None
                     imdb_cached = wiki_item.get("imdbID")
                     if isinstance(imdb_cached, str) and imdb_cached.strip():
@@ -662,7 +696,7 @@ def analyze_movie(
                 meta_sugg = meta_candidate
                 _append_log(logs, f"{movie_input.library} / {display_title} ({display_year})", tag="METADATA_SUGG")
         except Exception as exc:  # pragma: no cover
-            logger.warning(f"generate_metadata_suggestions_row falló para {display_title!r}: {exc!r}", always=True)
+            _log_warning_always(f"generate_metadata_suggestions_row falló para {display_title!r}: {exc!r}")
 
     misidentified_hint = base_row.get("misidentified_hint")
     if isinstance(misidentified_hint, str) and misidentified_hint.strip():
@@ -707,7 +741,6 @@ def analyze_movie(
     file_size_bytes = row.get("file_size_bytes")
     row["file_size"] = file_size_bytes if isinstance(file_size_bytes, int) else movie_input.file_size_bytes
 
-    # ✅ aseguramos str para evitar que row.get devuelva object y ensucie tipos
     file_from_row = row.get("file")
     file_from_row_str = file_from_row if isinstance(file_from_row, str) else ""
     row["file"] = (movie_input.file_path or file_from_row_str)
@@ -724,16 +757,11 @@ def analyze_movie(
     row["trailer_url"] = trailer_url
     row["omdb_json"] = omdb_json_str
 
-    # ---------------------------
-    # ✅ FIX PYLANCE (reportAssignmentType):
-    # wiki_meta.get(...) devuelve object|None; lo normalizamos a str|None antes de asignar
-    # ---------------------------
     wikidata_id_raw = wiki_meta.get("wikidata_id")
     wikidata_id: str | None = (
         wikidata_id_raw.strip() if isinstance(wikidata_id_raw, str) and wikidata_id_raw.strip() else None
     )
     if wikidata_id is None:
-        # compat typo histórico
         wikadata_id_raw = wiki_meta.get("wikadata_id")
         wikidata_id = wikadata_id_raw.strip() if isinstance(wikadata_id_raw, str) and wikadata_id_raw.strip() else None
 

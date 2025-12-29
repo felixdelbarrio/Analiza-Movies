@@ -11,7 +11,7 @@ import time
 from collections.abc import Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypeAlias
 
 from backend import logger as logger
 from backend.collection_analysis import analyze_movie, flush_external_caches
@@ -93,6 +93,14 @@ class _RowWriter(Protocol):
 
     def write_row(self, row: _Row) -> None: ...
 
+
+# Result y Future types (evita líos de inference)
+_AnalyzeResult: TypeAlias = tuple[_Row | None, _Row | None, list[str]]
+_AnalyzeFuture: TypeAlias = Future[_AnalyzeResult]
+
+# Scan result types (para no mezclar con AnalyzeResult)
+_ScanResult: TypeAlias = tuple[str, list[DlnaVideoItem]]
+_ScanFuture: TypeAlias = Future[_ScanResult]
 
 # ============================================================================
 # Dedupe global por run
@@ -446,7 +454,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
             resource_url: str,
             file_size: int | None,
             library: str,
-        ) -> tuple[_Row | None, _Row | None, list[str]]:
+        ) -> _AnalyzeResult:
             clean_title, extracted_year = _extract_year_from_title(raw_title)
             display_file, file_url = _dlna_display_file(client, library, raw_title, resource_url)
 
@@ -473,7 +481,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
             return row, meta_sugg, logs
 
         def _handle_result(
-            res: tuple[_Row | None, _Row | None, list[str]],
+            res: _AnalyzeResult,
             *,
             all_writer: _RowWriter,
             sugg_writer: _RowWriter,
@@ -496,15 +504,18 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
 
         with open_all_csv_writer(REPORT_ALL_PATH) as all_writer, open_suggestions_csv_writer(METADATA_FIX_PATH) as sugg_writer:
 
-            def _scan_container(c: DlnaContainer) -> tuple[str, list[DlnaVideoItem]]:
+            def _scan_container(c: DlnaContainer) -> _ScanResult:
                 METRICS.incr("dlna.scan.containers")
                 t_scan0 = time.monotonic()
                 items, _stats = client.iter_video_items_recursive(device, c.object_id, limits=limits)
                 METRICS.observe_ms("dlna.scan.container_latency_ms", (time.monotonic() - t_scan0) * 1000.0)
                 return c.title, items
 
+            # ============================================================
+            # MODO INTERACTIVO (no-silent): escaneamos secuencial y analizamos por contenedor
+            # ============================================================
             if not SILENT_MODE:
-                candidates_by_container: dict[str, list[tuple[str, str, int | None, str]]] = {}
+                candidates_by_container: dict[str, list[DlnaVideoItem]] = {}
                 total_candidates = 0
 
                 total_containers = len(selected_containers)
@@ -518,8 +529,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                         logger.debug_ctx("DLNA", f"scan {container.title!r} items={len(items)}")
 
                     bucket = candidates_by_container.setdefault(container.title, [])
-                    for it in items:
-                        bucket.append((it.title, it.resource_url, it.size_bytes, container.title))
+                    bucket.extend(items)
                     total_candidates += len(items)
 
                 if total_candidates == 0:
@@ -535,21 +545,23 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
 
                     logger.progress(f"[DLNA] Analizando contenedor: {container_title} (items={len(items)})")
 
-                    future_to_index: dict[Future[tuple[_Row | None, _Row | None, list[str]]], int] = {}
-                    pending_by_index: dict[int, tuple[_Row | None, _Row | None, list[str]]] = {}
+                    future_to_index: dict[_AnalyzeFuture, int] = {}
+                    pending_by_index: dict[int, _AnalyzeResult] = {}
                     next_to_write = 1
-                    inflight: set[Future[tuple[_Row | None, _Row | None, list[str]]]] = set()
 
-                    def _drain_completed(*, drain_all: bool) -> None:
+                    # ✅ renombrado para evitar [no-redef] con el modo SILENT
+                    inflight_interactive: set[_AnalyzeFuture] = set()
+
+                    def _drain_completed_interactive(*, drain_all: bool) -> None:
                         nonlocal next_to_write, total_items_processed, total_items_errors
 
-                        while inflight:
-                            done, _ = wait(inflight, return_when=FIRST_COMPLETED)
+                        while inflight_interactive:
+                            done, _ = wait(inflight_interactive, return_when=FIRST_COMPLETED)
                             if not done:
                                 return
 
                             for fut in done:
-                                inflight.discard(fut)
+                                inflight_interactive.discard(fut)
                                 idx_local = future_to_index.get(fut, -1)
 
                                 try:
@@ -578,10 +590,10 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                     inflight_cap_here = min(max_inflight, max(1, len(items)))
 
                     with ThreadPoolExecutor(max_workers=workers_here) as executor:
-                        for item_index, (raw_title, resource_url, file_size, library) in enumerate(items, start=1):
+                        for item_index, it in enumerate(items, start=1):
                             analyzed_so_far += 1
-                            clean_title_preview, extracted_year_preview = _extract_year_from_title(raw_title)
-                            display_title = raw_title if DEBUG_MODE else clean_title_preview
+                            clean_title_preview, extracted_year_preview = _extract_year_from_title(it.title)
+                            display_title = it.title if DEBUG_MODE else clean_title_preview
 
                             logger.info(
                                 _format_item_progress_line(
@@ -589,24 +601,24 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                                     total=total_candidates,
                                     title=display_title,
                                     year=extracted_year_preview,
-                                    file_size_bytes=file_size,
+                                    file_size_bytes=it.size_bytes,
                                 )
                             )
 
                             fut = executor.submit(
                                 _analyze_one,
-                                raw_title=raw_title,
-                                resource_url=resource_url,
-                                file_size=file_size,
-                                library=library,
+                                raw_title=it.title,
+                                resource_url=it.resource_url,
+                                file_size=it.size_bytes,
+                                library=container_title,
                             )
                             future_to_index[fut] = item_index
-                            inflight.add(fut)
+                            inflight_interactive.add(fut)
 
-                            if len(inflight) >= inflight_cap_here:
-                                _drain_completed(drain_all=False)
+                            if len(inflight_interactive) >= inflight_cap_here:
+                                _drain_completed_interactive(drain_all=False)
 
-                        _drain_completed(drain_all=True)
+                        _drain_completed_interactive(drain_all=True)
 
                     while next_to_write in pending_by_index:
                         ready = pending_by_index.pop(next_to_write)
@@ -614,6 +626,9 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                         total_items_processed += 1
                         next_to_write += 1
 
+            # ============================================================
+            # MODO SILENT: scanning concurrente + análisis en streaming
+            # ============================================================
             else:
                 total_containers = len(selected_containers)
                 total_candidates = 0
@@ -622,14 +637,15 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                 with ThreadPoolExecutor(max_workers=scan_workers) as scan_pool, ThreadPoolExecutor(
                     max_workers=analyze_workers
                 ) as analyze_pool:
-                    scan_futs: list[Future[tuple[str, list[DlnaVideoItem]]]] = []
+                    # ✅ scan futures tipados (evita mezclas con _AnalyzeFuture)
+                    scan_futures: list[_ScanFuture] = []
                     for idx, c in enumerate(selected_containers, start=1):
                         logger.progress(f"[DLNA] Escaneando contenedor ({idx}/{total_containers}): {c.title}")
-                        scan_futs.append(scan_pool.submit(_scan_container, c))
+                        scan_futures.append(scan_pool.submit(_scan_container, c))
 
-                    for fut in as_completed(scan_futs):
+                    for sf in as_completed(scan_futures):
                         try:
-                            container_title, items = fut.result()
+                            container_title, items = sf.result()
                         except Exception as exc:  # pragma: no cover
                             METRICS.incr("dlna.scan.errors")
                             METRICS.add_error("dlna", "scan_container", endpoint=None, detail=repr(exc))
@@ -653,19 +669,20 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                             analyze_snap_start_container = dict(get_omdb_metrics_snapshot())
                             _log_omdb_metrics(prefix=f"[DLNA][DEBUG] {container_key}: analyze:start:")
 
-                        inflight: set[Future[tuple[_Row | None, _Row | None, list[str]]]] = set()
+                        # ✅ renombrado para evitar [no-redef] con el modo interactivo
+                        inflight_silent: set[_AnalyzeFuture] = set()
                         inflight_cap_here = min(max_inflight, max(1, len(items)))
 
-                        def _drain_completed(*, drain_all: bool) -> None:
+                        def _drain_completed_silent(*, drain_all: bool) -> None:
                             nonlocal total_items_processed, total_items_errors
 
-                            while inflight:
-                                done, _ = wait(inflight, return_when=FIRST_COMPLETED)
+                            while inflight_silent:
+                                done, _ = wait(inflight_silent, return_when=FIRST_COMPLETED)
                                 if not done:
                                     return
 
                                 for af in done:
-                                    inflight.discard(af)
+                                    inflight_silent.discard(af)
                                     try:
                                         res = af.result()
                                     except Exception as exc:  # pragma: no cover
@@ -687,7 +704,7 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                             if DEBUG_MODE and (analyzed_so_far % _PROGRESS_EVERY_N_ITEMS == 0):
                                 logger.progress(f"[DLNA][DEBUG] Progreso: analizados {analyzed_so_far} items...")
 
-                            inflight.add(
+                            inflight_silent.add(
                                 analyze_pool.submit(
                                     _analyze_one,
                                     raw_title=it.title,
@@ -697,10 +714,10 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                                 )
                             )
 
-                            if len(inflight) >= inflight_cap_here:
-                                _drain_completed(drain_all=False)
+                            if len(inflight_silent) >= inflight_cap_here:
+                                _drain_completed_silent(drain_all=False)
 
-                        _drain_completed(drain_all=True)
+                        _drain_completed_silent(drain_all=True)
 
                         if DEBUG_MODE and analyze_snap_start_container is not None:
                             analyze_delta_container = _metrics_diff(analyze_snap_start_container, get_omdb_metrics_snapshot())
