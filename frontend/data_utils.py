@@ -22,7 +22,7 @@ Principios
 from collections import Counter
 import json
 import re
-from typing import Iterable
+from typing import Any, cast, Iterable
 
 import altair as alt
 import pandas as pd
@@ -83,7 +83,7 @@ def _parse_metacritic_value(value: object) -> float | None:
         return None
 
     if isinstance(value, (int, float)):
-        if pd.isna(value):
+        if pd.isna(cast(Any, value)):
             return None
         v = float(value)
         return v if 0.0 <= v <= 100.0 else None
@@ -143,7 +143,7 @@ def _to_numeric_series(values: object) -> pd.Series:
 
     Nota: en runtime, pasar un Series aquí produce un Series siempre.
     """
-    s = pd.to_numeric(values, errors="coerce")
+    s = pd.to_numeric(cast(Any, values), errors="coerce")
     if isinstance(s, pd.Series):
         return s
     return pd.Series([s])
@@ -182,7 +182,7 @@ def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
         df["decade"] = decade
 
         def _format_decade(val: object) -> str | None:
-            if val is None or pd.isna(val):
+            if val is None or pd.isna(cast(Any, val)):
                 return None
             if not isinstance(val, (int, float)):
                 return None
@@ -353,7 +353,7 @@ def format_count_size(count: int, size_gb: float | int | None) -> str:
 
     Si size_gb es None/NaN/no convertible, devuelve solo "N".
     """
-    if size_gb is None or pd.isna(size_gb):
+    if size_gb is None or pd.isna(cast(Any, size_gb)):
         return str(int(count))
 
     try:
