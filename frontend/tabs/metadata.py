@@ -29,18 +29,8 @@ def _load_metadata_csv(path: str) -> pd.DataFrame:
     """
     Carga defensiva del CSV. Si falla, devuelve DataFrame vacío y muestra error en UI.
     """
-    dtype_hint: dict[str, str] = {
-        "library": "string",
-        "action": "string",
-        "title": "string",
-        "year": "string",
-        "imdb_id": "string",
-        "file": "string",
-        "reason": "string",
-    }
-
     try:
-        return pd.read_csv(path, dtype=dtype_hint, encoding="utf-8")
+        return pd.read_csv(path, dtype="string", encoding="utf-8")
     except Exception as exc:  # pragma: no cover
         st.error(f"Error leyendo CSV de sugerencias: {exc}")
         return pd.DataFrame()

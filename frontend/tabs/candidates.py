@@ -25,7 +25,6 @@ import streamlit as st
 
 from frontend.components import aggrid_with_row_click, render_detail_card
 
-
 TITLE_TEXT: Final[str] = "### Candidatas a borrar (DELETE / MAYBE)"
 
 
@@ -46,12 +45,10 @@ def _sort_candidates_view(df: pd.DataFrame) -> pd.DataFrame:
     Ordena el DataFrame por columnas típicamente relevantes, si existen:
 
     - decision (asc): DELETE antes que MAYBE (orden alfabético funciona: DELETE < MAYBE).
-    - imdb_rating (desc): peor rating arriba dentro del grupo si se invierte (desc para “mejor arriba”,
-      pero aquí queremos priorizar “peor”; sin un orden semántico claro mantenemos el patrón estándar
-      del proyecto. Si quieres “peor arriba”, podemos invertir imdb_rating a asc).
+    - imdb_rating (desc)
     - imdb_votes (desc)
     - year (desc)
-    - file_size (desc): tamaño grande arriba (impacto potencial de borrado).
+    - file_size (desc)
 
     Nota:
     - Mantengo el esquema original del fichero que me pasaste (decision asc, resto desc).
@@ -101,7 +98,12 @@ def render(df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
     """
     st.write(TITLE_TEXT)
 
-    if not isinstance(df_filtered, pd.DataFrame) or df_filtered.empty:
+    # Pyright-friendly: separar el narrowing en dos pasos.
+    if df_filtered is None:
+        st.info("No hay CSV filtrado o está vacío.")
+        return
+
+    if df_filtered.empty:
         st.info("No hay CSV filtrado o está vacío.")
         return
 
