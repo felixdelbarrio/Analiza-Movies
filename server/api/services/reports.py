@@ -59,20 +59,20 @@ def df_to_page(
         if q:
             if _INTERNAL_SEARCH_COL in view.columns:
                 try:
-                    mask = (
+                    blob_mask = (
                         view[_INTERNAL_SEARCH_COL]
                         .astype("string")
                         .fillna("")
                         .str.contains(q)
                     )
-                    view = view[mask]
+                    view = view[blob_mask]
                 except Exception:
                     pass
 
             if _INTERNAL_SEARCH_COL not in view.columns:
                 candidate_cols = [c for c in _SEARCH_COLUMNS if c in view.columns]
                 if candidate_cols:
-                    mask: pd.Series | None = None
+                    cols_mask: pd.Series | None = None
                     for c in candidate_cols:
                         s = (
                             view[c]
@@ -81,10 +81,10 @@ def df_to_page(
                             .str.lower()
                             .str.contains(q)
                         )
-                        mask = s if mask is None else (mask | s)
+                        cols_mask = s if cols_mask is None else (cols_mask | s)
 
-                    if mask is not None:
-                        view = view[mask]
+                    if cols_mask is not None:
+                        view = view[cols_mask]
 
     total = int(len(view))
 

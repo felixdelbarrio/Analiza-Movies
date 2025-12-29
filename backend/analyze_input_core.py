@@ -71,14 +71,14 @@ def _cfg_get_attr(name: str) -> object | None:
     return None
 
 
-def _to_int(value: object | None, default: int) -> int:
+def _int_or_none(value: object | None) -> int | None:
     """
-    Conversión defensiva y Pyright-friendly a int.
-    Acepta: int/float/bool/str; cualquier otra cosa -> default.
+    Convierte a int solo si el tipo es seguro (int/float/bool/str numérico).
+    Devuelve None si no se puede.
     """
-    if value is None:
-        return default
     try:
+        if value is None:
+            return None
         if isinstance(value, bool):
             return int(value)
         if isinstance(value, int):
@@ -88,13 +88,24 @@ def _to_int(value: object | None, default: int) -> int:
         if isinstance(value, str):
             s = value.strip()
             if not s:
-                return default
+                return None
             # permite "12.0"
             return int(float(s))
-        # último intento (puede fallar si no es int-like)
-        return int(value)  # type: ignore[arg-type]
+        return None
     except Exception:
-        return default
+        return None
+
+
+def _to_int(value: object | None, default: int) -> int:
+    """
+    Conversión defensiva y Pyright-friendly a int.
+    Acepta: int/float/bool/str; cualquier otra cosa -> default.
+
+    IMPORTANTE: evita `int(value)` cuando value es `object` desconocido
+    (eso dispara: No overload variant of "int" matches argument type "object").
+    """
+    out = _int_or_none(value)
+    return out if out is not None else default
 
 
 def _to_float(value: object | None, default: float) -> float:
@@ -114,7 +125,7 @@ def _to_float(value: object | None, default: float) -> float:
             if not s:
                 return default
             return float(s)
-        return float(value)  # type: ignore[arg-type]
+        return default
     except Exception:
         return default
 
@@ -781,31 +792,34 @@ def analyze_input_movie(
             _m("delete_but_misidentified", 1)
             trace("inconsistency | DELETE but misidentified_hint is present")
 
+        # ---- FIX Pyright/Pylance: evitar int(x) sobre object ----
+        votes_i = imdb_votes if isinstance(imdb_votes, int) else None
         if (
             decision_phaseB == "DELETE"
             and isinstance(imdb_rating, (int, float))
             and float(imdb_rating) >= float(_INCONS_DELETE_MIN_RATING)
-            and isinstance(imdb_votes, int)
-            and int(imdb_votes) >= int(_INCONS_DELETE_MIN_VOTES)
+            and votes_i is not None
+            and votes_i >= _INCONS_DELETE_MIN_VOTES
         ):
             _m("inconsistency.delete_with_high_imdb", 1)
             trace(
                 "inconsistency | DELETE with high imdb "
-                f"(rating={imdb_rating} votes={imdb_votes}) "
+                f"(rating={imdb_rating} votes={votes_i}) "
                 f"min_rating={_INCONS_DELETE_MIN_RATING} min_votes={_INCONS_DELETE_MIN_VOTES}"
             )
 
+        votes_i2 = imdb_votes if isinstance(imdb_votes, int) else None
         if (
             decision_phaseB == "KEEP"
             and isinstance(imdb_rating, (int, float))
             and float(imdb_rating) <= float(_INCONS_KEEP_MAX_RATING)
-            and isinstance(imdb_votes, int)
-            and int(imdb_votes) >= int(_INCONS_KEEP_MIN_VOTES)
+            and votes_i2 is not None
+            and votes_i2 >= _INCONS_KEEP_MIN_VOTES
         ):
             _m("inconsistency.keep_with_low_imdb", 1)
             trace(
                 "inconsistency | KEEP with low imdb "
-                f"(rating={imdb_rating} votes={imdb_votes}) "
+                f"(rating={imdb_rating} votes={votes_i2}) "
                 f"max_rating={_INCONS_KEEP_MAX_RATING} min_votes={_INCONS_KEEP_MIN_VOTES}"
             )
 

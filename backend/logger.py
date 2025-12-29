@@ -58,14 +58,16 @@ import os
 import sys
 import threading
 from types import ModuleType, TracebackType
-from typing import Final, Mapping, TypedDict, Unpack
+from typing import Final, Mapping, TypedDict
+
+from typing_extensions import TypeAlias, Unpack
 
 # ============================================================================
 # TIPOS: kwargs seguros para logging
 # ============================================================================
 
-_ExcInfoTuple = tuple[type[BaseException], BaseException, TracebackType | None]
-ExcInfo = bool | _ExcInfoTuple | BaseException | None
+_ExcInfoTuple: TypeAlias = tuple[type[BaseException], BaseException, TracebackType | None]
+ExcInfo: TypeAlias = bool | _ExcInfoTuple | BaseException | None
 
 
 class LogKwargs(TypedDict, total=False):
@@ -76,6 +78,7 @@ class LogKwargs(TypedDict, total=False):
     - logging acepta más kwargs (p.ej. "extra"), pero aquí recogemos lo relevante.
     - Esto hace feliz a Pyright y mantiene compatibilidad.
     """
+
     exc_info: ExcInfo
     stack_info: bool
     stacklevel: int
@@ -93,7 +96,6 @@ def _filter_log_kwargs(kwargs: Mapping[str, object]) -> LogKwargs:
     out: LogKwargs = {}
 
     if "exc_info" in kwargs:
-        # Aceptamos lo que logging soporta; si no cuadra, lo ignoramos.
         v = kwargs.get("exc_info")
         if v is None or isinstance(v, (bool, BaseException)) or isinstance(v, tuple):
             out["exc_info"] = v  # type: ignore[assignment]
@@ -122,16 +124,10 @@ def _filter_log_kwargs(kwargs: Mapping[str, object]) -> LogKwargs:
 
 LOGGER_NAME: Final[str] = "movies_cleaner"
 
-# Logger interno cacheado (solo logger real; sin Any).
 _LOGGER: logging.Logger | None = None
-
-# Flag de inicialización idempotente
 _CONFIGURED: bool = False
 
-# Tag para identificar nuestro handler de fichero (evita duplicados).
 _FILE_HANDLER_TAG: Final[str] = "_movies_cleaner_file_handler"
-
-# Lock para evitar mezclar líneas del progress() cuando hay hilos.
 _PROGRESS_FILE_LOCK = threading.Lock()
 
 # ============================================================================
@@ -140,12 +136,7 @@ _PROGRESS_FILE_LOCK = threading.Lock()
 
 
 def _safe_get_cfg() -> ModuleType | None:
-    """
-    Devuelve el módulo backend.config si ya ha sido importado.
-
-    Motivo:
-    - Evita dependencias circulares (config importando logger y logger importando config).
-    """
+    """Devuelve el módulo backend.config si ya ha sido importado (evita circular imports)."""
     mod = sys.modules.get("backend.config")
     return mod if isinstance(mod, ModuleType) else None
 
@@ -207,9 +198,6 @@ def _resolve_level_from_config() -> int:
       1) LOG_LEVEL explícito
       2) Flags de debug heredados
       3) INFO
-
-    Nota:
-    - Si backend.config aún no está importado, devolvemos INFO (default seguro).
     """
     if _safe_get_cfg() is None:
         return logging.INFO
@@ -265,9 +253,6 @@ def _configure_external_loggers(*, level: int) -> None:
     """
     Baja el nivel de loggers externos ruidosos aunque el root esté en DEBUG,
     salvo que HTTP_DEBUG=True.
-
-    Nota:
-    - `level` se mantiene por compat; no lo usamos directamente para externos.
     """
     cfg = _safe_get_cfg()
     if _should_enable_http_debug(cfg):
@@ -294,12 +279,7 @@ def _configure_external_loggers(*, level: int) -> None:
 
 
 def _file_logging_enabled() -> bool:
-    """
-    Feature flag: habilita duplicación del logging a fichero.
-
-    Debe venir de backend.config:
-      LOGGER_FILE_ENABLED: bool
-    """
+    """Feature flag: habilita duplicación del logging a fichero."""
     return _cfg_bool("LOGGER_FILE_ENABLED", False)
 
 
@@ -307,15 +287,11 @@ def _file_logging_path() -> str | None:
     """
     Path del fichero de log.
 
-    Prioridad (clave para evitar "1 log por PID" con multiprocessing/spawn):
-      0) ENV LOGGER_FILE_PATH (si el padre lo fijó, los hijos lo heredan)
-      1) backend.config.LOGGER_FILE_PATH (Path | str | None)
+    Prioridad:
+      0) ENV LOGGER_FILE_PATH
+      1) backend.config.LOGGER_FILE_PATH
       2) None
-
-    Nota:
-    - No decide nombres; solo resuelve el destino.
     """
-    # 0) ENV (congela el fichero entre procesos)
     try:
         env_p = (os.getenv("LOGGER_FILE_PATH") or "").strip()
         if env_p:
@@ -323,7 +299,6 @@ def _file_logging_path() -> str | None:
     except Exception:
         pass
 
-    # 1) backend.config
     cfg = _safe_get_cfg()
     if cfg is None:
         return None
@@ -351,14 +326,7 @@ def _has_our_file_handler(root: logging.Logger) -> bool:
 def _ensure_file_handler(root: logging.Logger, *, level: int) -> None:
     """
     Añade un FileHandler al root logger si procede y si no existe ya.
-
-    Reglas:
-    - Solo si LOGGER_FILE_ENABLED=True y hay path.
-    - Idempotente (no duplica handlers).
-    - Best-effort: nunca rompe el pipeline si falla crear el fichero/dir.
-
-    Por qué root logger:
-    - Cubre todo el logging del proceso (incluyendo librerías internas si no se silencian).
+    Best-effort: nunca rompe el pipeline.
     """
     if not _file_logging_enabled():
         return
@@ -367,7 +335,6 @@ def _ensure_file_handler(root: logging.Logger, *, level: int) -> None:
     if not path:
         return
 
-    # Si ya existe, re-sincronizamos nivel y salimos.
     if _has_our_file_handler(root):
         for h in root.handlers:
             try:
@@ -378,7 +345,6 @@ def _ensure_file_handler(root: logging.Logger, *, level: int) -> None:
         return
 
     try:
-        # Creamos directorio si hace falta (best-effort).
         dir_name = os.path.dirname(path)
         if dir_name:
             try:
@@ -389,13 +355,10 @@ def _ensure_file_handler(root: logging.Logger, *, level: int) -> None:
         fh = logging.FileHandler(path, mode="a", encoding="utf-8", delay=True)
         fh.setLevel(level)
         fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-
-        # Marcamos handler como nuestro para detección idempotente.
         setattr(fh, _FILE_HANDLER_TAG, True)
 
         root.addHandler(fh)
 
-        # Señal discreta solo en debug no-silent (sin usar logging para evitar recursion).
         try:
             if is_debug_mode() and not is_silent_mode():
                 sys.stdout.write(f"[LOGGER] File logging enabled -> {path}\n")
@@ -404,19 +367,11 @@ def _ensure_file_handler(root: logging.Logger, *, level: int) -> None:
             pass
 
     except Exception:
-        # Si no puede abrir el fichero, seguimos solo con consola.
         return
 
 
 def _append_progress_to_file(message: str) -> None:
-    """
-    Duplica a fichero lo que sale por `progress()` cuando el file logging está habilitado.
-
-    Diseño:
-    - Best-effort: si falla, no rompe ni hace ruido.
-    - Abrimos en modo append por llamada: robusto ante forks/errores/rotación externa.
-    - Lock para no mezclar líneas concurrentes.
-    """
+    """Duplica a fichero lo que sale por `progress()` cuando file logging está habilitado."""
     if not _file_logging_enabled():
         return
 
@@ -434,7 +389,6 @@ def _append_progress_to_file(message: str) -> None:
 
         with _PROGRESS_FILE_LOCK:
             with open(path, "a", encoding="utf-8") as f:
-                # progress es señal limpia (sin timestamps)
                 f.write(f"{message}\n")
     except Exception:
         return
@@ -448,10 +402,6 @@ def _append_progress_to_file(message: str) -> None:
 def _ensure_configured() -> logging.Logger:
     """
     Inicializa logging de forma idempotente y devuelve el logger principal.
-
-    - Si ya se configuró, re-sincroniza niveles (por si backend.config cambió).
-    - Configura handler de fichero si procede (consumiendo LOGGER_FILE_* de config/env).
-    - Nunca lanza excepciones.
     """
     global _LOGGER, _CONFIGURED
 
@@ -470,7 +420,6 @@ def _ensure_configured() -> logging.Logger:
     level = _resolve_level_from_config()
     root = logging.getLogger()
 
-    # Config base a consola (solo si no hay handlers previos).
     try:
         if not root.handlers:
             logging.basicConfig(
@@ -484,7 +433,6 @@ def _ensure_configured() -> logging.Logger:
 
     _configure_external_loggers(level=level)
 
-    # File handler opcional (best-effort).
     try:
         _ensure_file_handler(root, level=level)
     except Exception:
@@ -506,12 +454,7 @@ def get_logger() -> logging.Logger:
 
 
 def _should_log(*, always: bool = False) -> bool:
-    """
-    Decide si un mensaje debe emitirse (para debug/info/warning).
-
-    - always=True -> siempre emite
-    - SILENT_MODE=True -> suprime
-    """
+    """Decide si un mensaje debe emitirse (para debug/info/warning)."""
     if always:
         return True
     return not is_silent_mode()
@@ -525,10 +468,7 @@ def _should_log(*, always: bool = False) -> bool:
 def progress(message: str) -> None:
     """
     Emite una línea siempre visible (ignora SILENT_MODE).
-
-    No usa logging para evitar timestamps/levels y dar una “señal” limpia.
-
-    ✅ Si LOGGER_FILE_ENABLED=True y existe un path, también se persiste a fichero.
+    Si file logging está habilitado, también se persiste a fichero.
     """
     try:
         sys.stdout.write(f"{message}\n")
@@ -554,10 +494,6 @@ def progressf(fmt: str, *args: object) -> None:
 # ============================================================================
 # API PÚBLICA DE LOGGING
 # ============================================================================
-
-# Nota: dejamos el API “friendly”:
-# - Se puede llamar con kwargs tipados (ideal)
-# - Si alguien mete kwargs raros, los filtramos y seguimos (best-effort)
 
 
 def debug(
@@ -611,9 +547,7 @@ def error(
     always: bool = False,
     **kwargs: Unpack[LogKwargs],
 ) -> None:
-    """
-    ERROR siempre se emite (ignora SILENT_MODE). `always` se acepta por compat.
-    """
+    """ERROR siempre se emite (ignora SILENT_MODE)."""
     log = _ensure_configured()
     try:
         log.error(msg, *args, **kwargs)
@@ -627,13 +561,6 @@ def error(
 # ============================================================================
 # COMPAT: si hay llamadas legacy con **kwargs: object
 # ============================================================================
-# Si en algún punto de tu proyecto haces cosas como:
-#   logger.info("x", extra=algo_no_mapping, foo=123)
-# y no quieres tocar todos los callsites, puedes usar estas variantes:
-#
-#   info_any(..., **kwargs: object)
-#
-# No las uso en debug_ctx porque ahí ya controlas tú el payload.
 
 
 def debug_any(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
@@ -768,8 +695,8 @@ def debug_ctx(tag: str, msg: object) -> None:
 
     - DEBUG_MODE=False -> no-op
     - DEBUG_MODE=True:
-        * SILENT_MODE=True  -> progress("[TAG][DEBUG] ...")   (✅ también a fichero si está habilitado)
-        * SILENT_MODE=False -> info("[TAG][DEBUG] ...")       (✅ también a fichero si está habilitado)
+        * SILENT_MODE=True  -> progress("[TAG][DEBUG] ...")
+        * SILENT_MODE=False -> info("[TAG][DEBUG] ...")
     """
     if not is_debug_mode():
         return

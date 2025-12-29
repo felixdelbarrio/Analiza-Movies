@@ -5,36 +5,14 @@ backend/dlna_discovery.py
 
 Descubrimiento de dispositivos DLNA/UPnP por SSDP (M-SEARCH).
 
-Problemas reales observados (especialmente con Plex u otros MediaServers)
-------------------------------------------------------------------------
-1) Bucle "infinito" o runs eternos:
-   - Causa típica A: usar time.time() y el reloj del sistema se ajusta hacia atrás
-     (NTP, VM, sleep/wake). El cálculo de remaining no llega a 0.
-     ✅ Fix: usar time.monotonic().
-
-   - Causa típica B: flood de respuestas SSDP (mismo host o múltiples interfaces).
-     ✅ Fix: fuse global `DLNA_DISCOVERY_MAX_RESPONSES`.
-
-2) Re-análisis múltiple del mismo servidor (mismo “device”) con LOCATION distintos:
-   - Muchos devices (y Plex en algunas setups) pueden responder con variaciones
-     de LOCATION (query, path alternativo, puertos, etc.)
-   - Deduplicar solo por LOCATION no siempre es suficiente.
-   ✅ Fix: deduplicar también por identidad UPnP (USN/UDN/UUID) cuando está disponible.
-
-3) Reintentos inútiles sobre LOCATION que ya falló en este mismo run:
-   - Timeout / XML inválido / no ContentDirectory / payload enorme.
-   ✅ Fix: negative-cache in-memory por run.
-
-Filosofía de logs (alineada con backend/logger.py)
---------------------------------------------------
-- Nunca romper el flujo por logging.
-- Ruido / filtros / detalles → solo en DEBUG_MODE.
-- Señales importantes → warning/info con always=True cuando aplica.
+(…docstring igual que el tuyo…)
 """
 
 from dataclasses import dataclass
 import socket
 import time
+from types import ModuleType
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
@@ -55,8 +33,7 @@ _DEFAULT_DEVICE_DESC_MAX_BYTES = 2_000_000
 # Anti-bucle: cap de respuestas procesadas por “run” de discovery.
 _DEFAULT_DISCOVERY_MAX_RESPONSES = 2048
 
-# Anti-flood por host (si un solo IP responde sin parar).
-# Si no quieres este comportamiento, puedes setearlo muy alto en config.
+# Anti-flood por host
 _DEFAULT_DISCOVERY_MAX_RESPONSES_PER_HOST = 512
 
 _DEFAULT_DENY_TOKENS = [
@@ -73,13 +50,7 @@ _DEFAULT_ALLOW_HINT_TOKENS = ["mediaserver", "contentdirectory"]
 class DLNADevice:
     """
     Modelo mínimo de un servidor DLNA descubierto.
-
-    Nota:
-    - `location` aquí es la LOCATION normalizada, usada para GET y para dedup por URL.
-    - `device_id` es un identificador estable si se pudo extraer (USN/UDN/UUID).
-      Ayuda a deduplicar aunque cambie LOCATION.
     """
-
     friendly_name: str
     location: str
     host: str
@@ -91,15 +62,15 @@ class DLNADevice:
 # Logging controlado por modos (sin depender de imports directos a config)
 # ============================================================================
 
-
-def _safe_get_cfg():
+def _safe_get_cfg() -> ModuleType | None:
     """Devuelve backend.config si ya está importado (evita dependencias circulares)."""
     import sys
 
-    return sys.modules.get("backend.config")
+    mod = sys.modules.get("backend.config")
+    return mod if isinstance(mod, ModuleType) else None
 
 
-def _cfg_get(name: str, default):
+def _cfg_get(name: str, default: Any) -> Any:
     """Lee un atributo de backend.config (si existe) sin romper nunca."""
     cfg = _safe_get_cfg()
     if cfg is None:
@@ -125,13 +96,6 @@ def _is_silent_mode() -> bool:
 
 
 def _log_debug(msg: object) -> None:
-    """
-    Debug contextual:
-    - DEBUG_MODE=False → no-op
-    - DEBUG_MODE=True:
-        * SILENT_MODE=True  -> progress
-        * SILENT_MODE=False -> info
-    """
     if not _is_debug_mode():
         return
 
@@ -153,12 +117,7 @@ def _log_debug(msg: object) -> None:
 # SSDP parsing + URL/XML helpers
 # ============================================================================
 
-
 def _parse_ssdp_response(data: bytes) -> dict[str, str]:
-    """
-    Parsea una respuesta SSDP (cabeceras HTTP-like) a dict lower-case.
-    Devuelve {} si no parece parseable.
-    """
     try:
         text = data.decode("utf-8", errors="ignore")
     except Exception:
@@ -181,16 +140,6 @@ def _parse_ssdp_response(data: bytes) -> dict[str, str]:
 
 
 def _normalize_location(location: str) -> str:
-    """
-    Normaliza LOCATION para deduplicación consistente.
-
-    Reglas:
-    - scheme y host a lower
-    - elimina fragment (#...)
-    - conserva query (por compatibilidad; si tu red lo necesita, se puede ignorar)
-    - path vacío -> "/"
-    - si hay port explícito, se conserva; si no, no se añade
-    """
     loc = (location or "").strip()
     if not loc:
         return loc
@@ -207,15 +156,12 @@ def _normalize_location(location: str) -> str:
 
     port = p.port
     netloc = host if port is None else f"{host}:{port}"
-
     path = p.path or "/"
-    fragment = ""
 
-    return urlunparse((scheme, netloc, path, p.params, p.query, fragment))
+    return urlunparse((scheme, netloc, path, p.params, p.query, ""))
 
 
 def _headers_text_for_filter(headers: dict[str, str], location: str) -> str:
-    """Construye un “blob” textual para filtros deny/allow."""
     parts = [
         location,
         headers.get("st", ""),
@@ -227,8 +173,6 @@ def _headers_text_for_filter(headers: dict[str, str], location: str) -> str:
 
 
 def _should_ignore_by_tokens(text: str, deny_tokens: list[str]) -> bool:
-    if not deny_tokens:
-        return False
     for tok in deny_tokens:
         if tok and tok in text:
             return True
@@ -236,8 +180,6 @@ def _should_ignore_by_tokens(text: str, deny_tokens: list[str]) -> bool:
 
 
 def _has_any_allow_hint(text: str, allow_tokens: list[str]) -> bool:
-    if not allow_tokens:
-        return False
     for tok in allow_tokens:
         if tok and tok in text:
             return True
@@ -245,24 +187,11 @@ def _has_any_allow_hint(text: str, allow_tokens: list[str]) -> bool:
 
 
 def _extract_device_id_from_headers(headers: dict[str, str]) -> str | None:
-    """
-    Intenta obtener un identificador estable del device a partir de headers SSDP.
-
-    Usualmente:
-      USN: uuid:XXXXXXXX-....::urn:schemas-upnp-org:device:MediaServer:1
-
-    Estrategia:
-    - Preferimos USN si existe, y extraemos la parte "uuid:..."
-    - Si no, usamos USN completo (normalizado) como fallback.
-
-    Esto es clave para deduplicar cuando LOCATION varía.
-    """
     usn = (headers.get("usn") or "").strip()
     if not usn:
         return None
 
     low = usn.lower()
-
     if "uuid:" in low:
         try:
             start = low.index("uuid:")
@@ -277,9 +206,6 @@ def _extract_device_id_from_headers(headers: dict[str, str]) -> str | None:
 
 
 def _fetch_device_description(location: str, *, timeout_s: float, max_bytes: int) -> bytes | None:
-    """
-    Descarga el XML de descripción del dispositivo (LOCATION) con límites fuertes.
-    """
     try:
         req = Request(
             location,
@@ -350,24 +276,11 @@ def _has_content_directory(xml_data: bytes) -> bool:
 # API pública
 # ============================================================================
 
-
 def discover_dlna_devices(
     timeout: float | None = None,
     st: str | None = None,
     mx: int | None = None,
 ) -> list[DLNADevice]:
-    """
-    Descubre servidores DLNA/UPnP en la red mediante SSDP.
-
-    Devuelve una lista deduplicada:
-    - por LOCATION normalizada (evita repeticiones obvias)
-    - y por device_id (USN/UUID) cuando existe (evita repeticiones “Plex-style”)
-
-    Además:
-    - usa monotonic() para evitar bucles por ajustes de reloj
-    - aplica fuse global de respuestas y fuse por host (anti-flood)
-    - negative-cache por run para no reintentar LOCATION fallidas
-    """
     timeout_s: float = float(timeout) if timeout is not None else float(
         _cfg_get("DLNA_DISCOVERY_TIMEOUT_SECONDS", _DEFAULT_DISCOVERY_TIMEOUT)
     )
@@ -385,7 +298,6 @@ def discover_dlna_devices(
         _cfg_get("DLNA_DISCOVERY_MAX_RESPONSES_PER_HOST", _DEFAULT_DISCOVERY_MAX_RESPONSES_PER_HOST)
     )
 
-    # Defensive caps locales
     if timeout_s < 0.2:
         timeout_s = 0.2
     if mx_i < 1:

@@ -5,48 +5,26 @@
 
 python-dotenv>=1.0
 requests>=2.31
-urllib3>=2.0            # explicit: used directly (retry, adapters)
-typing_extensions>=4.9  # Python 3.9 typing support (TypeAlias, etc.)
+urllib3>=2.0
+typing_extensions>=4.9
 
 plexapi>=4.15
 pandas>=2.1
-
-# --------------------------------------------------------------------
-# Dependencies that improve typing quality (Pyright + pandas-stubs)
-# These are imported from within pandas-stubs stubs (frame.pyi/series.pyi/generic.pyi).
-# Without them, Pyright may fail to resolve pandas typings and produce cascaded errors.
-matplotlib>=3.8
-xarray>=2024.1
-sqlalchemy>=2.0
 
 # Streamlit and UI stack
 streamlit>=1.32
 streamlit-aggrid>=0.3.4
 altair>=5.2
 
-# FastAPI server stack (Public API for frontend / Postman / integrations)
+# FastAPI server stack
 fastapi>=0.110
 uvicorn[standard]>=0.27
 
-# Optional but strongly recommended:
-# Improves Streamlit hot-reload performance and removes startup warning
+# Optional but strongly recommended: improves reload + removes warning
 watchdog>=3.0
 
-# --------------------------------------------------------------------
-# Optional runtime deps (remove "Could not import ..." warnings in pyright --verbose
-# for some Streamlit / integrations modules). Not required to run the app.
-# If you don't care about those warnings, you can omit this block.
+# Optional runtime deps (only if you actually use them in the dashboard)
 rich>=13.7
 plotly>=5.18
 sympy>=1.12
 graphviz>=0.20
-
-# --------------------------------------------------------------------
-# Development notes:
-#
-# If you are developing locally, prefer installing the package
-# in editable mode with dev extras:
-#
-#   pip install -e .[dev]
-#
-# Only use this requirements file for dev tooling if strictly necessary.

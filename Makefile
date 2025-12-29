@@ -4,6 +4,7 @@
 #   make frontend
 #   make server
 #   make doctor
+#   make dev
 
 SHELL := /bin/bash
 VENV  := .venv
@@ -18,7 +19,8 @@ API_PORT   ?= 8000
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv install reinstall backend frontend server server-uvicorn doctor clean clean-venv reset
+.PHONY: help venv install dev reinstall backend frontend server server-uvicorn doctor \
+        typecheck lint format clean clean-venv reset
 
 help:
 	@echo ""
@@ -29,10 +31,15 @@ help:
 	@echo "make server          Ejecuta la API FastAPI (via start-server)"
 	@echo "make server-uvicorn  Ejecuta la API FastAPI (via uvicorn: $(API_MODULE))"
 	@echo ""
+	@echo "make install         Crea venv e instala runtime (editable)"
+	@echo "make dev             Instala runtime + extras dev (mypy/pyright + stubs + tooling)"
+	@echo "make reinstall       Reinstala el proyecto editable (runtime)"
+	@echo "make typecheck       Ejecuta mypy y pyright (requiere make dev)"
+	@echo "make lint            Ejecuta ruff (requiere make dev)"
+	@echo "make format          Ejecuta black + ruff format (requiere make dev)"
+	@echo ""
 	@echo "make doctor          Diagnóstico del entorno"
-	@echo "make install         Crea venv e instala dependencias"
-	@echo "make reinstall       Reinstala el proyecto editable"
-	@echo "make reset           Borra venv y reinstala todo"
+	@echo "make reset           Borra venv y reinstala todo (dev)"
 	@echo ""
 
 # -------------------------------------------------
@@ -43,9 +50,13 @@ venv:
 	@test -d "$(VENV)" || python3 -m venv "$(VENV)"
 	@$(PY) -m pip install -q --upgrade pip
 
+# Runtime install: setup.py / install_requires es la fuente de verdad
 install: venv
-	@$(PIP) install -q -r requirements.txt
 	@$(PIP) install -q -e .
+
+# Dev install: incluye extras dev (mypy/pyright/stubs/black/ruff/pytest)
+dev: venv
+	@$(PIP) install -q -e ".[dev]"
 
 reinstall: venv
 	@$(PIP) install -q -e .
@@ -65,9 +76,23 @@ server: install
 	@$(VENV)/bin/start-server
 
 # Alternativa explícita para cuando el ASGI module cambie (p.ej., renombrado del fichero).
-# No reemplaza a `server` para no romper el flujo actual.
 server-uvicorn: install
 	@$(PY) -m uvicorn "$(API_MODULE)" --host "$(API_HOST)" --port "$(API_PORT)"
+
+# -------------------------------------------------
+# Calidad / Tipado (opcional)
+# -------------------------------------------------
+
+typecheck: dev
+	@$(PY) -m mypy .
+	@$(PY) -m pyright .
+
+lint: dev
+	@$(PY) -m ruff check .
+
+format: dev
+	@$(PY) -m black .
+	@$(PY) -m ruff format .
 
 # -------------------------------------------------
 # Diagnóstico
@@ -80,6 +105,7 @@ doctor: venv
 	@echo "Backend cmd:   $$(test -x $(VENV)/bin/start && echo OK || echo MISSING)"
 	@echo "Server cmd:    $$(test -x $(VENV)/bin/start-server && echo OK || echo MISSING)"
 	@echo "ASGI module:   $(API_MODULE)"
+	@echo "Type tools:    $$(($(PY) -c 'import mypy, pyright' >/dev/null 2>&1 && echo OK) || echo "(install with: make dev)")"
 	@echo "Working dir:   $$(pwd)"
 
 # -------------------------------------------------
@@ -95,4 +121,4 @@ clean-venv:
 	@rm -rf $(VENV)
 
 reset: clean clean-venv
-	@$(MAKE) install
+	@$(MAKE) dev

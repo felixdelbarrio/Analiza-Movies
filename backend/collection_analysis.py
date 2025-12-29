@@ -474,20 +474,20 @@ def analyze_movie(
             _append_log(logs, f"lookup_key={lookup_key}", tag="OMDB_NONE")
             return {}
 
-        omdb_dict = dict(record)
-        wiki_dict = _extract_wiki_meta(omdb_dict)
+        omdb_dict_local = dict(record)
+        wiki_dict_local = _extract_wiki_meta(omdb_dict_local)
 
         with _LOCAL_CACHE_LOCK:
-            _lru_set(_OMDB_LOCAL_CACHE, key, omdb_dict, max_items=_OMDB_LOCAL_CACHE_MAX)
-            _lru_set(_WIKI_LOCAL_CACHE, key, wiki_dict, max_items=_WIKI_LOCAL_CACHE_MAX)
+            _lru_set(_OMDB_LOCAL_CACHE, key, omdb_dict_local, max_items=_OMDB_LOCAL_CACHE_MAX)
+            _lru_set(_WIKI_LOCAL_CACHE, key, wiki_dict_local, max_items=_WIKI_LOCAL_CACHE_MAX)
 
-        omdb_data = omdb_dict
-        wiki_meta = wiki_dict
+        omdb_data = omdb_dict_local
+        wiki_meta = wiki_dict_local
 
-        if wiki_dict:
+        if wiki_dict_local:
             _dbg_ctx(f"Using __wiki from OMDb cache | lookup_key={lookup_key}")
 
-        return omdb_dict
+        return omdb_dict_local
 
     # 2) Plex rating (si aplica)
     plex_rating: float | None = None
@@ -584,39 +584,44 @@ def analyze_movie(
                     wiki_block = wiki_item.get("wiki")
                     wikidata_block = wiki_item.get("wikidata")
 
-                    imdb_from_wiki: str | None = None
+                    # ----
+                    # FIX [no-redef]:
+                    # Evitamos nombres que luego se vuelven a declarar más abajo en analyze_movie()
+                    # (wikidata_id, wikipedia_title, source_language, etc.)
+                    # ----
+                    imdb_id_from_wiki: str | None = None
                     imdb_cached = wiki_item.get("imdbID")
                     if isinstance(imdb_cached, str) and imdb_cached.strip():
-                        imdb_from_wiki = imdb_cached.strip().lower()
+                        imdb_id_from_wiki = imdb_cached.strip().lower()
 
-                    wikidata_id: str | None = None
+                    wikidata_id_from_wiki: str | None = None
                     if isinstance(wikidata_block, Mapping):
-                        qid = wikidata_block.get("qid")
-                        if isinstance(qid, str) and qid.strip():
-                            wikidata_id = qid.strip()
+                        qid_val = wikidata_block.get("qid")
+                        if isinstance(qid_val, str) and qid_val.strip():
+                            wikidata_id_from_wiki = qid_val.strip()
 
-                    wikipedia_title: str | None = None
-                    source_language: str | None = None
+                    wikipedia_title_from_wiki: str | None = None
+                    source_language_from_wiki: str | None = None
                     if isinstance(wiki_block, Mapping):
                         wt = wiki_block.get("wikipedia_title")
                         if isinstance(wt, str) and wt.strip():
-                            wikipedia_title = wt.strip()
+                            wikipedia_title_from_wiki = wt.strip()
                         sl = wiki_block.get("source_language")
                         if isinstance(sl, str) and sl.strip():
-                            source_language = sl.strip()
+                            source_language_from_wiki = sl.strip()
 
                     wiki_lookup = _build_wiki_lookup_info(
                         title_for_fetch=movie_input.title,
                         year_for_fetch=movie_input.year,
-                        imdb_used=imdb_used_for_wiki or imdb_from_wiki,
+                        imdb_used=imdb_used_for_wiki or imdb_id_from_wiki,
                     )
 
                     minimal_wiki = _build_minimal_wiki_block(
-                        imdb_id=(imdb_from_wiki or imdb_used_for_wiki),
-                        wikidata_id=wikidata_id,
-                        wikipedia_title=wikipedia_title,
+                        imdb_id=(imdb_id_from_wiki or imdb_used_for_wiki),
+                        wikidata_id=wikidata_id_from_wiki,
+                        wikipedia_title=wikipedia_title_from_wiki,
                         wiki_lookup=wiki_lookup,
-                        source_language=source_language,
+                        source_language=source_language_from_wiki,
                     )
 
                     try:
@@ -724,7 +729,9 @@ def analyze_movie(
     # wiki_meta.get(...) devuelve object|None; lo normalizamos a str|None antes de asignar
     # ---------------------------
     wikidata_id_raw = wiki_meta.get("wikidata_id")
-    wikidata_id: str | None = wikidata_id_raw.strip() if isinstance(wikidata_id_raw, str) and wikidata_id_raw.strip() else None
+    wikidata_id: str | None = (
+        wikidata_id_raw.strip() if isinstance(wikidata_id_raw, str) and wikidata_id_raw.strip() else None
+    )
     if wikidata_id is None:
         # compat typo histórico
         wikadata_id_raw = wiki_meta.get("wikadata_id")
@@ -732,16 +739,12 @@ def analyze_movie(
 
     wikipedia_title_raw = wiki_meta.get("wikipedia_title")
     wikipedia_title: str | None = (
-        wikipedia_title_raw.strip()
-        if isinstance(wikipedia_title_raw, str) and wikipedia_title_raw.strip()
-        else None
+        wikipedia_title_raw.strip() if isinstance(wikipedia_title_raw, str) and wikipedia_title_raw.strip() else None
     )
 
     source_language_raw = wiki_meta.get("source_language")
     source_language: str | None = (
-        source_language_raw.strip()
-        if isinstance(source_language_raw, str) and source_language_raw.strip()
-        else None
+        source_language_raw.strip() if isinstance(source_language_raw, str) and source_language_raw.strip() else None
     )
 
     row["wikidata_id"] = wikidata_id

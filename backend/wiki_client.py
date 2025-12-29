@@ -46,7 +46,7 @@ import unicodedata
 from collections.abc import Iterable, Mapping
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Any, Final, Literal, Protocol
+from typing import Any, Final, Literal, Protocol, cast
 from urllib.parse import quote
 
 import requests
@@ -729,18 +729,20 @@ def _empty_cache() -> WikiCacheFile:
     is_film: dict[str, IsFilmCacheEntry] = {}
     search_cache: dict[str, dict[str, Any]] = {}
 
-    return WikiCacheFile({
-        "schema": _SCHEMA_VERSION,
-        "language": str(WIKI_LANGUAGE),
-        "fallback_language": str(WIKI_FALLBACK_LANGUAGE),
-        "records": records,
-        "index_imdb": index_imdb,
-        "index_ty": index_ty,
-        "entities": entities,
-        "imdb_qid": imdb_qid,
-        "is_film": is_film,
-        "search_cache": search_cache,
-    })
+    return WikiCacheFile(
+        {
+            "schema": _SCHEMA_VERSION,
+            "language": str(WIKI_LANGUAGE),
+            "fallback_language": str(WIKI_FALLBACK_LANGUAGE),
+            "records": records,
+            "index_imdb": index_imdb,
+            "index_ty": index_ty,
+            "entities": entities,
+            "imdb_qid": imdb_qid,
+            "is_film": is_film,
+            "search_cache": search_cache,
+        }
+    )
 
 
 def _maybe_quarantine_corrupt_cache() -> None:
@@ -987,6 +989,11 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
       - reindexa
       - limita tamaños (records/imdb_qid/is_film/entities/search_cache)
       - elimina entities no referenciadas
+
+    FIX typing:
+      - evitamos `dict(ranked[:N])` sobre listas de items con tipos dict-subclass,
+        porque Pyright puede “mezclar” el tipo de value (p.ej. ImdbQidCacheEntry vs WikiCacheItem).
+      - en su lugar, reconstruimos explícitamente dict[str, T] con loops.
     """
     try:
         now_epoch = _now_epoch()
@@ -994,7 +1001,7 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
         records_obj = cache.get("records")
         if not isinstance(records_obj, Mapping):
             cache["records"] = {}
-            records_obj = cache["records"]
+            records_obj = cast(Mapping[str, object], cache["records"])
 
         # 1) records
         records: dict[str, WikiCacheItem] = {}
@@ -1022,8 +1029,15 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
             records[rid] = WikiCacheItem(d)
 
         if _COMPACT_MAX_RECORDS > 0 and len(records) > _COMPACT_MAX_RECORDS:
-            ranked = sorted(records.items(), key=lambda kv: int(kv[1].get("fetched_at", 0)), reverse=True)
-            records = dict(ranked[:_COMPACT_MAX_RECORDS])
+            ranked_rec = sorted(
+                records.items(),
+                key=lambda kv: int(kv[1].get("fetched_at", 0) or 0),
+                reverse=True,
+            )
+            trimmed_records: dict[str, WikiCacheItem] = {}
+            for k, v in ranked_rec[:_COMPACT_MAX_RECORDS]:
+                trimmed_records[k] = v
+            records = trimmed_records
 
         cache["records"] = records
 
@@ -1060,8 +1074,16 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
                 imdb_qid[imdb] = ImdbQidCacheEntry(dict(v))
 
         if _COMPACT_MAX_IMDB_QID > 0 and len(imdb_qid) > _COMPACT_MAX_IMDB_QID:
-            ranked = sorted(imdb_qid.items(), key=lambda kv: int(kv[1].get("fetched_at", 0)), reverse=True)
-            imdb_qid = dict(ranked[:_COMPACT_MAX_IMDB_QID])
+            ranked_qid = sorted(
+                imdb_qid.items(),
+                key=lambda kv: int(kv[1].get("fetched_at", 0) or 0),
+                reverse=True,
+            )
+            trimmed_qid: dict[str, ImdbQidCacheEntry] = {}
+            for k, v in ranked_qid[:_COMPACT_MAX_IMDB_QID]:
+                trimmed_qid[k] = v
+            imdb_qid = trimmed_qid
+
         cache["imdb_qid"] = imdb_qid
 
         # 4) is_film
@@ -1081,8 +1103,16 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
                 is_film[qid] = IsFilmCacheEntry(dict(v))
 
         if _COMPACT_MAX_IS_FILM > 0 and len(is_film) > _COMPACT_MAX_IS_FILM:
-            ranked = sorted(is_film.items(), key=lambda kv: int(kv[1].get("fetched_at", 0)), reverse=True)
-            is_film = dict(ranked[:_COMPACT_MAX_IS_FILM])
+            ranked_is = sorted(
+                is_film.items(),
+                key=lambda kv: int(kv[1].get("fetched_at", 0) or 0),
+                reverse=True,
+            )
+            trimmed_is: dict[str, IsFilmCacheEntry] = {}
+            for k, v in ranked_is[:_COMPACT_MAX_IS_FILM]:
+                trimmed_is[k] = v
+            is_film = trimmed_is
+
         cache["is_film"] = is_film
 
         # 5) referenced entities
@@ -1117,8 +1147,13 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
                     entities[qs] = WikidataEntity(dict(ent))
 
         if _COMPACT_MAX_ENTITIES > 0 and len(entities) > _COMPACT_MAX_ENTITIES:
+            # (si hay que recortar, mantenemos un orden estable)
             keep_keys = sorted(entities.keys())[:_COMPACT_MAX_ENTITIES]
-            entities = {k: entities[k] for k in keep_keys}
+            trimmed_ent: dict[str, WikidataEntity] = {}
+            for k in keep_keys:
+                trimmed_ent[k] = entities[k]
+            entities = trimmed_ent
+
         cache["entities"] = entities
 
         # 6) search_cache
@@ -1138,13 +1173,16 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
                 sc[k] = {"fetched_at": int(fa), "ttl_s": int(ttl), "titles": [t for t in titles if isinstance(t, str)]}
 
         if _SEARCH_CAND_MAX > 0 and len(sc) > _SEARCH_CAND_MAX:
-            # FIX typing: evitamos `int(object)` en el lambda (Pyright 3.12 lo marca).
-            ranked = sorted(
+            ranked_sc = sorted(
                 sc.items(),
                 key=lambda kv: (_safe_int(kv[1].get("fetched_at")) or 0) if isinstance(kv[1], Mapping) else 0,
                 reverse=True,
             )
-            sc = dict(ranked[:_SEARCH_CAND_MAX])
+            trimmed_sc: dict[str, dict[str, Any]] = {}
+            for k, v in ranked_sc[:_SEARCH_CAND_MAX]:
+                trimmed_sc[k] = v
+            sc = trimmed_sc
+
         cache["search_cache"] = sc
 
         _m_inc("cache_compactions", 1)
@@ -1841,8 +1879,7 @@ def _imdb_qid_cached_unlocked(cache: WikiCacheFile, imdb_norm: str) -> tuple[boo
     - hit=False si no existe o está expirado.
     - qid puede ser None (negative caching).
 
-    Nota: evitamos sentinels tipo `object()` para que Pyright no propague `object`
-    a sitios donde luego hacemos int()/str() y acabe rompiendo el typing.
+    Nota: evitamos sentinels tipo `object()` para que Pyright no propague `object`.
     """
     now_epoch = _now_epoch()
     cached = cache["imdb_qid"].get(imdb_norm)
@@ -1946,9 +1983,9 @@ def _get_cached_item(
     - served_stale_ok=True sólo si status=ok y está en ventana SWR grace.
     """
     now_epoch = _now_epoch()
-    records = cache["records"]
-    idx_imdb = cache["index_imdb"]
-    idx_ty = cache["index_ty"]
+    records: dict[str, WikiCacheItem] = cache["records"]
+    idx_imdb: dict[str, str] = cache["index_imdb"]
+    idx_ty: dict[str, str] = cache["index_ty"]
 
     def _pick(rid: str) -> tuple[WikiCacheItem | None, bool]:
         it = records.get(rid)
@@ -2096,9 +2133,6 @@ def _build_ok_item_and_merge_entities(
     summary_text = str(wiki_raw.get("extract") or "")
     description_text = str(wiki_raw.get("description") or "")
 
-    # content_urls puede ser un mapping arbitrario (depende del endpoint REST).
-    # Evitamos `dict(x)` directo porque Pyright puede inferir tipos incompatibles
-    # cuando `wiki_raw.get(...)` es `Any | None`.
     urls_content: dict[str, Any] = {}
     content_urls_obj = wiki_raw.get("content_urls")
     if isinstance(content_urls_obj, Mapping):
@@ -2191,9 +2225,11 @@ def _build_ok_item_and_merge_entities(
 
     return item
 
+
 # =============================================================================
 # Title/year path
 # =============================================================================
+
 
 def _try_title_year_path(
     *,
@@ -2310,6 +2346,7 @@ def _try_title_year_path(
 # SWR refresh scheduler
 # =============================================================================
 
+
 def _schedule_refresh_if_needed(
     *,
     key: str,
@@ -2353,6 +2390,7 @@ def _schedule_refresh_if_needed(
 # =============================================================================
 # Core (single-flight + SWR)
 # =============================================================================
+
 
 def _get_wiki_impl(
     *,
@@ -2529,10 +2567,12 @@ def _get_wiki_impl(
 # API pública
 # =============================================================================
 
+
 def get_wiki(*, title: str, year: int | None, imdb_id: str | None) -> WikiCacheItem | None:
     primary = _normalize_lang_code(WIKI_LANGUAGE) or "en"
     fallback = _normalize_lang_code(WIKI_FALLBACK_LANGUAGE) or ("en" if primary != "en" else "")
     return _get_wiki_impl(title=title, year=year, imdb_id=imdb_id, movie_input=None, primary=primary, fallback=fallback)
+
 
 def get_wiki_for_input(
     *,
