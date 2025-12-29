@@ -11,6 +11,11 @@ from __future__ import annotations
 # - FRONT_MODE = "api" | "disk" (sin fallback)
 # - Import robusto de tabs (no depende de frontend.tabs.__init__)
 # - NO existe tab "Resumen" (como en el dashboard antiguo). El resumen es el KPI superior.
+#
+# Nota Pyright/Pylance:
+# - Algunos stubs hacen que Pyright "demuestre" cosas demasiado fuertes y marque
+#   ramas como unreachable. Para guard-clauses opcionales, usamos un cast a Any
+#   para impedir que Pyright las elimine como "imposibles".
 # =============================================================================
 
 import importlib
@@ -18,7 +23,7 @@ import inspect
 import sys
 import warnings
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import pandas as pd
 import streamlit as st
@@ -183,10 +188,6 @@ def _init_modal_state() -> None:
 def _import_tabs_module(module_name: str) -> Any | None:
     """
     Importa un módulo de pestaña sin depender de frontend.tabs.__init__.
-
-    Returns:
-      - módulo si existe
-      - None si no existe
     """
     try:
         return importlib.import_module(f"frontend.tabs.{module_name}")
@@ -215,6 +216,19 @@ def _call_candidates_render(module: Any, *, df_all: pd.DataFrame, df_filtered: p
         render_fn(df_all, df_filtered)
     else:
         render_fn(df_all)
+
+
+def _ui_error(msg: str) -> None:
+    """
+    Wrapper anti-stubs: llama a st.error() vía getattr/Any.
+    """
+    st_any: Any = st
+    fn = getattr(st_any, "error", None)
+    if callable(fn):
+        try:
+            fn(msg)
+        except Exception:
+            pass
 
 
 # =============================================================================
@@ -246,8 +260,7 @@ if st.session_state.get("modal_open"):
 # =============================================================================
 # 7) Carga de datos (SIN FALLBACK): FRONT_MODE = api | disk
 # =============================================================================
-# Pyright fix:
-# - st.stop() no está tipado como NoReturn en los stubs, así que inicializamos y guardamos.
+
 df_all: pd.DataFrame | None = None
 df_filtered: pd.DataFrame | None = None
 
@@ -258,7 +271,6 @@ if FRONT_MODE == "api":
             timeout_s=FRONT_API_TIMEOUT_S,
             page_size=FRONT_API_PAGE_SIZE,
         )
-        # ✅ Pyright-friendly: df_all puede ser None en typing, así que lo comprobamos explícitamente.
         if df_all is None or df_all.empty:
             raise ApiClientError("API devolvió report_all vacío.")
 
@@ -271,7 +283,7 @@ if FRONT_MODE == "api":
         if FRONT_DEBUG:
             st.caption("DEBUG | Datos cargados exclusivamente desde API.")
     except ApiClientError as exc:
-        st.error(f"Error cargando datos desde API (FRONT_MODE=api): {exc}")
+        _ui_error(f"Error cargando datos desde API (FRONT_MODE=api): {exc}")
         st.stop()
 
 elif FRONT_MODE == "disk":
@@ -282,24 +294,26 @@ elif FRONT_MODE == "disk":
         if FRONT_DEBUG:
             st.caption("DEBUG | Datos cargados exclusivamente desde disco.")
     except Exception as exc:
-        st.error(f"Error cargando datos desde disco (FRONT_MODE=disk): {exc!r}")
+        _ui_error(f"Error cargando datos desde disco (FRONT_MODE=disk): {exc!r}")
         st.stop()
 
 else:
-    st.error(f"FRONT_MODE desconocido: {FRONT_MODE!r}")
+    _ui_error(f"FRONT_MODE desconocido: {FRONT_MODE!r}")
     st.stop()
 
-# Guard clause: asegura a Pyright que df_all existe a partir de aquí.
-if df_all is None:
-    st.error("No se pudo cargar report_all (df_all=None).")
-    st.stop()
+# Guard clause (evita "unreachable" usando Any para que Pyright no lo colapse)
+df_all_any: Any = df_all
+if df_all_any is None:
+    _ui_error("No se pudo cargar report_all (df_all=None).")
+    raise RuntimeError("df_all is None")
+df_all = cast(pd.DataFrame, df_all_any)
 
 df_all = add_derived_columns(df_all)
 
 _debug_banner(df_all=df_all, df_filtered=df_filtered)
 
 # =============================================================================
-# 8) Resumen general (KPIs) — como en el dashboard antiguo
+# 8) Resumen general (KPIs)
 # =============================================================================
 
 st.subheader("Resumen general")
@@ -321,7 +335,7 @@ else:
 st.markdown("---")
 
 # =============================================================================
-# 9) Pestañas (tabs) — nombres como en el dashboard antiguo
+# 9) Pestañas (tabs)
 # =============================================================================
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
@@ -339,14 +353,14 @@ with tab1:
     all_movies_mod = _import_tabs_module("all_movies")
     render_fn = getattr(all_movies_mod, "render", None) if all_movies_mod is not None else None
     if not callable(render_fn):
-        st.error("No existe frontend.tabs.all_movies.render(df_all)")
+        _ui_error("No existe frontend.tabs.all_movies.render(df_all)")
     else:
         render_fn(df_all)
 
 with tab2:
     candidates_mod = _import_tabs_module("candidates")
     if candidates_mod is None:
-        st.error("No existe el módulo frontend.tabs.candidates")
+        _ui_error("No existe el módulo frontend.tabs.candidates")
     else:
         _call_candidates_render(candidates_mod, df_all=df_all, df_filtered=df_filtered)
 
@@ -354,7 +368,7 @@ with tab3:
     advanced_mod = _import_tabs_module("advanced")
     render_fn = getattr(advanced_mod, "render", None) if advanced_mod is not None else None
     if not callable(render_fn):
-        st.error("No existe frontend.tabs.advanced.render(df_all)")
+        _ui_error("No existe frontend.tabs.advanced.render(df_all)")
     else:
         render_fn(df_all)
 
@@ -362,7 +376,7 @@ with tab4:
     delete_mod = _import_tabs_module("delete")
     render_fn = getattr(delete_mod, "render", None) if delete_mod is not None else None
     if not callable(render_fn):
-        st.error("No existe frontend.tabs.delete.render(df_filtered, ...)")
+        _ui_error("No existe frontend.tabs.delete.render(df_filtered, ...)")
     else:
         render_fn(df_filtered, DELETE_DRY_RUN, DELETE_REQUIRE_CONFIRM)
 
@@ -370,14 +384,14 @@ with tab5:
     charts_mod = _import_tabs_module("charts")
     render_fn = getattr(charts_mod, "render", None) if charts_mod is not None else None
     if not callable(render_fn):
-        st.error("No existe frontend.tabs.charts.render(df_all)")
+        _ui_error("No existe frontend.tabs.charts.render(df_all)")
     else:
         render_fn(df_all)
 
 with tab6:
     metadata_mod = _import_tabs_module("metadata")
     if metadata_mod is None:
-        st.error("No existe frontend.tabs.metadata")
+        _ui_error("No existe frontend.tabs.metadata")
     else:
         if FRONT_MODE == "api":
             try:
@@ -394,12 +408,12 @@ with tab6:
                     if callable(render):
                         render(METADATA_FIX_PATH)
                     else:
-                        st.error("metadata: no existe render_df(df) ni render(path)")
+                        _ui_error("metadata: no existe render_df(df) ni render(path)")
             except ApiClientError as exc:
-                st.error(f"Error cargando metadata desde API (FRONT_MODE=api): {exc}")
+                _ui_error(f"Error cargando metadata desde API (FRONT_MODE=api): {exc}")
         else:
             render = getattr(metadata_mod, "render", None)
             if callable(render):
                 render(METADATA_FIX_PATH)
             else:
-                st.error("metadata: no existe render(path)")
+                _ui_error("metadata: no existe render(path)")

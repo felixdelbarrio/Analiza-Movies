@@ -2,7 +2,8 @@
   "include": ["backend", "frontend", "server"],
 
   "exclude": [
-    "**/__pycache__",
+    "**/.git/**",
+    "**/__pycache__/**",
     "**/*.pyc",
     "dist",
     "build",
