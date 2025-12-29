@@ -17,7 +17,7 @@ Principios:
   frontend.components (grid + detalle).
 """
 
-from typing import Sequence
+from typing import Any, Sequence
 
 import pandas as pd
 import streamlit as st
@@ -40,7 +40,10 @@ def _safe_unique_sorted(df: pd.DataFrame, col: str) -> list[str]:
     if col not in df.columns:
         return []
 
-    return (
+    # Importante para mypy:
+    # pandas.Series.unique().tolist() suele estar tipado como list[Any]/Any en stubs.
+    # Forzamos una lista REAL de str.
+    raw_list: list[Any] = (
         df[col]
         .dropna()
         .astype(str)
@@ -50,6 +53,14 @@ def _safe_unique_sorted(df: pd.DataFrame, col: str) -> list[str]:
         .unique()
         .tolist()
     )
+
+    out: list[str] = []
+    for v in raw_list:
+        s = str(v).strip()
+        if s:
+            out.append(s)
+    out.sort()
+    return out
 
 
 def _ensure_numeric_column(df: pd.DataFrame, col: str) -> pd.Series:
@@ -96,7 +107,7 @@ def render(df_all: pd.DataFrame) -> None:
 
     # Biblioteca
     with col_f1:
-        libraries = sorted(_safe_unique_sorted(df_view, "library"))
+        libraries = _safe_unique_sorted(df_view, "library")
         lib_filter: Sequence[str] = st.multiselect(
             "Biblioteca",
             libraries,
