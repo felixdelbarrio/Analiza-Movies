@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Hashable, Iterable, Mapping, Sequence
+from collections.abc import Hashable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -15,7 +15,6 @@ class LoggerLike(Protocol):
 
 
 Row = Mapping[str, Any]
-Rows = Sequence[Row]
 
 
 def _get_logger() -> LoggerLike:
@@ -36,61 +35,84 @@ def _to_str_key_dict(src: Mapping[Hashable, Any]) -> dict[str, Any]:
     return out
 
 
+def _row_to_dict(row: object) -> dict[str, Any]:
+    """
+    Convierte UNA fila "row-like" a dict[str, Any] de forma segura.
+
+    Acepta:
+      - Mapping
+      - pandas.Series (si existe) vía duck-typing (to_dict)
+      - cualquier otro objeto -> dict vacío (fallback seguro)
+    """
+    if row is None:
+        return {}
+
+    if isinstance(row, Mapping):
+        return _to_str_key_dict(cast(Mapping[Hashable, Any], row))
+
+    # Series-like: duck-typing (evita depender de stubs de pandas)
+    to_dict = getattr(row, "to_dict", None)
+    if callable(to_dict):
+        try:
+            d = to_dict()
+            if isinstance(d, Mapping):
+                return _to_str_key_dict(cast(Mapping[Hashable, Any], d))
+            return {"value": d}
+        except Exception:
+            return {}
+
+    return {}
+
+
 def _as_rows_iter(rows: object) -> list[dict[str, Any]]:
     """
     Normaliza el input a una lista de dict[str, Any].
 
     Acepta:
-      - list/tuple de dict-like
-      - iterable de dict-like
-      - pandas.DataFrame / pandas.Series (si está disponible)
+      - list/tuple de row-like
+      - iterable de row-like
+      - pandas.DataFrame / pandas.Series (si está disponible) vía duck-typing
       - Mapping (una sola fila)
     """
     if rows is None:
         return []
 
-    # Pandas DataFrame/Series -> records
-    try:
-        import pandas as pd  # type: ignore[import-not-found]
+    # DataFrame/Series-like: duck-typing con to_dict.
+    to_dict = getattr(rows, "to_dict", None)
+    if callable(to_dict):
+        # 1) Intentamos DataFrame-like: to_dict(orient="records")
+        try:
+            records = to_dict(orient="records")  # type: ignore[call-arg]
+            if isinstance(records, list):
+                out_df: list[dict[str, Any]] = []
+                for r in records:
+                    if isinstance(r, Mapping):
+                        out_df.append(_to_str_key_dict(cast(Mapping[Hashable, Any], r)))
+                    else:
+                        out_df.append({"value": r})
+                return out_df
+        except TypeError:
+            # 2) Series-like: no acepta orient
+            d = _row_to_dict(rows)
+            return [d] if d else []
+        except Exception:
+            pass
 
-        if isinstance(rows, pd.DataFrame):
-            records = rows.to_dict(orient="records")
-            out_df: list[dict[str, Any]] = []
-            for r in records:
-                if isinstance(r, Mapping):
-                    out_df.append(_to_str_key_dict(cast(Mapping[Hashable, Any], r)))
-                else:
-                    out_df.append({"value": r})
-            return out_df
-
-        if isinstance(rows, pd.Series):
-            series_dict = rows.to_dict()
-            if isinstance(series_dict, Mapping):
-                return [_to_str_key_dict(cast(Mapping[Hashable, Any], series_dict))]
-            return [{"value": series_dict}]
-    except Exception:
-        pass
-
+    # Una sola fila mapping
     if isinstance(rows, Mapping):
-        return [_to_str_key_dict(cast(Mapping[Hashable, Any], rows))]
+        d = _row_to_dict(rows)
+        return [d] if d else []
 
-    if isinstance(rows, (list, tuple)):
-        out_list: list[dict[str, Any]] = []
-        for x in rows:
-            if isinstance(x, Mapping):
-                out_list.append(_to_str_key_dict(cast(Mapping[Hashable, Any], x)))
-            else:
-                out_list.append({"value": x})
-        return out_list
-
+    # Colección de filas
     if isinstance(rows, Iterable) and not isinstance(rows, (str, bytes)):
-        out_it: list[dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for x in rows:
-            if isinstance(x, Mapping):
-                out_it.append(_to_str_key_dict(cast(Mapping[Hashable, Any], x)))
+            d = _row_to_dict(x)
+            if d:
+                out.append(d)
             else:
-                out_it.append({"value": x})
-        return out_it
+                out.append({"value": x})
+        return out
 
     return []
 
@@ -141,7 +163,7 @@ def delete_files_from_rows(
     Borra físicamente archivos según las filas seleccionadas.
 
     Input:
-      - rows: list[dict] / iterable dict-like / pandas.DataFrame
+      - rows: list[dict] / iterable dict-like / pandas.DataFrame / pandas.Series
       - delete_dry_run: si True, NO borra; solo simula.
 
     Output:
@@ -209,7 +231,7 @@ def _read_filtered_rows(csv_path: str | Path) -> list[dict[str, Any]]:
     if not p.exists():
         return []
 
-    # 1) pandas (si existe)
+    # 1) pandas (si existe) - duck-typing: evitamos depender de stubs.
     try:
         import pandas as pd  # type: ignore[import-not-found]
 

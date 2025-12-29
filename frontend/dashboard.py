@@ -246,6 +246,10 @@ if st.session_state.get("modal_open"):
 # =============================================================================
 # 7) Carga de datos (SIN FALLBACK): FRONT_MODE = api | disk
 # =============================================================================
+# Pyright fix:
+# - st.stop() no está tipado como NoReturn en los stubs, así que inicializamos y guardamos.
+df_all: pd.DataFrame | None = None
+df_filtered: pd.DataFrame | None = None
 
 if FRONT_MODE == "api":
     try:
@@ -254,7 +258,8 @@ if FRONT_MODE == "api":
             timeout_s=FRONT_API_TIMEOUT_S,
             page_size=FRONT_API_PAGE_SIZE,
         )
-        if df_all.empty:
+        # ✅ Pyright-friendly: df_all puede ser None en typing, así que lo comprobamos explícitamente.
+        if df_all is None or df_all.empty:
             raise ApiClientError("API devolvió report_all vacío.")
 
         df_filtered = fetch_report_filtered_df(
@@ -282,6 +287,11 @@ elif FRONT_MODE == "disk":
 
 else:
     st.error(f"FRONT_MODE desconocido: {FRONT_MODE!r}")
+    st.stop()
+
+# Guard clause: asegura a Pyright que df_all existe a partir de aquí.
+if df_all is None:
+    st.error("No se pudo cargar report_all (df_all=None).")
     st.stop()
 
 df_all = add_derived_columns(df_all)
