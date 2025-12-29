@@ -8,6 +8,13 @@ Cliente DLNA/UPnP: discovery + navegación + traversal seguro (ContentDirectory)
 Objetivo (post-split):
 - Este módulo SOLO hace: discovery + UX (selecciones) + Browse/Traversal robusto.
 - El orquestador (analiza_dlna.py) hace: orquestación, concurrencia, writers, reporting.
+
+NOTA (pyright [unreachable])
+---------------------------
+Pyright a veces marca `continue` como unreachable en loops que iteran XML (ElementTree)
+por narrowing/agresividad con tipos internos (tag/iter()). Para eliminar falsos positivos,
+este fichero evita `continue` en los bloques conflictivos (servicios/containers/items)
+y usa guards con `if/elif/else`.
 """
 
 import importlib
@@ -17,7 +24,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Final, TypeVar
+from typing import Any, Final, Protocol, TypeVar, cast, runtime_checkable
 from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
@@ -28,17 +35,58 @@ from backend.dlna_discovery import DLNADevice, discover_dlna_devices
 # ---------------------------------------------------------------------------
 # Opcionales: resilience (circuit breaker + retry policies)
 # ---------------------------------------------------------------------------
+
+
+class _CircuitBreakerFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        failure_threshold: int,
+        open_seconds: float,
+        half_open_max_calls: int = 1,
+    ) -> object: ...
+
+
+class _CallWithResilienceFn(Protocol):
+    def __call__(
+        self,
+        *,
+        breaker: object,
+        key: str,
+        fn: Callable[[], Any],
+        should_retry: Callable[[BaseException], bool],
+        max_retries: int,
+    ) -> tuple[Any, str]: ...
+
+
+CircuitBreakerCls: _CircuitBreakerFactory | None
+call_with_resilience_fn: _CallWithResilienceFn | None
+
 try:
-    from backend.resilience import CircuitBreaker, call_with_resilience  # type: ignore[import-not-found]
+    from backend.resilience import CircuitBreaker as _CircuitBreaker  # type: ignore[import-not-found]
+    from backend.resilience import call_with_resilience as _call_with_resilience  # type: ignore[import-not-found]
+
+    CircuitBreakerCls = cast(_CircuitBreakerFactory, _CircuitBreaker)
+    call_with_resilience_fn = cast(_CallWithResilienceFn, _call_with_resilience)
 except Exception:  # pragma: no cover
-    CircuitBreaker = None  # type: ignore[assignment]
-    call_with_resilience = None  # type: ignore[assignment]
+    CircuitBreakerCls = None
+    call_with_resilience_fn = None
 
 # ---------------------------------------------------------------------------
 # Opcionales: run_metrics agregadas
 # ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class _RunMetricsProto(Protocol):
+    def incr(self, key: str, n: int = 1) -> None: ...
+    def observe_ms(self, key: str, ms: float) -> None: ...
+    def add_error(self, subsystem: str, action: str, *, endpoint: str | None, detail: str) -> None: ...
+
+
+METRICS: _RunMetricsProto
 try:
-    from backend.run_metrics import METRICS  # type: ignore[import-not-found]
+    from backend.run_metrics import METRICS as METRICS  # type: ignore[assignment,import-not-found]
 except Exception:  # pragma: no cover
 
     class _NoopMetrics:
@@ -51,7 +99,7 @@ except Exception:  # pragma: no cover
         def add_error(self, subsystem: str, action: str, *, endpoint: str | None, detail: str) -> None:
             return
 
-    METRICS = _NoopMetrics()  # type: ignore[assignment]
+    METRICS = cast(_RunMetricsProto, _NoopMetrics())
 
 
 # ---------------------------------------------------------------------------
@@ -71,12 +119,13 @@ def _get_cfg(name: str, default: Any) -> Any:
         try:
             mod = importlib.import_module(modname)
         except Exception:
-            continue
-        try:
-            if hasattr(mod, name):
-                return getattr(mod, name)
-        except Exception:
-            continue
+            mod = None
+        if mod is not None:
+            try:
+                if hasattr(mod, name):
+                    return getattr(mod, name)
+            except Exception:
+                pass
     return default
 
 
@@ -167,10 +216,10 @@ class TraversalLimits:
 # Circuit breaker global (por endpoint)
 # =============================================================================
 
-_DLNA_BREAKER = None
-if CircuitBreaker is not None:
+_DLNA_BREAKER: object | None = None
+if CircuitBreakerCls is not None:
     try:
-        _DLNA_BREAKER = CircuitBreaker(
+        _DLNA_BREAKER = CircuitBreakerCls(
             failure_threshold=int(DLNA_CB_FAILURE_THRESHOLD),
             open_seconds=float(DLNA_CB_OPEN_SECONDS),
             half_open_max_calls=1,
@@ -254,8 +303,8 @@ def _resilient_call(*, endpoint_key: str, action: str, fn: Callable[[], _T]) -> 
     t0 = time.monotonic()
     METRICS.incr(f"dlna.{action}.calls")
 
-    if _DLNA_BREAKER is not None and callable(call_with_resilience):
-        result, status = call_with_resilience(
+    if _DLNA_BREAKER is not None and callable(call_with_resilience_fn):
+        result, status = call_with_resilience_fn(
             breaker=_DLNA_BREAKER,
             key=endpoint_key,
             fn=fn,
@@ -265,7 +314,7 @@ def _resilient_call(*, endpoint_key: str, action: str, fn: Callable[[], _T]) -> 
         METRICS.observe_ms(f"dlna.{action}.latency_ms", (time.monotonic() - t0) * 1000.0)
 
         if status == "ok":
-            return result
+            return cast(_T, result)
 
         if isinstance(status, str) and status.startswith("circuit_open"):
             METRICS.incr(f"dlna.{action}.blocked_by_circuit")
@@ -282,7 +331,9 @@ def _resilient_call(*, endpoint_key: str, action: str, fn: Callable[[], _T]) -> 
         return None
 
     last_exc: BaseException | None = None
-    for attempt in range(0, max(0, int(DLNA_BROWSE_MAX_RETRIES)) + 1):
+    max_r = max(0, int(DLNA_BROWSE_MAX_RETRIES))
+    attempt = 0
+    while True:
         try:
             out = fn()
             METRICS.observe_ms(f"dlna.{action}.latency_ms", (time.monotonic() - t0) * 1000.0)
@@ -292,9 +343,10 @@ def _resilient_call(*, endpoint_key: str, action: str, fn: Callable[[], _T]) -> 
             METRICS.incr(f"dlna.{action}.errors")
             _incr_aggregate_error_counter(action)
             METRICS.add_error("dlna", action, endpoint=endpoint_key, detail=repr(exc))
-            if attempt >= int(DLNA_BROWSE_MAX_RETRIES):
+            if attempt >= max_r:
                 break
             _backoff_sleep(attempt)
+            attempt += 1
 
     METRICS.observe_ms(f"dlna.{action}.latency_ms", (time.monotonic() - t0) * 1000.0)
     if last_exc is not None:
@@ -309,7 +361,7 @@ def _fetch_xml_root(url: str, timeout_s: float = _XML_FETCH_TIMEOUT_S) -> ET.Ele
         req = Request(url, method="GET", headers={"User-Agent": _USER_AGENT})
         with urlopen(req, timeout=float(timeout_s)) as resp:
             data = resp.read()
-        return ET.fromstring(data)
+        return ET.fromstring(cast(bytes, data))
 
     root = _resilient_call(endpoint_key=endpoint_key, action="xml_fetch", fn=_do)
     if root is None:
@@ -344,8 +396,9 @@ def _find_content_directory_endpoints(device_location: str) -> DLNAEndpoints | N
         return None
 
     with _ENDPOINTS_LOCK:
-        if key in _ENDPOINTS_CACHE:
-            return _ENDPOINTS_CACHE[key]
+        cached = _ENDPOINTS_CACHE.get(key, "__missing__")
+        if cached != "__missing__":
+            return cast(DLNAEndpoints | None, cached)
 
     root = _fetch_xml_root(key)
     if root is None:
@@ -355,28 +408,23 @@ def _find_content_directory_endpoints(device_location: str) -> DLNAEndpoints | N
 
     found: DLNAEndpoints | None = None
 
+    # (sin 'continue' para evitar falsos unreachable)
     for service in root.iter():
-        if not (isinstance(service.tag, str) and service.tag.endswith("service")):
-            continue
+        tag = service.tag
+        if isinstance(tag, str) and tag.endswith("service"):
+            service_type: str | None = None
+            control_url: str | None = None
 
-        service_type: str | None = None
-        control_url: str | None = None
+            for child in list(service):
+                ctag = child.tag
+                if isinstance(ctag, str) and ctag.endswith("serviceType"):
+                    service_type = _xml_text(child)
+                elif isinstance(ctag, str) and ctag.endswith("controlURL"):
+                    control_url = _xml_text(child)
 
-        for child in list(service):
-            if not isinstance(child.tag, str):
-                continue
-            if child.tag.endswith("serviceType"):
-                service_type = _xml_text(child)
-            elif child.tag.endswith("controlURL"):
-                control_url = _xml_text(child)
-
-        if not service_type or not control_url:
-            continue
-        if "ContentDirectory" not in service_type:
-            continue
-
-        found = DLNAEndpoints(control_url=urljoin(key, control_url), service_type=service_type)
-        break
+            if service_type and control_url and ("ContentDirectory" in service_type):
+                found = DLNAEndpoints(control_url=urljoin(key, control_url), service_type=service_type)
+                break
 
     with _ENDPOINTS_LOCK:
         _ENDPOINTS_CACHE[key] = found
@@ -429,7 +477,8 @@ def _soap_browse_direct_children(
     def _do() -> bytes:
         req = Request(control_url, data=body.encode("utf-8"), headers=headers, method="POST")
         with urlopen(req, timeout=float(_SOAP_TIMEOUT_S)) as resp:
-            return resp.read()
+            data = resp.read()
+        return cast(bytes, data)
 
     raw = _resilient_call(endpoint_key=endpoint_key, action="browse", fn=_do)
     if raw is None:
@@ -448,11 +497,10 @@ def _soap_browse_direct_children(
     total_matches: int | None = None
 
     for elem in envelope.iter():
-        if not isinstance(elem.tag, str):
-            continue
-        if elem.tag.endswith("Result"):
+        etag = elem.tag
+        if isinstance(etag, str) and etag.endswith("Result"):
             result_text = _xml_text(elem)
-        elif elem.tag.endswith("TotalMatches"):
+        elif isinstance(etag, str) and etag.endswith("TotalMatches"):
             tm = _xml_text(elem)
             if tm and tm.isdigit():
                 total_matches = int(tm)
@@ -577,11 +625,10 @@ def _is_video_item(elem: ET.Element) -> bool:
     protocol_info: str | None = None
 
     for ch in list(elem):
-        if not isinstance(ch.tag, str):
-            continue
-        if ch.tag.endswith("class"):
+        ctag = ch.tag
+        if isinstance(ctag, str) and ctag.endswith("class"):
             upnp_class = _xml_text(ch)
-        elif ch.tag.endswith("res"):
+        elif isinstance(ctag, str) and ctag.endswith("res"):
             protocol_info = ch.attrib.get("protocolInfo")
 
     if upnp_class and "videoItem" in upnp_class:
@@ -617,11 +664,10 @@ def _extract_video_item(elem: ET.Element) -> DlnaVideoItem | None:
     item_id = elem.attrib.get("id") or None
 
     for ch in list(elem):
-        if not isinstance(ch.tag, str):
-            continue
-        if ch.tag.endswith("title") and title is None:
+        ctag = ch.tag
+        if isinstance(ctag, str) and ctag.endswith("title") and title is None:
             title = _xml_text(ch)
-        elif ch.tag.endswith("res") and resource_url is None:
+        elif isinstance(ctag, str) and ctag.endswith("res") and resource_url is None:
             resource_url = _xml_text(ch)
             size_bytes = _safe_parse_int(ch.attrib.get("size"))
 
@@ -700,31 +746,28 @@ def _select_folders_non_plex(
             return None
         if raw not in ("0", "1"):
             _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
-            continue
-
-        if raw == "0":
+        elif raw == "0":
             return [base]
+        else:
+            folders = client.list_child_containers(device, base.object_id)
+            if not folders:
+                _logger.error("[DLNA] No se han encontrado carpetas dentro del contenedor seleccionado.", always=True)
+                return None
 
-        folders = client.list_child_containers(device, base.object_id)
-        if not folders:
-            _logger.error("[DLNA] No se han encontrado carpetas dentro del contenedor seleccionado.", always=True)
-            return None
+            _logger.info("\nCarpetas detectadas (Enter cancela):", always=True)
+            for idx, c in enumerate(folders, start=1):
+                _logger.info(f"  {idx}) {c.title}", always=True)
 
-        _logger.info("\nCarpetas detectadas (Enter cancela):", always=True)
-        for idx, c in enumerate(folders, start=1):
-            _logger.info(f"  {idx}) {c.title}", always=True)
+            raw_sel = input("Carpetas (ej: 1,2) o Enter cancela: ").strip()
+            if raw_sel == "":
+                _logger.info("[DLNA] Operación cancelada.", always=True)
+                return None
 
-        raw_sel = input("Carpetas (ej: 1,2) o Enter cancela: ").strip()
-        if raw_sel == "":
-            _logger.info("[DLNA] Operación cancelada.", always=True)
-            return None
-
-        selected = _parse_multi_selection(raw_sel, len(folders))
-        if selected is None:
-            _logger.warning(f"Selección no válida. Usa números 1-{len(folders)} separados por comas.", always=True)
-            continue
-
-        return [folders[i - 1] for i in selected]
+            selected = _parse_multi_selection(raw_sel, len(folders))
+            if selected is None:
+                _logger.warning(f"Selección no válida. Usa números 1-{len(folders)} separados por comas.", always=True)
+            else:
+                return [folders[i - 1] for i in selected]
 
 
 def _select_folders_plex(
@@ -743,32 +786,29 @@ def _select_folders_plex(
             return None
         if raw not in ("0", "1"):
             _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
-            continue
-
-        if raw == "0":
+        elif raw == "0":
             return [base]
+        else:
+            folders = client.list_child_containers(device, base.object_id)
+            folders = [c for c in folders if not is_plex_virtual_container_title(c.title)]
+            if not folders:
+                _logger.error("[DLNA] No se han encontrado carpetas Plex seleccionables (filtradas).", always=True)
+                return None
 
-        folders = client.list_child_containers(device, base.object_id)
-        folders = [c for c in folders if not is_plex_virtual_container_title(c.title)]
-        if not folders:
-            _logger.error("[DLNA] No se han encontrado carpetas Plex seleccionables (filtradas).", always=True)
-            return None
+            _logger.info("\nCarpetas detectadas en Plex (Enter cancela):", always=True)
+            for idx, c in enumerate(folders, start=1):
+                _logger.info(f"  {idx}) {c.title}", always=True)
 
-        _logger.info("\nCarpetas detectadas en Plex (Enter cancela):", always=True)
-        for idx, c in enumerate(folders, start=1):
-            _logger.info(f"  {idx}) {c.title}", always=True)
+            raw_sel = input("Carpetas (ej: 1,2) o Enter cancela: ").strip()
+            if raw_sel == "":
+                _logger.info("[DLNA] Operación cancelada.", always=True)
+                return None
 
-        raw_sel = input("Carpetas (ej: 1,2) o Enter cancela: ").strip()
-        if raw_sel == "":
-            _logger.info("[DLNA] Operación cancelada.", always=True)
-            return None
-
-        selected = _parse_multi_selection(raw_sel, len(folders))
-        if selected is None:
-            _logger.warning(f"Selección no válida. Usa números 1-{len(folders)} separados por comas.", always=True)
-            continue
-
-        return [folders[i - 1] for i in selected]
+            selected = _parse_multi_selection(raw_sel, len(folders))
+            if selected is None:
+                _logger.warning(f"Selección no válida. Usa números 1-{len(folders)} separados por comas.", always=True)
+            else:
+                return [folders[i - 1] for i in selected]
 
 
 # =============================================================================
@@ -820,20 +860,20 @@ class DLNAClient:
             if raw == "":
                 _logger.info("[DLNA] Operación cancelada.", always=True)
                 return None
+
             if not raw.isdigit():
                 _logger.warning("Opción no válida. Debe ser un número (o Enter para cancelar).", always=True)
-                continue
-            num = int(raw)
-            if not (1 <= num <= len(devices)):
-                _logger.warning("Opción fuera de rango.", always=True)
-                continue
-
-            chosen = devices[num - 1]
-            _logger.info(f"\nHas seleccionado: {chosen.friendly_name}\n", always=True)
-            if DEBUG_MODE and not SILENT_MODE:
-                _logger.info(f"    {chosen.host}:{chosen.port}", always=True)
-                _logger.info(f"    LOCATION: {chosen.location}", always=True)
-            return chosen
+            else:
+                num = int(raw)
+                if not (1 <= num <= len(devices)):
+                    _logger.warning("Opción fuera de rango.", always=True)
+                else:
+                    chosen = devices[num - 1]
+                    _logger.info(f"\nHas seleccionado: {chosen.friendly_name}\n", always=True)
+                    if DEBUG_MODE and not SILENT_MODE:
+                        _logger.info(f"    {chosen.host}:{chosen.port}", always=True)
+                        _logger.info(f"    LOCATION: {chosen.location}", always=True)
+                    return chosen
 
     def ask_user_to_select_video_containers(self, device: DLNADevice) -> tuple[DlnaContainer, list[DlnaContainer]] | None:
         roots = self.list_video_root_containers(device)
@@ -841,6 +881,7 @@ class DLNAClient:
             _logger.error("[DLNA] No se han encontrado contenedores raíz de vídeo.", always=True)
             return None
 
+        chosen_root: DlnaContainer
         if len(roots) == 1:
             chosen_root = roots[0]
         else:
@@ -855,13 +896,13 @@ class DLNAClient:
                     return None
                 if not raw.isdigit():
                     _logger.warning("Opción no válida. Debe ser un número.", always=True)
-                    continue
-                n = int(raw)
-                if not (1 <= n <= len(roots)):
-                    _logger.warning("Opción fuera de rango.", always=True)
-                    continue
-                chosen_root = roots[n - 1]
-                break
+                else:
+                    n = int(raw)
+                    if not (1 <= n <= len(roots)):
+                        _logger.warning("Opción fuera de rango.", always=True)
+                    else:
+                        chosen_root = roots[n - 1]
+                        break
 
         _logger.progress(f"[DLNA] Raíz de vídeo: {chosen_root.title}")
 
@@ -902,12 +943,13 @@ class DLNAClient:
         children, _ = root_children
         out: list[DlnaContainer] = []
 
+        # (sin 'continue')
         for elem in children:
-            if not (isinstance(elem.tag, str) and elem.tag.endswith("container")):
-                continue
-            c = self._extract_container_title_and_id(elem)
-            if c is not None:
-                out.append(c)
+            tag = elem.tag
+            if isinstance(tag, str) and tag.endswith("container"):
+                c = self._extract_container_title_and_id(elem)
+                if c is not None:
+                    out.append(c)
 
         return out
 
@@ -920,7 +962,9 @@ class DLNAClient:
         if endpoints is None:
             return []
 
-        children_resp = _soap_browse_direct_children(endpoints.control_url, endpoints.service_type, parent_object_id, 0, 500)
+        children_resp = _soap_browse_direct_children(
+            endpoints.control_url, endpoints.service_type, parent_object_id, 0, 500
+        )
         if children_resp is None:
             METRICS.incr("dlna.scan.errors")
             return []
@@ -928,18 +972,20 @@ class DLNAClient:
         children, _ = children_resp
         out: list[DlnaContainer] = []
 
+        # (sin 'continue')
         for elem in children:
-            if not (isinstance(elem.tag, str) and elem.tag.endswith("container")):
-                continue
-            c = self._extract_container_title_and_id(elem)
-            if c is not None:
-                out.append(c)
+            tag = elem.tag
+            if isinstance(tag, str) and tag.endswith("container"):
+                c = self._extract_container_title_and_id(elem)
+                if c is not None:
+                    out.append(c)
 
         return out
 
     def auto_descend_folder_browse(self, device: DLNADevice, container: DlnaContainer, *, max_levels: int = 3) -> DlnaContainer:
         current = container
-        for _ in range(max(0, int(max_levels))):
+        steps = 0
+        while steps < max(0, int(max_levels)):
             children = self.list_child_containers(device, current.object_id)
             if not children:
                 return current
@@ -954,7 +1000,9 @@ class DLNAClient:
 
             if best is None or best_score <= 0:
                 return current
+
             current = best
+            steps += 1
 
         return current
 
@@ -966,7 +1014,8 @@ class DLNAClient:
 
         title: str | None = None
         for ch in list(container):
-            if isinstance(ch.tag, str) and ch.tag.endswith("title"):
+            ctag = ch.tag
+            if isinstance(ctag, str) and ctag.endswith("title"):
                 title = _xml_text(ch)
                 break
 
@@ -1017,106 +1066,105 @@ class DLNAClient:
 
             if current_id in visited_containers:
                 cycle_skips += 1
-                continue
+                # sin 'continue': saltamos con un guard
+            else:
+                visited_containers.add(current_id)
+                containers_seen += 1
 
-            visited_containers.add(current_id)
-            containers_seen += 1
-
-            if containers_seen > lim.max_containers:
-                _logger.warning(
-                    f"[DLNA] Traverse container cap alcanzado (max_containers={lim.max_containers}). "
-                    "Se corta para evitar bucles/catálogos virtuales enormes.",
-                    always=True,
-                )
-                break
-
-            start = 0
-            total = 1
-            pages = 0
-            empty_pages = 0
-
-            while start < total:
-                pages += 1
-                if pages > lim.max_pages_per_container:
+                if containers_seen > lim.max_containers:
                     _logger.warning(
-                        f"[DLNA] Max pages por contenedor alcanzado (max_pages_per_container={lim.max_pages_per_container}). "
-                        f"container_id={current_id!r}. Se corta este contenedor.",
+                        f"[DLNA] Traverse container cap alcanzado (max_containers={lim.max_containers}). "
+                        "Se corta para evitar bucles/catálogos virtuales enormes.",
                         always=True,
                     )
                     break
 
-                browse = _soap_browse_direct_children(
-                    endpoints.control_url,
-                    endpoints.service_type,
-                    current_id,
-                    start,
-                    _BROWSE_PAGE_SIZE,
-                )
-                if browse is None:
-                    METRICS.incr("dlna.scan.errors")
-                    break
+                start = 0
+                total = 1
+                pages = 0
+                empty_pages = 0
 
-                children, total_matches = browse
-                total = max(total, int(total_matches))
-
-                if not children:
-                    empty_pages += 1
-                    if empty_pages >= lim.max_empty_pages:
+                while start < total:
+                    pages += 1
+                    if pages > lim.max_pages_per_container:
                         _logger.warning(
-                            f"[DLNA] Contenedor devuelve páginas vacías repetidas (max_empty_pages={lim.max_empty_pages}). "
+                            f"[DLNA] Max pages por contenedor alcanzado (max_pages_per_container={lim.max_pages_per_container}). "
                             f"container_id={current_id!r}. Se corta este contenedor.",
                             always=True,
                         )
                         break
-                else:
-                    empty_pages = 0
 
-                for elem in children:
-                    if not isinstance(elem.tag, str):
-                        continue
-
-                    if elem.tag.endswith("container"):
-                        cid = elem.attrib.get("id")
-                        if cid and cid not in visited_containers:
-                            stack.append((cid, depth + 1))
-                        continue
-
-                    if not elem.tag.endswith("item"):
-                        continue
-                    if not _is_video_item(elem):
-                        continue
-
-                    item = _extract_video_item(elem)
-                    if item is None:
-                        continue
-
-                    if item.item_id and item.item_id in visited_item_ids_local:
-                        dedup_skips_local += 1
-                        continue
-                    if item.resource_url in visited_item_urls_local:
-                        dedup_skips_local += 1
-                        continue
-
-                    if item.item_id:
-                        visited_item_ids_local.add(item.item_id)
-                    visited_item_urls_local.add(item.resource_url)
-
-                    results.append(item)
-                    if len(results) >= lim.max_items_total:
-                        _logger.warning(
-                            f"[DLNA] Max items total alcanzado (max_items_total={lim.max_items_total}). "
-                            "Se corta para evitar runs infinitos/catálogos gigantes.",
-                            always=True,
-                        )
+                    browse = _soap_browse_direct_children(
+                        endpoints.control_url,
+                        endpoints.service_type,
+                        current_id,
+                        start,
+                        _BROWSE_PAGE_SIZE,
+                    )
+                    if browse is None:
+                        METRICS.incr("dlna.scan.errors")
                         break
+
+                    children, total_matches = browse
+                    total = max(total, int(total_matches))
+
+                    if children:
+                        empty_pages = 0
+                    else:
+                        empty_pages += 1
+                        if empty_pages >= lim.max_empty_pages:
+                            _logger.warning(
+                                f"[DLNA] Contenedor devuelve páginas vacías repetidas (max_empty_pages={lim.max_empty_pages}). "
+                                f"container_id={current_id!r}. Se corta este contenedor.",
+                                always=True,
+                            )
+                            break
+
+                    stop_all = False
+
+                    for elem in children:
+                        tag = elem.tag
+                        if isinstance(tag, str) and tag.endswith("container"):
+                            cid = elem.attrib.get("id")
+                            if cid and cid not in visited_containers:
+                                stack.append((cid, depth + 1))
+
+                        elif isinstance(tag, str) and tag.endswith("item"):
+                            if _is_video_item(elem):
+                                item = _extract_video_item(elem)
+                                if item is not None:
+                                    item_id = item.item_id
+                                    if item_id and item_id in visited_item_ids_local:
+                                        dedup_skips_local += 1
+                                    elif item.resource_url in visited_item_urls_local:
+                                        dedup_skips_local += 1
+                                    else:
+                                        if item_id:
+                                            visited_item_ids_local.add(item_id)
+                                        visited_item_urls_local.add(item.resource_url)
+
+                                        results.append(item)
+                                        if len(results) >= lim.max_items_total:
+                                            _logger.warning(
+                                                f"[DLNA] Max items total alcanzado (max_items_total={lim.max_items_total}). "
+                                                "Se corta para evitar runs infinitos/catálogos gigantes.",
+                                                always=True,
+                                            )
+                                            stop_all = True
+                        else:
+                            # otros nodos: ignorar
+                            pass
+
+                        if stop_all:
+                            break
+
+                    if len(results) >= lim.max_items_total:
+                        break
+
+                    start += _BROWSE_PAGE_SIZE
 
                 if len(results) >= lim.max_items_total:
                     break
-
-                start += _BROWSE_PAGE_SIZE
-
-            if len(results) >= lim.max_items_total:
-                break
 
         stats = {
             "containers_seen": containers_seen,

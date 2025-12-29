@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import socket
 import time
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
@@ -206,6 +206,12 @@ def _extract_device_id_from_headers(headers: dict[str, str]) -> str | None:
 
 
 def _fetch_device_description(location: str, *, timeout_s: float, max_bytes: int) -> bytes | None:
+    """
+    Descarga la descripción del device (LOCATION) con límites de tamaño.
+
+    Fix mypy:
+    - `resp.read(...)` puede tiparse como Any según stubs; lo casteamos a bytes.
+    """
     try:
         req = Request(
             location,
@@ -226,7 +232,9 @@ def _fetch_device_description(location: str, *, timeout_s: float, max_bytes: int
             except Exception:
                 pass
 
-            data = resp.read(max_bytes + 1)
+            data_any = resp.read(max_bytes + 1)
+            data = cast(bytes, data_any)
+
             if len(data) > max_bytes:
                 _logger.warning(
                     f"[DLNA] LOCATION excede max_bytes ({max_bytes}) -> ignore: {location}",

@@ -9,7 +9,7 @@ Core genérico de análisis para una película (MovieInput), independiente del o
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from types import TracebackType
+from types import ModuleType, TracebackType
 from typing import Final, Protocol, TypedDict, cast
 
 from backend.decision_logic import detect_misidentified
@@ -19,30 +19,43 @@ from backend.scoring import compute_scoring
 
 # -----------------------------------------------------------------------------
 # Config (best-effort). Preferimos backend.config (agregador) y caemos a config_core.
+#  FIX mypy: evitar "Name ... already defined" usando nombres temporales.
 # -----------------------------------------------------------------------------
+_cfg: ModuleType | None = None
 try:
-    from backend import config as _cfg  # type: ignore
+    from backend import config as _cfg_mod  # type: ignore
+
+    _cfg = cast(ModuleType, _cfg_mod)
 except Exception:  # pragma: no cover
     _cfg = None
 
+_cfg_core: ModuleType | None = None
 try:
-    from backend import config_core as _cfg_core  # type: ignore
+    from backend import config_core as _cfg_core_mod  # type: ignore
+
+    _cfg_core = cast(ModuleType, _cfg_core_mod)
 except Exception:  # pragma: no cover
     _cfg_core = None
 
 # -----------------------------------------------------------------------------
 # run_metrics (best-effort / no-op si no existe)
 # -----------------------------------------------------------------------------
+_rm: ModuleType | None = None
 try:
-    import backend.run_metrics as _rm  # type: ignore
+    import backend.run_metrics as _rm_mod  # type: ignore
+
+    _rm = cast(ModuleType, _rm_mod)
 except Exception:  # pragma: no cover
     _rm = None
 
 # -----------------------------------------------------------------------------
 # Logger central (best-effort)
 # -----------------------------------------------------------------------------
+_log: ModuleType | None = None
 try:
-    from backend import logger as _log  # type: ignore
+    from backend import logger as _log_mod  # type: ignore
+
+    _log = cast(ModuleType, _log_mod)
 except Exception:  # pragma: no cover
     _log = None
 
@@ -50,6 +63,16 @@ except Exception:  # pragma: no cover
 # =============================================================================
 # Helpers de configuración (NO lanzan)
 # =============================================================================
+def _safe_getattr_obj(mod: ModuleType, name: str) -> object | None:
+    """
+    getattr() tipado estable:
+    - mypy a veces infiere Any; aquí lo “cortamos” a object.
+    """
+    try:
+        return cast(object, getattr(mod, name))
+    except Exception:
+        return None
+
 
 def _cfg_get_attr(name: str) -> object | None:
     """
@@ -58,16 +81,20 @@ def _cfg_get_attr(name: str) -> object | None:
       2) backend.config_core (si existe)
     y devuelve None si no se encuentra.
     """
-    if _cfg is not None and hasattr(_cfg, name):
+    if _cfg is not None:
         try:
-            return getattr(_cfg, name)
+            if hasattr(_cfg, name):
+                return _safe_getattr_obj(_cfg, name)
         except Exception:
-            return None
-    if _cfg_core is not None and hasattr(_cfg_core, name):
+            pass
+
+    if _cfg_core is not None:
         try:
-            return getattr(_cfg_core, name)
+            if hasattr(_cfg_core, name):
+                return _safe_getattr_obj(_cfg_core, name)
         except Exception:
-            return None
+            pass
+
     return None
 
 
@@ -172,7 +199,6 @@ def _cfg_get_bool(name: str, default: bool) -> bool:
 # =============================================================================
 # Knobs del core (desde config/config_core)
 # =============================================================================
-
 _METRICS_ENABLED: Final[bool] = _cfg_get_bool("ANALYZE_CORE_METRICS_ENABLED", True)
 _METRICS_LAZY_BIND_ENABLED: Final[bool] = _cfg_get_bool("ANALYZE_METRICS_LAZY_BIND_ENABLED", True)
 
@@ -205,7 +231,6 @@ _METRIC_PREFIX: Final[str] = "analyze_core."
 # =============================================================================
 # Métricas (best-effort / nunca rompen)
 # =============================================================================
-
 class _IncFn(Protocol):
     def __call__(self, name: str, *, value: int = 1) -> None: ...
 
@@ -281,6 +306,7 @@ class _RM_Timer:
 
     def __enter__(self) -> "_RM_Timer":
         from time import monotonic
+
         self._t0 = monotonic()
         return self
 
@@ -291,13 +317,13 @@ class _RM_Timer:
         tb: TracebackType | None,
     ) -> None:
         from time import monotonic
+
         _m_obs(self._name, monotonic() - self._t0)
 
 
 # =============================================================================
 # Tipos públicos
 # =============================================================================
-
 class AnalysisRow(TypedDict, total=False):
     source: str
     library: str
@@ -333,7 +359,6 @@ TraceCallable = Callable[[str], None]
 # =============================================================================
 # Helpers defensivos (strings / normalización)
 # =============================================================================
-
 def _clip(text: str, *, max_len: int) -> str:
     if len(text) <= max_len:
         return text
@@ -424,7 +449,6 @@ def _get_lookup_title(movie: MovieInput, *, trace: Callable[[str], None]) -> str
 # =============================================================================
 # Logging/tracing centralizado (sin romper)
 # =============================================================================
-
 def _make_tracer(analysis_trace: TraceCallable | None) -> Callable[[str], None]:
     def _trace(msg: str) -> None:
         clipped = _clip(msg, max_len=_TRACE_LINE_MAX_CHARS)
@@ -450,7 +474,6 @@ def _make_tracer(analysis_trace: TraceCallable | None) -> Callable[[str], None]:
 # =============================================================================
 # reason_code (estable)
 # =============================================================================
-
 def _derive_reason_code(
     *,
     scoring: Mapping[str, object] | None,
@@ -480,7 +503,6 @@ def _derive_reason_code(
 # =============================================================================
 # Scoring defensivo (wrapper)
 # =============================================================================
-
 def _compute_scoring_safe(
     *,
     imdb_rating: float | None,
@@ -490,8 +512,16 @@ def _compute_scoring_safe(
     metacritic_score: int | None,
     trace: Callable[[str], None],
 ) -> tuple[str, str, float | None, Mapping[str, object] | None]:
+    """
+    Wrapper defensivo alrededor de compute_scoring().
+
+    ✅ FIX pyright "unreachable":
+    - compute_scoring suele estar tipado como que devuelve Mapping (o Any estrecho).
+      Pyright puede concluir que `if not isinstance(scoring, Mapping)` es imposible.
+    - Forzamos el resultado a `object` primero y luego validamos con isinstance.
+    """
     try:
-        scoring = compute_scoring(
+        scoring_obj: object = compute_scoring(
             imdb_rating=imdb_rating,
             imdb_votes=imdb_votes,
             rt_score=rt_score,
@@ -499,10 +529,12 @@ def _compute_scoring_safe(
             metacritic_score=metacritic_score,
         )
 
-        if not isinstance(scoring, Mapping):
+        if not isinstance(scoring_obj, Mapping):
             _m("scoring.fail", 1)
             trace("scoring fail | compute_scoring returned non-mapping -> UNKNOWN")
             return "UNKNOWN", "compute_scoring returned non-mapping", None, None
+
+        scoring = cast(Mapping[str, object], scoring_obj)
 
         decision = _normalize_decision(scoring.get("decision"))
         reason = _normalize_reason(scoring.get("reason"))
@@ -515,7 +547,7 @@ def _compute_scoring_safe(
             f"bayes={_safe_str(imdb_bayes, max_len=32)} "
             f"reason={_safe_str(reason, max_len=_TRACE_REASON_MAX_CHARS)}"
         )
-        return decision, reason, imdb_bayes, cast(Mapping[str, object], scoring)
+        return decision, reason, imdb_bayes, scoring
 
     except Exception as exc:
         _m("scoring.fail", 1)
@@ -524,9 +556,54 @@ def _compute_scoring_safe(
 
 
 # =============================================================================
+# ✅ FIX pyright "unreachable" en el bloque misidentified:
+# - Rompemos el narrowing del retorno de detect_misidentified tipándolo como object.
+# =============================================================================
+def _safe_detect_misidentified(
+    *,
+    detect_title: str,
+    detect_year: int | None,
+    plex_imdb_id: str | None,
+    omdb_data: Mapping[str, object],
+    imdb_rating: float | None,
+    imdb_votes: int | None,
+    rt_score: int | None,
+    trace: Callable[[str], None],
+) -> str:
+    """
+    Aísla try/except y normaliza el retorno.
+    IMPORTANTE: `detect_misidentified` puede estar tipado como `str` en stubs,
+    así que usamos `object` para evitar "unreachable" en ramas None/non-str.
+    """
+    trace("misidentified | running")
+    try:
+        out_obj: object = detect_misidentified(
+            plex_title=detect_title,
+            plex_year=detect_year,
+            plex_imdb_id=plex_imdb_id,
+            omdb_data=omdb_data,
+            imdb_rating=imdb_rating,
+            imdb_votes=imdb_votes,
+            rt_score=rt_score,
+        )
+    except Exception as exc:
+        _m("misidentified.fail", 1)
+        trace(f"misidentified fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
+        return ""
+
+    if isinstance(out_obj, str):
+        return out_obj
+    if out_obj is None:
+        return ""
+    try:
+        return str(out_obj)
+    except Exception:
+        return ""
+
+
+# =============================================================================
 # Phase B (OMDb)
 # =============================================================================
-
 @dataclass(frozen=True)
 class _PhaseBResult:
     used_omdb: bool
@@ -649,7 +726,6 @@ def _run_phaseB_omdb(
 # =============================================================================
 # API principal
 # =============================================================================
-
 def analyze_input_movie(
     movie: MovieInput,
     fetch_omdb: FetchOmdbCallable,
@@ -710,12 +786,24 @@ def analyze_input_movie(
 
             if _STRONG_POTENTIAL_CONTRADICTION_ENABLED:
                 try:
-                    if decisionA == "DELETE" and isinstance(plex_rating, (int, float)) and float(plex_rating) >= 8.0:
+                    if (
+                        decisionA == "DELETE"
+                        and isinstance(plex_rating, (int, float))
+                        and float(plex_rating) >= 8.0
+                    ):
                         _m("strong_potential_contradiction_without_omdb", 1)
-                        trace(f"heuristic | strong contradiction (DELETE with high plex_rating={plex_rating})")
-                    if decisionA == "KEEP" and isinstance(plex_rating, (int, float)) and float(plex_rating) <= 2.0:
+                        trace(
+                            f"heuristic | strong contradiction (DELETE with high plex_rating={plex_rating})"
+                        )
+                    if (
+                        decisionA == "KEEP"
+                        and isinstance(plex_rating, (int, float))
+                        and float(plex_rating) <= 2.0
+                    ):
                         _m("strong_potential_contradiction_without_omdb", 1)
-                        trace(f"heuristic | strong contradiction (KEEP with low plex_rating={plex_rating})")
+                        trace(
+                            f"heuristic | strong contradiction (KEEP with low plex_rating={plex_rating})"
+                        )
                 except Exception:
                     pass
         else:
@@ -750,34 +838,33 @@ def analyze_input_movie(
         _m("used_omdb.true", 1 if used_omdb else 0)
         _m("used_omdb.false", 1 if not used_omdb else 0)
 
+        # ✅ FIX pyright "unreachable" (try inalcanzable por narrowing):
+        # no dependemos de `if omdb_data:` directo; validamos con object intermedio
         misidentified_hint = ""
-        if omdb_data:
+        omdb_data_obj: object = omdb_data
+        omdb_data_map: Mapping[str, object] | None = None
+
+        if isinstance(omdb_data_obj, dict) and len(omdb_data_obj) > 0:
+            omdb_data_map = cast(Mapping[str, object], omdb_data_obj)
+
+        if omdb_data_map is not None:
             _m("misidentified.ran", 1)
 
-            detect_title = plex_title if isinstance(plex_title, str) and plex_title.strip() else title_raw
+            detect_title = (
+                plex_title if isinstance(plex_title, str) and plex_title.strip() else title_raw
+            )
             detect_year = plex_year if isinstance(plex_year, int) else movie.year
 
-            trace("misidentified | running")
-            try:
-                misidentified_hint = detect_misidentified(
-                    plex_title=detect_title,
-                    plex_year=detect_year,
-                    plex_imdb_id=movie.imdb_id_hint,
-                    omdb_data=omdb_data,
-                    imdb_rating=imdb_rating,
-                    imdb_votes=imdb_votes,
-                    rt_score=rt_score,
-                )
-            except Exception as exc:
-                misidentified_hint = ""
-                _m("misidentified.fail", 1)
-                trace(f"misidentified fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
-
-            if not isinstance(misidentified_hint, str):
-                try:
-                    misidentified_hint = str(misidentified_hint) if misidentified_hint is not None else ""
-                except Exception:
-                    misidentified_hint = ""
+            misidentified_hint = _safe_detect_misidentified(
+                detect_title=detect_title,
+                detect_year=detect_year,
+                plex_imdb_id=movie.imdb_id_hint if isinstance(movie.imdb_id_hint, str) else None,
+                omdb_data=omdb_data_map,
+                imdb_rating=imdb_rating,
+                imdb_votes=imdb_votes,
+                rt_score=rt_score,
+                trace=trace,
+            )
 
             if misidentified_hint.strip():
                 _m("misidentified.yes", 1)
@@ -792,7 +879,6 @@ def analyze_input_movie(
             _m("delete_but_misidentified", 1)
             trace("inconsistency | DELETE but misidentified_hint is present")
 
-        # ---- FIX Pyright/Pylance: evitar int(x) sobre object ----
         votes_i = imdb_votes if isinstance(imdb_votes, int) else None
         if (
             decision_phaseB == "DELETE"
