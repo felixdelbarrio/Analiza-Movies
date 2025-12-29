@@ -25,26 +25,6 @@ Este módulo NO decide nombres. Solo "consume" variables desde backend.config (s
 - LOGGER_FILE_ENABLED: bool
 - LOGGER_FILE_PATH: Path | str | None
 
-⚠️ Importante (bug de "dos logs" / "un log por PID")
----------------------------------------------------
-En entornos con subprocesos (multiprocessing/spawn), cada proceso puede importar config
-y generar un LOGGER_FILE_PATH diferente (por PID), provocando "dos logs".
-
-Para evitarlo, este logger resuelve el path con esta prioridad:
-
-  0) ENV LOGGER_FILE_PATH (si el proceso padre lo fija, los hijos lo heredan)
-  1) backend.config.LOGGER_FILE_PATH
-  2) None
-
-Esto permite "congelar" el fichero por ejecución estableciendo LOGGER_FILE_PATH en el
-entorno del proceso principal (recomendado hacerlo desde config.py o desde el launcher).
-
-Comportamiento cuando LOGGER_FILE_ENABLED=True y hay path:
-1) Todo lo que pase por `logging` (debug/info/warning/error) se duplica a fichero
-   vía FileHandler en el root logger.
-2) Todo lo que pase por `progress/progressf` también se apendea al mismo fichero
-   (sin timestamp, para mantener el “heartbeat” limpio).
-
 Notas técnicas importantes
 --------------------------
 - No importamos `backend.config` directamente (evitamos circular imports).
@@ -57,7 +37,50 @@ import logging
 import os
 import sys
 import threading
-from typing import Final
+from types import ModuleType, TracebackType
+from typing import Final, Mapping, TypedDict, cast
+
+from typing_extensions import TypeAlias, Unpack
+
+# ============================================================================
+# TIPOS: kwargs seguros para logging
+# ============================================================================
+
+_ExcInfoTuple: TypeAlias = tuple[type[BaseException], BaseException, TracebackType | None]
+ExcInfo: TypeAlias = bool | _ExcInfoTuple | BaseException | None
+
+
+class LogKwargs(TypedDict, total=False):
+    """Subconjunto útil de kwargs soportados por logging.Logger.*."""
+
+    exc_info: ExcInfo
+    stack_info: bool
+    stacklevel: int
+    extra: Mapping[str, object] | None
+
+
+def _filter_log_kwargs(kwargs: Mapping[str, object]) -> LogKwargs:
+    """Best-effort: filtra kwargs no tipados a un conjunto seguro para logging."""
+    out: LogKwargs = {}
+
+    v = kwargs.get("exc_info")
+    if "exc_info" in kwargs and (v is None or isinstance(v, (bool, BaseException, tuple))):
+        out["exc_info"] = cast(ExcInfo, v)
+
+    v = kwargs.get("stack_info")
+    if "stack_info" in kwargs and isinstance(v, bool):
+        out["stack_info"] = v
+
+    v = kwargs.get("stacklevel")
+    if "stacklevel" in kwargs and isinstance(v, int):
+        out["stacklevel"] = v
+
+    v = kwargs.get("extra")
+    if "extra" in kwargs and (v is None or isinstance(v, Mapping)):
+        out["extra"] = cast(Mapping[str, object] | None, v)
+
+    return out
+
 
 # ============================================================================
 # CONFIGURACIÓN GLOBAL
@@ -65,31 +88,23 @@ from typing import Final
 
 LOGGER_NAME: Final[str] = "movies_cleaner"
 
-# Logger interno cacheado (solo logger real; sin Any).
-_LOGGER: logging.Logger | None = None
-
-# Flag de inicialización idempotente
+# Logger NO opcional (evita “narrowing” raro en algunos typecheckers)
+_LOGGER: Final[logging.Logger] = logging.getLogger(LOGGER_NAME)
 _CONFIGURED: bool = False
 
-# Tag para identificar nuestro handler de fichero (evita duplicados).
 _FILE_HANDLER_TAG: Final[str] = "_movies_cleaner_file_handler"
-
-# Lock para evitar mezclar líneas del progress() cuando hay hilos.
-_PROGRESS_FILE_LOCK = threading.Lock()
+_PROGRESS_FILE_LOCK: Final[threading.Lock] = threading.Lock()
 
 
 # ============================================================================
 # UTILIDADES CONFIG / FLAGS (sin importar backend.config directamente)
 # ============================================================================
 
-def _safe_get_cfg() -> object | None:
-    """
-    Devuelve el módulo backend.config si ya ha sido importado.
 
-    Motivo:
-    - Evita dependencias circulares (config importando logger y logger importando config).
-    """
-    return sys.modules.get("backend.config")
+def _safe_get_cfg() -> ModuleType | None:
+    """Devuelve el módulo backend.config si ya ha sido importado (evita circular imports)."""
+    mod = sys.modules.get("backend.config")
+    return mod if isinstance(mod, ModuleType) else None
 
 
 def _cfg_bool(name: str, default: bool = False) -> bool:
@@ -140,18 +155,9 @@ def is_debug_mode() -> bool:
 # RESOLUCIÓN DE LEVEL + EXTERNAL LOGGERS
 # ============================================================================
 
+
 def _resolve_level_from_config() -> int:
-    """
-    Determina el nivel del logging root.
-
-    Prioridad:
-      1) LOG_LEVEL explícito
-      2) Flags de debug heredados
-      3) INFO
-
-    Nota:
-    - Si backend.config aún no está importado, devolvemos INFO (default seguro).
-    """
+    """Determina el nivel del logging root."""
     if _safe_get_cfg() is None:
         return logging.INFO
 
@@ -192,7 +198,7 @@ def _apply_root_level(level: int) -> None:
             pass
 
 
-def _should_enable_http_debug(cfg: object | None) -> bool:
+def _should_enable_http_debug(cfg: ModuleType | None) -> bool:
     """Si HTTP_DEBUG=True, no silenciamos urllib3/requests/plexapi."""
     if cfg is None:
         return False
@@ -206,9 +212,6 @@ def _configure_external_loggers(*, level: int) -> None:
     """
     Baja el nivel de loggers externos ruidosos aunque el root esté en DEBUG,
     salvo que HTTP_DEBUG=True.
-
-    Nota:
-    - `level` se mantiene por compat; no lo usamos directamente para externos.
     """
     cfg = _safe_get_cfg()
     if _should_enable_http_debug(cfg):
@@ -221,7 +224,6 @@ def _configure_external_loggers(*, level: int) -> None:
         "requests.packages.urllib3",
         "plexapi",
     )
-
     for name in noisy:
         try:
             logging.getLogger(name).setLevel(logging.WARNING)
@@ -233,13 +235,8 @@ def _configure_external_loggers(*, level: int) -> None:
 # FILE LOGGING (opcional, controlado por config)
 # ============================================================================
 
-def _file_logging_enabled() -> bool:
-    """
-    Feature flag: habilita duplicación del logging a fichero.
 
-    Debe venir de backend.config:
-      LOGGER_FILE_ENABLED: bool
-    """
+def _file_logging_enabled() -> bool:
     return _cfg_bool("LOGGER_FILE_ENABLED", False)
 
 
@@ -247,15 +244,11 @@ def _file_logging_path() -> str | None:
     """
     Path del fichero de log.
 
-    Prioridad (clave para evitar "1 log por PID" con multiprocessing/spawn):
-      0) ENV LOGGER_FILE_PATH (si el padre lo fijó, los hijos lo heredan)
-      1) backend.config.LOGGER_FILE_PATH (Path | str | None)
+    Prioridad:
+      0) ENV LOGGER_FILE_PATH
+      1) backend.config.LOGGER_FILE_PATH
       2) None
-
-    Nota:
-    - No decide nombres; solo resuelve el destino.
     """
-    # 0) ENV (congela el fichero entre procesos)
     try:
         env_p = (os.getenv("LOGGER_FILE_PATH") or "").strip()
         if env_p:
@@ -263,10 +256,10 @@ def _file_logging_path() -> str | None:
     except Exception:
         pass
 
-    # 1) backend.config
     cfg = _safe_get_cfg()
     if cfg is None:
         return None
+
     try:
         p = getattr(cfg, "LOGGER_FILE_PATH", None)
         if p is None:
@@ -278,28 +271,16 @@ def _file_logging_path() -> str | None:
 
 
 def _has_our_file_handler(root: logging.Logger) -> bool:
-    """Detecta si ya existe nuestro FileHandler (idempotencia)."""
     for h in root.handlers:
         try:
-            if getattr(h, _FILE_HANDLER_TAG, False):
+            if bool(getattr(h, _FILE_HANDLER_TAG, False)):
                 return True
         except Exception:
-            continue
+            pass
     return False
 
 
 def _ensure_file_handler(root: logging.Logger, *, level: int) -> None:
-    """
-    Añade un FileHandler al root logger si procede y si no existe ya.
-
-    Reglas:
-    - Solo si LOGGER_FILE_ENABLED=True y hay path.
-    - Idempotente (no duplica handlers).
-    - Best-effort: nunca rompe el pipeline si falla crear el fichero/dir.
-
-    Por qué root logger:
-    - Cubre todo el logging del proceso (incluyendo librerías internas si no se silencian).
-    """
     if not _file_logging_enabled():
         return
 
@@ -307,56 +288,37 @@ def _ensure_file_handler(root: logging.Logger, *, level: int) -> None:
     if not path:
         return
 
-    # Si ya existe, re-sincronizamos nivel y salimos.
     if _has_our_file_handler(root):
         for h in root.handlers:
             try:
-                if getattr(h, _FILE_HANDLER_TAG, False):
+                if bool(getattr(h, _FILE_HANDLER_TAG, False)):
                     h.setLevel(level)
             except Exception:
                 pass
         return
 
     try:
-        # Creamos directorio si hace falta (best-effort).
         dir_name = os.path.dirname(path)
         if dir_name:
-            try:
-                os.makedirs(dir_name, exist_ok=True)
-            except Exception:
-                pass
+            os.makedirs(dir_name, exist_ok=True)
 
         fh = logging.FileHandler(path, mode="a", encoding="utf-8", delay=True)
         fh.setLevel(level)
         fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-
-        # Marcamos handler como nuestro para detección idempotente.
         setattr(fh, _FILE_HANDLER_TAG, True)
-
         root.addHandler(fh)
 
-        # Señal discreta solo en debug no-silent (sin usar logging para evitar recursion).
-        try:
-            if is_debug_mode() and not is_silent_mode():
+        if is_debug_mode() and not is_silent_mode():
+            try:
                 sys.stdout.write(f"[LOGGER] File logging enabled -> {path}\n")
                 sys.stdout.flush()
-        except Exception:
-            pass
-
+            except Exception:
+                pass
     except Exception:
-        # Si no puede abrir el fichero, seguimos solo con consola.
-        return
+        pass
 
 
 def _append_progress_to_file(message: str) -> None:
-    """
-    Duplica a fichero lo que sale por `progress()` cuando el file logging está habilitado.
-
-    Diseño:
-    - Best-effort: si falla, no rompe ni hace ruido.
-    - Abrimos en modo append por llamada: robusto ante forks/errores/rotación externa.
-    - Lock para no mezclar líneas concurrentes.
-    """
     if not _file_logging_enabled():
         return
 
@@ -367,76 +329,51 @@ def _append_progress_to_file(message: str) -> None:
     try:
         dir_name = os.path.dirname(path)
         if dir_name:
-            try:
-                os.makedirs(dir_name, exist_ok=True)
-            except Exception:
-                pass
+            os.makedirs(dir_name, exist_ok=True)
 
         with _PROGRESS_FILE_LOCK:
             with open(path, "a", encoding="utf-8") as f:
-                # Importante: progress es “señal limpia” (sin timestamps).
-                # En el fichero convivirá con logs con timestamp (FileHandler).
                 f.write(f"{message}\n")
     except Exception:
-        return
+        pass
 
 
 # ============================================================================
 # INICIALIZACIÓN DEL LOGGER
 # ============================================================================
 
+
 def _ensure_configured() -> logging.Logger:
-    """
-    Inicializa logging de forma idempotente y devuelve el logger principal.
-
-    - Si ya se configuró, re-sincroniza niveles (por si backend.config cambió).
-    - Configura handler de fichero si procede (consumiendo LOGGER_FILE_* de config/env).
-    - Nunca lanza excepciones.
-    """
-    global _LOGGER, _CONFIGURED
-
-    if _CONFIGURED and _LOGGER is not None:
-        try:
-            level = _resolve_level_from_config()
-            _apply_root_level(level)
-            _configure_external_loggers(level=level)
-
-            root = logging.getLogger()
-            _ensure_file_handler(root, level=level)
-        except Exception:
-            pass
-        return _LOGGER
+    """Inicializa logging de forma idempotente y devuelve el logger principal."""
+    global _CONFIGURED
 
     level = _resolve_level_from_config()
     root = logging.getLogger()
 
-    # Config base a consola (solo si no hay handlers previos).
-    try:
-        if not root.handlers:
-            logging.basicConfig(
-                level=level,
-                format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            )
-        else:
+    if not _CONFIGURED:
+        try:
+            if not root.handlers:
+                logging.basicConfig(
+                    level=level,
+                    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                )
+            else:
+                _apply_root_level(level)
+        except Exception:
+            pass
+        _CONFIGURED = True
+    else:
+        try:
             _apply_root_level(level)
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     _configure_external_loggers(level=level)
-
-    # File handler opcional (best-effort).
-    try:
-        _ensure_file_handler(root, level=level)
-    except Exception:
-        pass
-
-    _LOGGER = logging.getLogger(LOGGER_NAME)
-    _CONFIGURED = True
+    _ensure_file_handler(root, level=level)
     return _LOGGER
 
 
 def get_logger() -> logging.Logger:
-    """Devuelve el logger principal, asegurando inicialización."""
     return _ensure_configured()
 
 
@@ -444,44 +381,26 @@ def get_logger() -> logging.Logger:
 # CONTROL DE SILENT MODE (para logs con niveles)
 # ============================================================================
 
-def _should_log(*, always: bool = False) -> bool:
-    """
-    Decide si un mensaje debe emitirse (para debug/info/warning).
 
-    - always=True -> siempre emite
-    - SILENT_MODE=True -> suprime
-    """
-    if always:
-        return True
-    return not is_silent_mode()
+def _should_log(*, always: bool = False) -> bool:
+    return bool(always) or (not is_silent_mode())
 
 
 # ============================================================================
 # PROGRESO / HEARTBEAT (NO logging)
 # ============================================================================
 
+
 def progress(message: str) -> None:
-    """
-    Emite una línea siempre visible (ignora SILENT_MODE).
-
-    No usa logging para evitar timestamps/levels y dar una “señal” limpia.
-
-    ✅ Si LOGGER_FILE_ENABLED=True y existe un path, también se persiste a fichero.
-    """
     try:
         sys.stdout.write(f"{message}\n")
         sys.stdout.flush()
     except Exception:
         pass
-
-    try:
-        _append_progress_to_file(message)
-    except Exception:
-        pass
+    _append_progress_to_file(message)
 
 
 def progressf(fmt: str, *args: object) -> None:
-    """Formato estilo printf para progress."""
     try:
         msg = fmt % args if args else fmt
     except Exception:
@@ -493,50 +412,97 @@ def progressf(fmt: str, *args: object) -> None:
 # API PÚBLICA DE LOGGING
 # ============================================================================
 
-def debug(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+
+def debug(msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
-    kwargs.pop("always", None)
     try:
         log.debug(msg, *args, **kwargs)
     except Exception:
         pass
 
 
-def info(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+def info(msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
-    kwargs.pop("always", None)
     try:
         log.info(msg, *args, **kwargs)
     except Exception:
         pass
 
 
-def warning(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+def warning(msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
-    kwargs.pop("always", None)
     try:
         log.warning(msg, *args, **kwargs)
     except Exception:
         pass
 
 
-def error(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
-    """
-    ERROR siempre se emite (ignora SILENT_MODE). `always` se acepta por compat.
-    """
+def error(msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]) -> None:
+    """ERROR siempre se emite (ignora SILENT_MODE)."""
     log = _ensure_configured()
-    kwargs.pop("always", None)
     try:
         log.error(msg, *args, **kwargs)
     except Exception:
         try:
-            print(msg)
+            sys.stdout.write(f"{msg}\n")
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+
+# ============================================================================
+# COMPAT: llamadas legacy con **kwargs: object
+# ============================================================================
+
+
+def debug_any(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+    if not _should_log(always=always):
+        return
+    log = _ensure_configured()
+    try:
+        safe = _filter_log_kwargs(cast(Mapping[str, object], kwargs))
+        log.debug(msg, *args, **safe)
+    except Exception:
+        pass
+
+
+def info_any(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+    if not _should_log(always=always):
+        return
+    log = _ensure_configured()
+    try:
+        safe = _filter_log_kwargs(cast(Mapping[str, object], kwargs))
+        log.info(msg, *args, **safe)
+    except Exception:
+        pass
+
+
+def warning_any(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+    if not _should_log(always=always):
+        return
+    log = _ensure_configured()
+    try:
+        safe = _filter_log_kwargs(cast(Mapping[str, object], kwargs))
+        log.warning(msg, *args, **safe)
+    except Exception:
+        pass
+
+
+def error_any(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+    log = _ensure_configured()
+    try:
+        safe = _filter_log_kwargs(cast(Mapping[str, object], kwargs))
+        log.error(msg, *args, **safe)
+    except Exception:
+        try:
+            sys.stdout.write(f"{msg}\n")
+            sys.stdout.flush()
         except Exception:
             pass
 
@@ -554,14 +520,6 @@ _LOGS_TRUNCATED_SENTINEL: Final[str] = "[LOGS_TRUNCATED]"
 
 
 def logs_limit() -> int:
-    """
-    Límite de logs acumulables por item, según modos.
-
-    Ajustable desde config:
-      - LOGGER_LOGS_MAX_SILENT
-      - LOGGER_LOGS_MAX_SILENT_DEBUG
-      - LOGGER_LOGS_MAX_NORMAL
-    """
     if is_silent_mode():
         if is_debug_mode():
             return _cfg_int("LOGGER_LOGS_MAX_SILENT_DEBUG", _DEFAULT_LOGS_MAX_SILENT_DEBUG)
@@ -570,12 +528,6 @@ def logs_limit() -> int:
 
 
 def truncate_line(text: str, max_chars: int | None = None) -> str:
-    """
-    Trunca una línea para evitar payloads enormes (JSON/HTML/etc.).
-
-    - max_chars explícito tiene prioridad.
-    - Si no, usa LOGGER_LOG_LINE_MAX_CHARS desde config, con fallback seguro.
-    """
     limit = (
         int(max_chars)
         if isinstance(max_chars, int) and max_chars > 0
@@ -587,7 +539,7 @@ def truncate_line(text: str, max_chars: int | None = None) -> str:
 
 
 def append_bounded_log(
-    logs: list[str],
+    logs: object,  # ✅ importante: así el isinstance() NO es “unreachable”
     line: object,
     *,
     force: bool = False,
@@ -602,49 +554,65 @@ def append_bounded_log(
     if not isinstance(logs, list):
         return
 
+    # Nos quedamos con una lista mutable de strings (best-effort)
+    logs_list = cast(list[str], logs)
+
     prefix = f"[{tag}] " if isinstance(tag, str) and tag.strip() else ""
     msg = prefix + truncate_line(str(line))
 
     limit = logs_limit()
 
     if force:
-        logs.append(msg)
+        logs_list.append(msg)
         return
 
     if limit <= 0:
         return
 
-    if len(logs) >= limit:
-        if not logs or logs[-1] != _LOGS_TRUNCATED_SENTINEL:
-            logs.append(_LOGS_TRUNCATED_SENTINEL)
+    if len(logs_list) >= limit:
+        if not logs_list or logs_list[-1] != _LOGS_TRUNCATED_SENTINEL:
+            logs_list.append(_LOGS_TRUNCATED_SENTINEL)
         return
 
-    logs.append(msg)
+    logs_list.append(msg)
 
 
 def debug_ctx(tag: str, msg: object) -> None:
-    """
-    Debug contextual con tag.
-
-    - DEBUG_MODE=False -> no-op
-    - DEBUG_MODE=True:
-        * SILENT_MODE=True  -> progress("[TAG][DEBUG] ...")   (✅ también a fichero si está habilitado)
-        * SILENT_MODE=False -> info("[TAG][DEBUG] ...")       (✅ también a fichero si está habilitado)
-    """
     if not is_debug_mode():
         return
 
     t = (tag or "DEBUG").strip().upper()
-    text = str(msg)
+    line = f"[{t}][DEBUG] {str(msg)}"
 
     try:
         if is_silent_mode():
-            progress(f"[{t}][DEBUG] {text}")
+            progress(line)
         else:
-            info(f"[{t}][DEBUG] {text}")
+            info(line)
     except Exception:
-        if not is_silent_mode():
-            try:
-                print(f"[{t}][DEBUG] {text}")
-            except Exception:
-                pass
+        try:
+            sys.stdout.write(f"{line}\n")
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+
+__all__ = [
+    "get_logger",
+    "debug",
+    "info",
+    "warning",
+    "error",
+    "debug_any",
+    "info_any",
+    "warning_any",
+    "error_any",
+    "progress",
+    "progressf",
+    "debug_ctx",
+    "append_bounded_log",
+    "logs_limit",
+    "truncate_line",
+    "is_silent_mode",
+    "is_debug_mode",
+]
