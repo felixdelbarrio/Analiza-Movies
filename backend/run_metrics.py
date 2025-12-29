@@ -42,7 +42,7 @@ class RunMetrics:
 
     Diseño:
     - counters: dict[str, int]
-    - timings_ms: dict[str, {"count": int, "sum": float, "min": float, "max": float}]
+    - timings_ms: dict[str, {"count": int, "sum": float, "min": float, "max": float, "avg": float}]
     - errors: lista acotada para diagnóstico (no infinito)
     """
 
@@ -86,7 +86,13 @@ class RunMetrics:
             t["max"] = max(float(t.get("max", v)), v)
 
     def add_error(self, subsystem: str, action: str, *, endpoint: str | None, detail: str) -> None:
-        ev = ErrorEvent(ts=time.time(), subsystem=subsystem, action=action, endpoint=endpoint, detail=str(detail)[:800])
+        ev = ErrorEvent(
+            ts=time.time(),
+            subsystem=str(subsystem),
+            action=str(action),
+            endpoint=endpoint,
+            detail=str(detail)[:800],
+        )
         with self._lock:
             if self._max_error_events <= 0:
                 return
@@ -106,15 +112,17 @@ class RunMetrics:
         derived["errors.total"] = len(errors)
         derived["errors.by_subsystem"] = {}
         for e in errors:
-            derived["errors.by_subsystem"][e.subsystem] = int(derived["errors.by_subsystem"].get(e.subsystem, 0)) + 1
+            by = derived["errors.by_subsystem"]
+            by[e.subsystem] = int(by.get(e.subsystem, 0)) + 1
 
         # Timing: añadimos avg
-        for k, t in timings.items():
+        for t in timings.values():
             cnt = max(1.0, float(t.get("count", 0.0)))
             t["avg"] = float(t.get("sum", 0.0)) / cnt
 
         return {"counters": counters, "timings_ms": timings, "errors": errors, "derived": derived}
-    
+
+
 # -----------------------------------------------------------------------------
 # Compat shims (para módulos que esperan inc/observe_seconds)
 # -----------------------------------------------------------------------------
@@ -126,9 +134,11 @@ def inc(name: str, *, value: int = 1) -> None:
     except Exception:
         return
 
+
 def counter_inc(name: str, *, value: int = 1) -> None:
     """Alias compat."""
     inc(name, value=value)
+
 
 def observe_seconds(name: str, *, seconds: float) -> None:
     """Compat: observa timing en segundos (se guarda en ms)."""
@@ -136,6 +146,7 @@ def observe_seconds(name: str, *, seconds: float) -> None:
         METRICS.observe_ms(name, float(seconds) * 1000.0)
     except Exception:
         return
+
 
 def timing(name: str, *, seconds: float) -> None:
     """Alias compat."""
