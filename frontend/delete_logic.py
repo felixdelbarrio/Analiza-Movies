@@ -39,29 +39,61 @@ def _row_to_dict(row: object) -> dict[str, Any]:
     """
     Convierte UNA fila "row-like" a dict[str, Any] de forma segura.
 
-    Acepta:
-      - Mapping
-      - pandas.Series (si existe) vía duck-typing (to_dict)
-      - cualquier otro objeto -> dict vacío (fallback seguro)
+    Anti-pyright-unreachable:
+    - Evita ramas "else" que pyright infiere como imposibles.
+    - Intenta conversiones en try/except y cae a {"value": ...} si no puede.
     """
     if row is None:
         return {}
 
+    # Caso Mapping directo
     if isinstance(row, Mapping):
         return _to_str_key_dict(cast(Mapping[Hashable, Any], row))
 
-    # Series-like: duck-typing (evita depender de stubs de pandas)
+    # Series-like: duck-typing (evita stubs pandas)
     to_dict = getattr(row, "to_dict", None)
     if callable(to_dict):
         try:
-            d = to_dict()
-            if isinstance(d, Mapping):
-                return _to_str_key_dict(cast(Mapping[Hashable, Any], d))
-            return {"value": d}
+            d_any: Any = to_dict()
+            try:
+                return _to_str_key_dict(cast(Mapping[Hashable, Any], d_any))
+            except Exception:
+                # No era mapping "usable"
+                return {"value": d_any}
         except Exception:
             return {}
 
-    return {}
+    # Intento final: dict(iterable_de_pares)
+    if isinstance(row, Iterable) and not isinstance(row, (str, bytes)):
+        try:
+            d2_any: Any = dict(cast(Any, row))
+            try:
+                return _to_str_key_dict(cast(Mapping[Hashable, Any], d2_any))
+            except Exception:
+                return {"value": d2_any}
+        except Exception:
+            return {"value": row}
+
+    return {"value": row}
+
+
+def _rows_from_records(records: object) -> list[dict[str, Any]]:
+    """
+    Convierte una lista de "records" (típico DataFrame.to_dict(orient="records"))
+    a list[dict[str, Any]] sin ramas que pyright marque como unreachable.
+    """
+    if not isinstance(records, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in records:
+        # Importante: NO hacemos "if isinstance(rec, Mapping) else ..." porque
+        # pyright a veces infiere que SIEMPRE es Mapping y marca el else unreachable.
+        try:
+            out.append(_to_str_key_dict(cast(Mapping[Hashable, Any], cast(Any, rec))))
+        except Exception:
+            out.append(_row_to_dict(rec))
+    return out
 
 
 def _as_rows_iter(rows: object) -> list[dict[str, Any]]:
@@ -71,7 +103,7 @@ def _as_rows_iter(rows: object) -> list[dict[str, Any]]:
     Acepta:
       - list/tuple de row-like
       - iterable de row-like
-      - pandas.DataFrame / pandas.Series (si está disponible) vía duck-typing
+      - DataFrame / Series (duck-typing via to_dict)
       - Mapping (una sola fila)
     """
     if rows is None:
@@ -82,14 +114,9 @@ def _as_rows_iter(rows: object) -> list[dict[str, Any]]:
     if callable(to_dict):
         # 1) Intentamos DataFrame-like: to_dict(orient="records")
         try:
-            records = to_dict(orient="records")  # type: ignore[call-arg]
-            if isinstance(records, list):
-                out_df: list[dict[str, Any]] = []
-                for r in records:
-                    if isinstance(r, Mapping):
-                        out_df.append(_to_str_key_dict(cast(Mapping[Hashable, Any], r)))
-                    else:
-                        out_df.append({"value": r})
+            records_any: Any = to_dict(orient="records")  # type: ignore[call-arg]
+            out_df = _rows_from_records(records_any)
+            if out_df:
                 return out_df
         except TypeError:
             # 2) Series-like: no acepta orient
@@ -103,27 +130,21 @@ def _as_rows_iter(rows: object) -> list[dict[str, Any]]:
         d = _row_to_dict(rows)
         return [d] if d else []
 
-    # Colección de filas
+    # Coleccion de filas
     if isinstance(rows, Iterable) and not isinstance(rows, (str, bytes)):
-        out: list[dict[str, Any]] = []
+        out_list: list[dict[str, Any]] = []
         for x in rows:
             d = _row_to_dict(x)
             if d:
-                out.append(d)
+                out_list.append(d)
             else:
-                out.append({"value": x})
-        return out
+                out_list.append({"value": x})
+        return out_list
 
     return []
 
 
 def _safe_path_from_row(row: Row) -> Path | None:
-    """
-    Extrae y normaliza la ruta del fichero desde una fila.
-
-    Espera columna:
-      - file (ruta)
-    """
     raw = row.get("file")
     if raw is None:
         return None
@@ -139,11 +160,6 @@ def _safe_path_from_row(row: Row) -> Path | None:
 
 
 def _is_probably_safe_file(path: Path) -> bool:
-    """
-    Validación conservadora:
-    - Debe existir
-    - Debe ser fichero (no directorio)
-    """
     try:
         return path.exists() and path.is_file()
     except Exception:
@@ -160,7 +176,7 @@ def delete_files_from_rows(
     delete_dry_run: bool,
 ) -> tuple[int, int, list[str]]:
     """
-    Borra físicamente archivos según las filas seleccionadas.
+    Borra fisicamente archivos segun las filas seleccionadas.
 
     Input:
       - rows: list[dict] / iterable dict-like / pandas.DataFrame / pandas.Series
@@ -168,10 +184,6 @@ def delete_files_from_rows(
 
     Output:
       - (ok, err, logs)
-
-    Notas:
-    - Esta función NO pregunta confirmación (eso es responsabilidad del caller/UI).
-    - Filtra filas que no apunten a ficheros reales.
     """
     logs: list[str] = []
     ok = 0
@@ -185,7 +197,7 @@ def delete_files_from_rows(
 
         if path is None:
             err += 1
-            logs.append(f"[DELETE] row#{i}: sin 'file' válido (title={title!r})")
+            logs.append(f"[DELETE] row#{i}: sin 'file' valido (title={title!r})")
             continue
 
         try:
@@ -194,9 +206,7 @@ def delete_files_from_rows(
             resolved = path
 
         if not _is_probably_safe_file(resolved):
-            logs.append(
-                f"[DELETE] row#{i}: skip (no existe/no es fichero): {resolved} (title={title!r})"
-            )
+            logs.append(f"[DELETE] row#{i}: skip (no existe/no es fichero): {resolved} (title={title!r})")
             continue
 
         if delete_dry_run:
@@ -224,30 +234,27 @@ def _read_filtered_rows(csv_path: str | Path) -> list[dict[str, Any]]:
     """
     Lee el CSV filtrado y devuelve lista de dicts.
 
-    - Intenta pandas si está disponible.
+    - Intenta pandas si esta disponible.
     - Fallback a csv.DictReader si pandas no existe.
     """
     p = csv_path if isinstance(csv_path, Path) else Path(str(csv_path))
     if not p.exists():
         return []
 
-    # 1) pandas (si existe) - duck-typing: evitamos depender de stubs.
+    # 1) pandas (si existe)
     try:
-        import pandas as pd  # type: ignore[import-not-found, import-untyped]
+        import pandas as pd_local  # type: ignore[import-not-found, import-untyped]
 
-        df = pd.read_csv(p, dtype=str, keep_default_na=False)
+        df = pd_local.read_csv(p, dtype=str, keep_default_na=False)
         records = df.to_dict(orient="records")
-        out_df: list[dict[str, Any]] = []
-        for r in records:
-            if isinstance(r, Mapping):
-                out_df.append(_to_str_key_dict(cast(Mapping[Hashable, Any], r)))
-            else:
-                out_df.append({"value": r})
-        return out_df
+
+        out_df = _rows_from_records(records)
+        if out_df:
+            return out_df
     except Exception:
         pass
 
-    # 2) fallback estándar
+    # 2) fallback estandar
     import csv
 
     out: list[dict[str, Any]] = []
@@ -259,26 +266,13 @@ def _read_filtered_rows(csv_path: str | Path) -> list[dict[str, Any]]:
 
 
 def _normalize_rows_for_delete(rows: Iterable[Row]) -> list[dict[str, Any]]:
-    """
-    Reduce filas a claves mínimas:
-      - file
-      - title
-    """
     out: list[dict[str, Any]] = []
     for r in rows:
-        out.append(
-            {
-                "file": r.get("file", ""),
-                "title": r.get("title", ""),
-            }
-        )
+        out.append({"file": r.get("file", ""), "title": r.get("title", "")})
     return out
 
 
 def _count_existing_files(rows: Iterable[Row]) -> int:
-    """
-    Cuenta cuántas filas apuntan a ficheros existentes.
-    """
     n = 0
     for r in rows:
         raw = str(r.get("file") or "").strip()
@@ -301,10 +295,6 @@ def run_delete_from_report_filtered(
 ) -> None:
     """
     Ejecuta borrado (o dry-run) a partir del CSV filtrado.
-
-    - Prompt SIEMPRE visible (progress + input).
-    - Si no hay filas, informa y sale.
-    - delete_dry_run/require_confirm por defecto vienen de config.py.
     """
     logger = _get_logger()
 
@@ -333,7 +323,7 @@ def run_delete_from_report_filtered(
 
     if confirm:
         logger.progress(
-            "[DELETE] Confirmación requerida.\n"
+            "[DELETE] Confirmacion requerida.\n"
             "  - Escribe 'DELETE' para continuar\n"
             "  - Enter para cancelar"
         )
