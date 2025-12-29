@@ -57,9 +57,9 @@ from pathlib import Path
 from typing import Any, Final, Literal, Protocol, cast
 from urllib.parse import quote
 
-import requests
-from requests.adapters import HTTPAdapter
-from requests.exceptions import RequestException
+import requests  # type: ignore[import-untyped]
+from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
+from requests.exceptions import RequestException  # type: ignore[import-untyped]
 from urllib3.util.retry import Retry
 
 from backend import logger

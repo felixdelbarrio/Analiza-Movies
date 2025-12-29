@@ -23,10 +23,10 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, Final, Literal, Protocol, TypedDict, cast, runtime_checkable
 
-import requests  # type: ignore[import-not-found]
+import requests  # type: ignore[import-untyped]
 from requests import Response  # type: ignore[import-not-found]
-from requests.adapters import HTTPAdapter  # type: ignore[import-not-found]
-from requests.exceptions import RequestException  # type: ignore[import-not-found]
+from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
+from requests.exceptions import RequestException  # type: ignore[import-untyped]
 from urllib3.util.retry import Retry  # type: ignore[import-not-found]
 
 from backend import logger as logger
