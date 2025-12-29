@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
 
-import requests  # type: ignore[import-not-found]
+import requests  # type: ignore[import-untyped]
 from plexapi.server import PlexServer  # type: ignore[import-not-found]
 
 from backend import logger as _logger

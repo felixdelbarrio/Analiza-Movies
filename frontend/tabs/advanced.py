@@ -34,16 +34,14 @@ def _safe_unique_sorted(df: pd.DataFrame, col: str) -> list[str]:
     """
     Devuelve valores únicos no vacíos/NaN de una columna, ordenados alfabéticamente.
 
-    - Si la columna no existe: [].
-    - Convierte a string, hace strip y descarta "".
+    Nota mypy:
+    - pandas .unique().tolist() suele estar tipado como Any/list[Any] en stubs,
+      así que construimos explícitamente list[str].
     """
     if col not in df.columns:
         return []
 
-    # Importante para mypy:
-    # pandas.Series.unique().tolist() suele estar tipado como list[Any]/Any en stubs.
-    # Forzamos una lista REAL de str.
-    raw_list: list[Any] = (
+    raw: list[Any] = (
         df[col]
         .dropna()
         .astype(str)
@@ -55,10 +53,11 @@ def _safe_unique_sorted(df: pd.DataFrame, col: str) -> list[str]:
     )
 
     out: list[str] = []
-    for v in raw_list:
+    for v in raw:
         s = str(v).strip()
         if s:
             out.append(s)
+
     out.sort()
     return out
 
@@ -66,11 +65,8 @@ def _safe_unique_sorted(df: pd.DataFrame, col: str) -> list[str]:
 def _ensure_numeric_column(df: pd.DataFrame, col: str) -> pd.Series:
     """
     Devuelve una serie numérica segura:
-
-    - Si la columna no existe, devuelve una serie float64 rellena con 0.0.
-    - Si existe, convierte con errors='coerce' y rellena NaN con 0.0.
-
-    Esto simplifica filtros numéricos sin tener que ramificar por “columna existe”.
+    - Si la columna no existe: serie float64 rellena con 0.0.
+    - Si existe: convierte con errors='coerce' y rellena NaN con 0.0.
     """
     if col not in df.columns:
         return pd.Series(0.0, index=df.index, dtype="float64")
@@ -84,28 +80,16 @@ def _ensure_numeric_column(df: pd.DataFrame, col: str) -> pd.Series:
 
 
 def render(df_all: pd.DataFrame) -> None:
-    """
-    Renderiza la pestaña 3: Búsqueda avanzada.
-
-    Args:
-        df_all: DataFrame completo (puede estar vacío). Se espera que incluya,
-               idealmente, columnas como: library, decision, imdb_rating, imdb_votes.
-    """
     st.write("### Búsqueda avanzada")
 
     if not isinstance(df_all, pd.DataFrame) or df_all.empty:
         st.info("No hay datos para búsqueda avanzada.")
         return
 
-    # Trabajamos sobre copia para no mutar el DF original.
     df_view = df_all.copy()
 
-    # ----------------------------------------------------------------
-    # Filtros superiores
-    # ----------------------------------------------------------------
     col_f1, col_f2, col_f3, col_f4 = st.columns(4)
 
-    # Biblioteca
     with col_f1:
         libraries = _safe_unique_sorted(df_view, "library")
         lib_filter: Sequence[str] = st.multiselect(
@@ -114,7 +98,6 @@ def render(df_all: pd.DataFrame) -> None:
             key="lib_filter_advanced",
         )
 
-    # Decisión
     with col_f2:
         decisions = ["DELETE", "MAYBE", "KEEP", "UNKNOWN"]
         dec_filter: Sequence[str] = st.multiselect(
@@ -124,17 +107,12 @@ def render(df_all: pd.DataFrame) -> None:
             key="dec_filter_advanced",
         )
 
-    # IMDb rating mínimo
     with col_f3:
         min_imdb: float = st.slider("IMDb mínimo", 0.0, 10.0, 0.0, 0.1, key="min_imdb_advanced")
 
-    # IMDb votos mínimos
     with col_f4:
         min_votes: int = st.slider("IMDb votos mínimos", 0, 200_000, 0, 1_000, key="min_votes_advanced")
 
-    # ----------------------------------------------------------------
-    # Aplicar filtros
-    # ----------------------------------------------------------------
     if lib_filter and "library" in df_view.columns:
         df_view = df_view[df_view["library"].isin(lib_filter)]
 
@@ -152,9 +130,6 @@ def render(df_all: pd.DataFrame) -> None:
         st.info("No hay resultados que coincidan con los filtros actuales.")
         return
 
-    # ----------------------------------------------------------------
-    # Grid + detalle
-    # ----------------------------------------------------------------
     col_grid, col_detail = st.columns([2, 1])
 
     with col_grid:
