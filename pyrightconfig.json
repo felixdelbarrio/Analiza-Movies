@@ -1,5 +1,6 @@
 {
   "include": ["backend", "frontend", "server"],
+
   "exclude": [
     "**/__pycache__",
     "**/*.pyc",
@@ -13,23 +14,29 @@
     "reports",
     "tests"
   ],
+
   "typeCheckingMode": "standard",
+
   "pythonVersion": "3.14",
   "pythonPlatform": "All",
-  "venvPath": ".",
-  "venv": ".venv",
+
   "executionEnvironments": [
     {
       "root": ".",
       "extraPaths": ["."]
     }
   ],
+
   "reportMissingImports": "none",
   "reportMissingTypeStubs": "none",
+  "reportMissingModuleSource": "none",
+
   "reportUnknownMemberType": "none",
   "reportUnknownVariableType": "none",
   "reportUnknownArgumentType": "none",
+
   "reportUnusedImport": "warning",
   "reportUnusedVariable": "warning",
-  "useLibraryCodeForTypes": false
+
+  "useLibraryCodeForTypes": true
 }
