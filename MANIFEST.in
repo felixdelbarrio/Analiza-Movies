@@ -33,10 +33,6 @@ recursive-include server *.py
 recursive-include server py.typed
 recursive-include server/api py.typed
 
-# ---------------------------------------------------------------------------
-# Datos mínimos necesarios (NO reports generados)
-# ---------------------------------------------------------------------------
-recursive-include data *.json
 
 # ---------------------------------------------------------------------------
 # Excluir basura, cachés y artefactos locales

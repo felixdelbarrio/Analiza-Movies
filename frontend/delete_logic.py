@@ -233,7 +233,7 @@ def _read_filtered_rows(csv_path: str | Path) -> list[dict[str, Any]]:
 
     # 1) pandas (si existe) - duck-typing: evitamos depender de stubs.
     try:
-        import pandas as pd  # type: ignore[import-not-found]
+        import pandas as pd  # type: ignore[import-not-found, import-untyped]
 
         df = pd.read_csv(p, dtype=str, keep_default_na=False)
         records = df.to_dict(orient="records")

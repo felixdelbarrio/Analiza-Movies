@@ -41,6 +41,13 @@ Cliente OMDb + caché persistente indexada + TTL + bounded in-memory hot-cache
 2) Defensa extra: _pick_ttl_and_status no marca "ok" si Response=False.
 3) Integración best-effort con backend/run_metrics.py::METRICS (si existe).
 4) Circuit breaker / disable-after-failures: se mantienen (sin cambios funcionales).
+
+✅ Parche aplicado (Pylance)
+---------------------------
+- Evitar `int(x)` donde `x: object`:
+  * añadimos helpers _int_default/_int_or_none para estrechar tipos
+  * eliminamos `return int(value)`/`return float(value)` sobre object en _safe_int/_safe_float
+  * usamos helpers en sitios típicos (TTL, fetched_at, compaction sort, etc.)
 """
 
 import atexit
@@ -130,6 +137,63 @@ def _rm_observe_ms(key: str, ms: int) -> None:
         m.observe_ms(str(key), int(ms))
     except Exception:
         return
+
+
+# ============================================================
+# SAFE CAST HELPERS (para Pylance: int(object) / float(object))
+# ============================================================
+
+def _int_or_none(value: object | None) -> int | None:
+    """
+    Convierte a int solo si el tipo es seguro (int/float/str numérico).
+    Devuelve None si no se puede.
+    """
+    try:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            s = value.strip()
+            if not s or s.upper() == "N/A":
+                return None
+            s = s.replace(",", "")
+            return int(float(s))
+        return None
+    except (ValueError, TypeError):
+        return None
+
+
+def _int_default(value: object | None, default: int = 0) -> int:
+    out = _int_or_none(value)
+    return out if out is not None else int(default)
+
+
+def _float_or_none(value: object | None) -> float | None:
+    """
+    Convierte a float solo si el tipo es seguro (int/float/str numérico).
+    Devuelve None si no se puede.
+    """
+    try:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            s = value.strip()
+            if not s or s.upper() == "N/A":
+                return None
+            s = s.replace(",", "")
+            return float(s)
+        return None
+    except (ValueError, TypeError):
+        return None
 
 
 # ============================================================
@@ -332,8 +396,8 @@ def _is_expired_item(item: OmdbCacheItem, now_epoch: int) -> bool:
     Expiración TTL (persistente).
     Si faltan campos, consideramos expirado (fail-safe).
     """
-    fetched_at = int(item.get("fetched_at", 0))
-    ttl_s = int(item.get("ttl_s", 0))
+    fetched_at = _int_default(item.get("fetched_at"), 0)
+    ttl_s = _int_default(item.get("ttl_s"), 0)
     if fetched_at <= 0 or ttl_s <= 0:
         return True
     return (now_epoch - fetched_at) > ttl_s
@@ -820,24 +884,7 @@ def _safe_int(value: object | None) -> int | None:
     - estrecha tipos antes de llamar int()/float()
     - soporta strings "12", "12.0", "12,000"
     """
-    try:
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return int(value)
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return int(value)
-        if isinstance(value, str):
-            s = value.strip()
-            if not s or s.upper() == "N/A":
-                return None
-            s = s.replace(",", "")
-            return int(float(s))
-        return int(value)  # type: ignore[arg-type]
-    except (ValueError, TypeError):
-        return None
+    return _int_or_none(value)
 
 
 def _safe_float(value: object | None) -> float | None:
@@ -846,22 +893,7 @@ def _safe_float(value: object | None) -> float | None:
     - estrecha tipos antes de llamar float()
     - soporta strings "7.5", "7,5" NO (locale), pero "7,500" sí como miles
     """
-    try:
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return float(value)
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
-            s = value.strip()
-            if not s or s.upper() == "N/A":
-                return None
-            s = s.replace(",", "")
-            return float(s)
-        return float(value)  # type: ignore[arg-type]
-    except (ValueError, TypeError):
-        return None
+    return _float_or_none(value)
 
 
 def _safe_imdb_id(value: object) -> str | None:
@@ -967,8 +999,6 @@ def _pick_ttl_and_status(omdb_data: Mapping[str, object]) -> tuple[int, CacheSta
     if omdb_data.get("Response") == "False":
         if _is_movie_not_found(omdb_data):
             return max(60, int(OMDB_CACHE_TTL_NOT_FOUND_SECONDS)), "not_found"
-        # Respuesta de error/transitoria: no debería persistirse; si se persiste por error,
-        # se trata como negative corta para minimizar daño.
         return max(60, int(OMDB_CACHE_TTL_NOT_FOUND_SECONDS)), "not_found"
 
     if is_omdb_data_empty_for_ratings(omdb_data):
@@ -1326,7 +1356,11 @@ def _compact_cache_unlocked(cache: OmdbCacheFile, *, force: bool) -> None:
             records[rid] = d  # type: ignore[assignment]
 
         if _COMPACT_MAX_RECORDS > 0 and len(records) > _COMPACT_MAX_RECORDS:
-            ranked = sorted(records.items(), key=lambda kv: int(kv[1].get("fetched_at", 0)), reverse=True)
+            ranked = sorted(
+                records.items(),
+                key=lambda kv: _int_default(kv[1].get("fetched_at"), 0),
+                reverse=True,
+            )
             records = dict(ranked[:_COMPACT_MAX_RECORDS])
 
         cache["records"] = records
@@ -1416,7 +1450,6 @@ def _flush_cache_on_exit() -> None:
 
 
 atexit.register(_flush_cache_on_exit)
-
 
 # ============================================================
 # CACHE LOOKUP POLICY (schema v4 + hot cache)
@@ -1914,7 +1947,6 @@ def omdb_query_with_cache(
         if imdb_norm is not None:
             data_main = _request_with_rate_limit({"i": imdb_norm, "type": "movie", "plot": "short"})
             if isinstance(data_main, dict):
-                # (1) No cachear Response=False salvo Movie not found!
                 if not _is_cacheable_omdb_payload(data_main):
                     return None
 
@@ -1964,7 +1996,6 @@ def omdb_query_with_cache(
             if imdb_best:
                 data_full = _request_with_rate_limit({"i": imdb_best, "type": "movie", "plot": "short"})
                 if isinstance(data_full, dict):
-                    # (1) No cachear Response=False salvo Movie not found!
                     if not _is_cacheable_omdb_payload(data_full):
                         return None
 
@@ -1981,7 +2012,6 @@ def omdb_query_with_cache(
                     _cache_store_item(norm_title=norm_title, norm_year=year_str2, imdb_id=imdb_final2, omdb_data=dict(data_full))
                     return dict(data_full)
 
-        # (1) No cachear Response=False salvo Movie not found!
         if not _is_cacheable_omdb_payload(data_t):
             return None
 

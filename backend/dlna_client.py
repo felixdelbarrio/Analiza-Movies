@@ -21,7 +21,7 @@ from typing import Any, Final, TypeVar
 from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
-from backend import logger as logger
+from backend import logger as _logger
 from backend.config_base import DEBUG_MODE, SILENT_MODE
 from backend.dlna_discovery import DLNADevice, discover_dlna_devices
 
@@ -29,7 +29,7 @@ from backend.dlna_discovery import DLNADevice, discover_dlna_devices
 # Opcionales: resilience (circuit breaker + retry policies)
 # ---------------------------------------------------------------------------
 try:
-    from backend.resilience import CircuitBreaker, call_with_resilience  # type: ignore
+    from backend.resilience import CircuitBreaker, call_with_resilience  # type: ignore[import-not-found]
 except Exception:  # pragma: no cover
     CircuitBreaker = None  # type: ignore[assignment]
     call_with_resilience = None  # type: ignore[assignment]
@@ -38,7 +38,7 @@ except Exception:  # pragma: no cover
 # Opcionales: run_metrics agregadas
 # ---------------------------------------------------------------------------
 try:
-    from backend.run_metrics import METRICS  # type: ignore
+    from backend.run_metrics import METRICS  # type: ignore[import-not-found]
 except Exception:  # pragma: no cover
 
     class _NoopMetrics:
@@ -189,10 +189,10 @@ def _dbg(msg: str) -> None:
     if not DEBUG_MODE:
         return
     try:
-        if hasattr(logger, "debug_ctx"):
-            logger.debug_ctx("DLNA", msg)  # type: ignore[attr-defined]
+        if hasattr(_logger, "debug_ctx"):
+            _logger.debug_ctx("DLNA", msg)  # type: ignore[attr-defined]
         else:
-            logger.debug(msg)
+            _logger.debug(msg)
     except Exception:
         return
 
@@ -270,7 +270,10 @@ def _resilient_call(*, endpoint_key: str, action: str, fn: Callable[[], _T]) -> 
         if isinstance(status, str) and status.startswith("circuit_open"):
             METRICS.incr(f"dlna.{action}.blocked_by_circuit")
             METRICS.add_error("dlna", action, endpoint=endpoint_key, detail=str(status))
-            logger.warning(f"[DLNA] Circuit OPEN para {endpoint_key} ({action}) -> se omite temporalmente.", always=True)
+            _logger.warning(
+                f"[DLNA] Circuit OPEN para {endpoint_key} ({action}) -> se omite temporalmente.",
+                always=True,
+            )
             return None
 
         METRICS.incr(f"dlna.{action}.errors")
@@ -295,7 +298,7 @@ def _resilient_call(*, endpoint_key: str, action: str, fn: Callable[[], _T]) -> 
 
     METRICS.observe_ms(f"dlna.{action}.latency_ms", (time.monotonic() - t0) * 1000.0)
     if last_exc is not None:
-        logger.error(f"[DLNA] Error {action} contra {endpoint_key}: {last_exc!r}", always=True)
+        _logger.error(f"[DLNA] Error {action} contra {endpoint_key}: {last_exc!r}", always=True)
     return None
 
 
@@ -310,7 +313,7 @@ def _fetch_xml_root(url: str, timeout_s: float = _XML_FETCH_TIMEOUT_S) -> ET.Ele
 
     root = _resilient_call(endpoint_key=endpoint_key, action="xml_fetch", fn=_do)
     if root is None:
-        logger.warning(f"[DLNA] No se pudo descargar/parsear XML {url}", always=True)
+        _logger.warning(f"[DLNA] No se pudo descargar/parsear XML {url}", always=True)
     return root
 
 
@@ -438,7 +441,7 @@ def _soap_browse_direct_children(
         METRICS.incr("dlna.browse.parse_errors")
         METRICS.add_error("dlna", "browse_parse", endpoint=control_url, detail=repr(exc))
         _incr_aggregate_error_counter("browse")
-        logger.error(f"[DLNA] Respuesta SOAP inválida desde {control_url}: {exc!r}", always=True)
+        _logger.error(f"[DLNA] Respuesta SOAP inválida desde {control_url}: {exc!r}", always=True)
         return None
 
     result_text: str | None = None
@@ -475,7 +478,7 @@ def _soap_browse_direct_children(
             METRICS.incr("dlna.browse.didl_parse_errors")
             METRICS.add_error("dlna", "didl_parse", endpoint=control_url, detail=repr(exc))
             _incr_aggregate_error_counter("browse")
-            logger.error(f"[DLNA] No se pudo parsear DIDL-Lite desde {control_url}: {exc!r}", always=True)
+            _logger.error(f"[DLNA] No se pudo parsear DIDL-Lite desde {control_url}: {exc!r}", always=True)
             return None
 
     children = list(didl)
@@ -681,18 +684,22 @@ def _parse_multi_selection(raw: str, max_value: int) -> list[int] | None:
     return unique
 
 
-def _select_folders_non_plex(client: "DLNAClient", base: DlnaContainer, device: DLNADevice) -> list[DlnaContainer] | None:
-    logger.info("\nMenú (Enter cancela):", always=True)
-    logger.info("  0) Todas las carpetas de vídeo de DLNA", always=True)
-    logger.info("  1) Seleccionar qué carpetas analizar", always=True)
+def _select_folders_non_plex(
+    client: "DLNAClient",
+    base: DlnaContainer,
+    device: DLNADevice,
+) -> list[DlnaContainer] | None:
+    _logger.info("\nMenú (Enter cancela):", always=True)
+    _logger.info("  0) Todas las carpetas de vídeo de DLNA", always=True)
+    _logger.info("  1) Seleccionar qué carpetas analizar", always=True)
 
     while True:
         raw = input("Opción (0/1) o Enter cancela: ").strip()
         if raw == "":
-            logger.info("[DLNA] Operación cancelada.", always=True)
+            _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
         if raw not in ("0", "1"):
-            logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
+            _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
             continue
 
         if raw == "0":
@@ -700,38 +707,42 @@ def _select_folders_non_plex(client: "DLNAClient", base: DlnaContainer, device: 
 
         folders = client.list_child_containers(device, base.object_id)
         if not folders:
-            logger.error("[DLNA] No se han encontrado carpetas dentro del contenedor seleccionado.", always=True)
+            _logger.error("[DLNA] No se han encontrado carpetas dentro del contenedor seleccionado.", always=True)
             return None
 
-        logger.info("\nCarpetas detectadas (Enter cancela):", always=True)
+        _logger.info("\nCarpetas detectadas (Enter cancela):", always=True)
         for idx, c in enumerate(folders, start=1):
-            logger.info(f"  {idx}) {c.title}", always=True)
+            _logger.info(f"  {idx}) {c.title}", always=True)
 
         raw_sel = input("Carpetas (ej: 1,2) o Enter cancela: ").strip()
         if raw_sel == "":
-            logger.info("[DLNA] Operación cancelada.", always=True)
+            _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
 
         selected = _parse_multi_selection(raw_sel, len(folders))
         if selected is None:
-            logger.warning(f"Selección no válida. Usa números 1-{len(folders)} separados por comas.", always=True)
+            _logger.warning(f"Selección no válida. Usa números 1-{len(folders)} separados por comas.", always=True)
             continue
 
         return [folders[i - 1] for i in selected]
 
 
-def _select_folders_plex(client: "DLNAClient", base: DlnaContainer, device: DLNADevice) -> list[DlnaContainer] | None:
-    logger.info("\nOpciones Plex (Enter cancela):", always=True)
-    logger.info("  0) Todas las carpetas de vídeo de Plex Media Server", always=True)
-    logger.info("  1) Seleccionar qué carpetas analizar", always=True)
+def _select_folders_plex(
+    client: "DLNAClient",
+    base: DlnaContainer,
+    device: DLNADevice,
+) -> list[DlnaContainer] | None:
+    _logger.info("\nOpciones Plex (Enter cancela):", always=True)
+    _logger.info("  0) Todas las carpetas de vídeo de Plex Media Server", always=True)
+    _logger.info("  1) Seleccionar qué carpetas analizar", always=True)
 
     while True:
         raw = input("Opción (0/1) o Enter cancela: ").strip()
         if raw == "":
-            logger.info("[DLNA] Operación cancelada.", always=True)
+            _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
         if raw not in ("0", "1"):
-            logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
+            _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
             continue
 
         if raw == "0":
@@ -740,21 +751,21 @@ def _select_folders_plex(client: "DLNAClient", base: DlnaContainer, device: DLNA
         folders = client.list_child_containers(device, base.object_id)
         folders = [c for c in folders if not is_plex_virtual_container_title(c.title)]
         if not folders:
-            logger.error("[DLNA] No se han encontrado carpetas Plex seleccionables (filtradas).", always=True)
+            _logger.error("[DLNA] No se han encontrado carpetas Plex seleccionables (filtradas).", always=True)
             return None
 
-        logger.info("\nCarpetas detectadas en Plex (Enter cancela):", always=True)
+        _logger.info("\nCarpetas detectadas en Plex (Enter cancela):", always=True)
         for idx, c in enumerate(folders, start=1):
-            logger.info(f"  {idx}) {c.title}", always=True)
+            _logger.info(f"  {idx}) {c.title}", always=True)
 
         raw_sel = input("Carpetas (ej: 1,2) o Enter cancela: ").strip()
         if raw_sel == "":
-            logger.info("[DLNA] Operación cancelada.", always=True)
+            _logger.info("[DLNA] Operación cancelada.", always=True)
             return None
 
         selected = _parse_multi_selection(raw_sel, len(folders))
         if selected is None:
-            logger.warning(f"Selección no válida. Usa números 1-{len(folders)} separados por comas.", always=True)
+            _logger.warning(f"Selección no válida. Usa números 1-{len(folders)} separados por comas.", always=True)
             continue
 
         return [folders[i - 1] for i in selected]
@@ -776,27 +787,27 @@ class DLNAClient:
         try:
             return discover_dlna_devices()
         except Exception as exc:
-            logger.error(f"[DLNA] discover_dlna_devices falló: {exc!r}", always=True)
+            _logger.error(f"[DLNA] discover_dlna_devices falló: {exc!r}", always=True)
             return []
 
     def ask_user_to_select_device(self) -> DLNADevice | None:
-        logger.info("\nBuscando servidores DLNA/UPnP en la red...\n", always=True)
+        _logger.info("\nBuscando servidores DLNA/UPnP en la red...\n", always=True)
         devices = self.discover()
 
         if not devices:
-            logger.error("[DLNA] No se han encontrado servidores DLNA/UPnP.", always=True)
+            _logger.error("[DLNA] No se han encontrado servidores DLNA/UPnP.", always=True)
             return None
 
-        logger.info("Servidores DLNA/UPnP encontrados:\n", always=True)
+        _logger.info("Servidores DLNA/UPnP encontrados:\n", always=True)
         for idx, dev in enumerate(devices, start=1):
             if SILENT_MODE:
-                logger.info(f"  {idx}) {dev.friendly_name}", always=True)
+                _logger.info(f"  {idx}) {dev.friendly_name}", always=True)
                 if DEBUG_MODE:
-                    logger.info(f"      {dev.host}:{dev.port}", always=True)
-                    logger.info(f"      LOCATION: {dev.location}", always=True)
+                    _logger.info(f"      {dev.host}:{dev.port}", always=True)
+                    _logger.info(f"      LOCATION: {dev.location}", always=True)
             else:
-                logger.info(f"  {idx}) {dev.friendly_name} ({dev.host}:{dev.port})", always=True)
-                logger.info(f"      LOCATION: {dev.location}", always=True)
+                _logger.info(f"  {idx}) {dev.friendly_name} ({dev.host}:{dev.port})", always=True)
+                _logger.info(f"      LOCATION: {dev.location}", always=True)
 
         while True:
             prompt = (
@@ -807,65 +818,69 @@ class DLNAClient:
             raw = input(prompt).strip()
 
             if raw == "":
-                logger.info("[DLNA] Operación cancelada.", always=True)
+                _logger.info("[DLNA] Operación cancelada.", always=True)
                 return None
             if not raw.isdigit():
-                logger.warning("Opción no válida. Debe ser un número (o Enter para cancelar).", always=True)
+                _logger.warning("Opción no válida. Debe ser un número (o Enter para cancelar).", always=True)
                 continue
             num = int(raw)
             if not (1 <= num <= len(devices)):
-                logger.warning("Opción fuera de rango.", always=True)
+                _logger.warning("Opción fuera de rango.", always=True)
                 continue
 
             chosen = devices[num - 1]
-            logger.info(f"\nHas seleccionado: {chosen.friendly_name}\n", always=True)
+            _logger.info(f"\nHas seleccionado: {chosen.friendly_name}\n", always=True)
             if DEBUG_MODE and not SILENT_MODE:
-                logger.info(f"    {chosen.host}:{chosen.port}", always=True)
-                logger.info(f"    LOCATION: {chosen.location}", always=True)
+                _logger.info(f"    {chosen.host}:{chosen.port}", always=True)
+                _logger.info(f"    LOCATION: {chosen.location}", always=True)
             return chosen
 
     def ask_user_to_select_video_containers(self, device: DLNADevice) -> tuple[DlnaContainer, list[DlnaContainer]] | None:
         roots = self.list_video_root_containers(device)
         if not roots:
-            logger.error("[DLNA] No se han encontrado contenedores raíz de vídeo.", always=True)
+            _logger.error("[DLNA] No se han encontrado contenedores raíz de vídeo.", always=True)
             return None
 
         if len(roots) == 1:
             chosen_root = roots[0]
         else:
-            logger.info("\nDirectorios raíz de vídeo (Enter cancela):", always=True)
+            _logger.info("\nDirectorios raíz de vídeo (Enter cancela):", always=True)
             for idx, c in enumerate(roots, start=1):
-                logger.info(f"  {idx}) {c.title}", always=True)
+                _logger.info(f"  {idx}) {c.title}", always=True)
 
             while True:
                 raw = input(f"Directorio (1-{len(roots)}) o Enter cancela: ").strip()
                 if raw == "":
-                    logger.info("[DLNA] Operación cancelada.", always=True)
+                    _logger.info("[DLNA] Operación cancelada.", always=True)
                     return None
                 if not raw.isdigit():
-                    logger.warning("Opción no válida. Debe ser un número.", always=True)
+                    _logger.warning("Opción no válida. Debe ser un número.", always=True)
                     continue
                 n = int(raw)
                 if not (1 <= n <= len(roots)):
-                    logger.warning("Opción fuera de rango.", always=True)
+                    _logger.warning("Opción fuera de rango.", always=True)
                     continue
                 chosen_root = roots[n - 1]
                 break
 
-        logger.progress(f"[DLNA] Raíz de vídeo: {chosen_root.title}")
+        _logger.progress(f"[DLNA] Raíz de vídeo: {chosen_root.title}")
 
         base = self.auto_descend_folder_browse(device, chosen_root)
         if DEBUG_MODE and base.object_id != chosen_root.object_id:
             _dbg(f"auto_descend: {chosen_root.title!r} -> {base.title!r}")
 
-        selected = _select_folders_plex(self, base, device) if is_plex_server(device) else _select_folders_non_plex(self, base, device)
+        selected = (
+            _select_folders_plex(self, base, device)
+            if is_plex_server(device)
+            else _select_folders_non_plex(self, base, device)
+        )
         if selected is None:
             return None
 
         if SILENT_MODE:
-            logger.progress(f"[DLNA] Contenedores seleccionados: {len(selected)}")
+            _logger.progress(f"[DLNA] Contenedores seleccionados: {len(selected)}")
             if DEBUG_MODE and selected:
-                logger.progress("[DLNA][DEBUG] " + " | ".join([c.title for c in selected]))
+                _logger.progress("[DLNA][DEBUG] " + " | ".join([c.title for c in selected]))
 
         return chosen_root, selected
 
@@ -876,7 +891,7 @@ class DLNAClient:
     def list_root_containers(self, device: DLNADevice) -> list[DlnaContainer]:
         endpoints = _find_content_directory_endpoints(device.location)
         if endpoints is None:
-            logger.error(f"[DLNA] El dispositivo '{device.friendly_name}' no expone ContentDirectory.", always=True)
+            _logger.error(f"[DLNA] El dispositivo '{device.friendly_name}' no expone ContentDirectory.", always=True)
             return []
 
         root_children = _soap_browse_direct_children(endpoints.control_url, endpoints.service_type, "0", 0, 500)
@@ -993,7 +1008,7 @@ class DLNAClient:
             current_id, depth = stack.pop()
 
             if depth > lim.max_depth:
-                logger.warning(
+                _logger.warning(
                     f"[DLNA] Traverse depth cap alcanzado (max_depth={lim.max_depth}). "
                     f"Se corta para evitar loops. root={root_object_id!r}",
                     always=True,
@@ -1008,7 +1023,7 @@ class DLNAClient:
             containers_seen += 1
 
             if containers_seen > lim.max_containers:
-                logger.warning(
+                _logger.warning(
                     f"[DLNA] Traverse container cap alcanzado (max_containers={lim.max_containers}). "
                     "Se corta para evitar bucles/catálogos virtuales enormes.",
                     always=True,
@@ -1023,7 +1038,7 @@ class DLNAClient:
             while start < total:
                 pages += 1
                 if pages > lim.max_pages_per_container:
-                    logger.warning(
+                    _logger.warning(
                         f"[DLNA] Max pages por contenedor alcanzado (max_pages_per_container={lim.max_pages_per_container}). "
                         f"container_id={current_id!r}. Se corta este contenedor.",
                         always=True,
@@ -1047,7 +1062,7 @@ class DLNAClient:
                 if not children:
                     empty_pages += 1
                     if empty_pages >= lim.max_empty_pages:
-                        logger.warning(
+                        _logger.warning(
                             f"[DLNA] Contenedor devuelve páginas vacías repetidas (max_empty_pages={lim.max_empty_pages}). "
                             f"container_id={current_id!r}. Se corta este contenedor.",
                             always=True,
@@ -1088,7 +1103,7 @@ class DLNAClient:
 
                     results.append(item)
                     if len(results) >= lim.max_items_total:
-                        logger.warning(
+                        _logger.warning(
                             f"[DLNA] Max items total alcanzado (max_items_total={lim.max_items_total}). "
                             "Se corta para evitar runs infinitos/catálogos gigantes.",
                             always=True,
