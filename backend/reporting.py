@@ -16,12 +16,11 @@ Filosofía:
 """
 
 import csv
-import json
 import os
 import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Final
+from typing import Final, Optional, TextIO
 
 from backend import logger as _logger
 
@@ -93,18 +92,21 @@ class CSVAtomicWriter:
         kind_label: str = "CSV",
         commit_if_empty: bool = True,
     ) -> None:
-        self._path = str(path)
-        self._pathp = Path(path)
-        self._dir = self._pathp.parent
-        self._fieldnames = list(fieldnames)
-        self._kind_label = kind_label
-        self._commit_if_empty = commit_if_empty
+        self._path: str = str(path)
+        self._pathp: Path = Path(path)
+        self._dir: Path = self._pathp.parent
+        self._fieldnames: list[str] = list(fieldnames)
+        self._kind_label: str = str(kind_label)
+        self._commit_if_empty: bool = bool(commit_if_empty)
 
         self._tmp_name: str | None = None
-        self._fh = None
+        # Pylance: NamedTemporaryFile devuelve _TemporaryFileWrapper[str], no TextIO.
+        # Tipamos como TextIO "de facto" usando un cast suave via Optional[TextIO] (sin mentir en asignación).
+        self._fh: Optional[TextIO] = None
         self._writer: csv.DictWriter | None = None
+
         self._rows_written: int = 0
-        self._is_open = False
+        self._is_open: bool = False
 
     def __enter__(self) -> CSVAtomicWriter:
         self.open()
@@ -125,18 +127,29 @@ class CSVAtomicWriter:
 
         self._dir.mkdir(parents=True, exist_ok=True)
 
-        tf = tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            delete=False,
-            dir=str(self._dir),
-            newline="",
-        )
+        # Tipado “correcto” para type-checker: TextIO obtenido desde open()
+        # (evita el _TemporaryFileWrapper[str] vs TextIO de Pylance).
+        fd, tmp_name = tempfile.mkstemp(prefix=".tmp_", suffix=".csv", dir=str(self._dir), text=True)
+        self._tmp_name = tmp_name
 
-        self._fh = tf
-        self._tmp_name = tf.name
+        try:
+            fh = os.fdopen(fd, "w", encoding="utf-8", newline="")
+        except Exception:
+            # si falla, cerramos el fd y limpiamos el fichero
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            try:
+                os.remove(tmp_name)
+            except Exception:
+                pass
+            self._tmp_name = None
+            raise
+
+        self._fh = fh
         self._writer = csv.DictWriter(
-            tf,
+            fh,
             fieldnames=self._fieldnames,
             extrasaction="ignore",
         )
@@ -149,12 +162,16 @@ class CSVAtomicWriter:
         if not self._is_open:
             self.open()
 
+        writer = self._writer
+        if writer is None:
+            _logger.error(f"{self._kind_label}: writer no inicializado", always=True)
+            return
+
         try:
-            assert self._writer is not None
-            self._writer.writerow(dict(row))
+            writer.writerow(dict(row))
             self._rows_written += 1
         except Exception as exc:
-            _logger.error(f"Error escribiendo fila en {self._kind_label}: {exc}", always=True)
+            _logger.error(f"Error escribiendo fila en {self._kind_label}: {exc!r}", always=True)
 
     # --------------------------------------------------------
 
@@ -181,7 +198,10 @@ class CSVAtomicWriter:
                     except Exception:
                         pass
                 finally:
-                    fh.close()
+                    try:
+                        fh.close()
+                    except Exception:
+                        pass
 
             if not tmp_name:
                 return
@@ -198,7 +218,7 @@ class CSVAtomicWriter:
             _logger.info(f"{self._kind_label} escrito en {self._path}")
 
         except Exception as exc:
-            _logger.error(f"Error cerrando {self._kind_label} en {self._path}: {exc}", always=True)
+            _logger.error(f"Error cerrando {self._kind_label} en {self._path}: {exc!r}", always=True)
             if tmp_name and os.path.exists(tmp_name):
                 try:
                     os.remove(tmp_name)

@@ -36,10 +36,6 @@ Para evitar duplicación (p. ej. en metadata_fix.py o wiki_client.py), este mód
 - is_probably_english_title(title)
 - should_skip_new_title_suggestion(context_lang, current_title, omdb_title)
 
-De este modo:
-- las heurísticas viven aquí
-- la política de uso vive en módulos superiores (p.ej. metadata_fix.py)
-
 Integración con config.py
 -------------------------
 Este módulo lee "knobs" definidos en backend/config.py para modular comportamiento
@@ -54,22 +50,17 @@ Heurística idioma:
 - MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS
 - MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK
 
-⚠️ Nota de arquitectura:
-- movie_input.py sigue siendo “silencioso” (sin logs), aunque importe config.
-- Si quieres que sea 100% libre de config, podríamos inyectar los flags desde arriba;
-  por ahora se prioriza consistencia y centralización de política.
-
-Notas de diseño
----------------
-- normalize_title_for_lookup() se usa para consultas externas (OMDb/Wikipedia).
-- MovieInput.normalized_title() es ligera y NO limpia ruido.
-- extra es dict[str, object] para flexibilidad controlada sin introducir Any.
+⚠️ Nota importante (Python 3.9):
+- `dataclasses.dataclass(slots=True)` NO existe en Python 3.9 (se añadió en 3.10).
+  Por eso este archivo usa @dataclass SIN slots para ser compatible con tu pyrightconfig.
 """
 
 from dataclasses import dataclass, field
 import re
 import unicodedata
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal
+
+from typing_extensions import TypeAlias
 
 from backend.config_plex import (
     MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS,
@@ -176,11 +167,6 @@ _NOISE_PHRASE_RE: Final[re.Pattern[str]] = re.compile(
 
 # ============================================================================
 # Heurística de idioma (tokens + unicode + function words)
-# ----------------------------------------------------------------------------
-# Filosofía: conservadora, preferimos "unknown" antes que asignar mal.
-#
-# Importante: los umbrales “numéricos” (function words) se configuran en config.py
-# (MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS).
 # ============================================================================
 
 # ---------- Español ----------
@@ -377,14 +363,10 @@ def _remove_trailing_dash_group(text: str) -> str:
     Si el título es "Movie - 1080p - x265" y lo de la derecha parece ruido, recortamos.
 
     Controlado por MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP.
-
-    Regla:
-    - si el segmento a la derecha contiene señales claras de ruido, nos quedamos con la izquierda.
     """
     if not MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP:
         return text
 
-    # split exacto por " - " (muy común en nombres) para evitar cortar guiones internos.
     parts = [p.strip() for p in text.split(" - ")]
     if len(parts) <= 1:
         return text
@@ -447,16 +429,6 @@ def _lang_hits_ge(text: str, pattern: re.Pattern[str]) -> bool:
 def normalize_title_for_lookup(title: str) -> str:
     """
     Normalización fuerte para consultas externas (OMDb/Wikipedia).
-
-    Propiedades:
-    - determinista
-    - robusta a separadores / acentos (configurable)
-    - minimiza ruido de releases (resolución, codecs, tags...)
-    - devuelve una clave en minúsculas con espacios colapsados
-
-    Importante:
-    - Esta función NO intenta “traducir” ni “localizar” títulos.
-    - Está pensada para maximizar el matching en índices externos.
     """
     raw = (title or "").strip()
     if not raw:
@@ -466,11 +438,9 @@ def normalize_title_for_lookup(title: str) -> str:
     t = _remove_trailing_dash_group(t)
     t = _remove_bracketed_noise(t)
 
-    # Para lookup: quitamos acentos/diacríticos (si está habilitado)
     if MOVIE_INPUT_LOOKUP_STRIP_ACCENTS:
         t = _strip_accents(t)
 
-    # Solo dejamos letras/dígitos (y luego tokenizamos)
     t = _NON_ALNUM_RE.sub(" ", t)
     t = _remove_noise_tokens(t)
 
@@ -499,7 +469,6 @@ def guess_english_from_title_or_path(title: str, file_path: str) -> bool:
     Control:
     - MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK:
         True  -> si hay CJK/Hangul, devolvemos False (evita falsos positivos).
-        False -> mantiene heurística normal.
     """
     haystack = f"{title} {file_path}".strip()
     if not haystack:
@@ -585,10 +554,6 @@ def guess_chinese_from_title_or_path(title: str, file_path: str) -> bool:
 def title_has_cjk_script(title: str) -> bool:
     """
     True si el texto contiene escritura CJK/Hangul.
-
-    Importante:
-    - Esto NO determina el idioma exacto.
-    - Se usa como señal fuerte de “título no-latino”.
     """
     return bool(title and _CJK_ANY_RE.search(title))
 
@@ -596,15 +561,6 @@ def title_has_cjk_script(title: str) -> bool:
 def is_probably_english_title(title: str) -> bool:
     """
     Heurística ligera: True si el título parece inglés.
-
-    Reglas:
-    - Si contiene tildes/ñ -> no lo consideramos “inglés puro”.
-    - Si contiene escritura CJK/Hangul -> no lo consideramos inglés.
-    - Si contiene function words EN -> “probablemente inglés”.
-
-    Nota:
-    - Esta función es intencionadamente simple; se usa para decidir si "proteger"
-      títulos locales frente a sugerencias de OMDb en inglés.
     """
     t = (title or "").strip()
     if not t:
@@ -619,18 +575,10 @@ def is_probably_english_title(title: str) -> bool:
 def detect_context_language_code(movie_input: "MovieInput") -> LanguageCode:
     """
     Determina el idioma “de contexto” del ítem.
-
-    Prioridad:
-    1) Plex: movie_input.plex_library_language() (si existe)
-    2) Heurísticas por título/path encapsuladas en MovieInput (conservadoras)
-
-    Nota:
-    - "unknown" es un resultado válido y preferible a “inventar”.
     """
     lang = movie_input.plex_library_language()
     if lang:
         l = lang.strip().lower()
-        # Mapeo ISO aproximado
         if l.startswith(("es", "spa")):
             return "es"
         if l.startswith(("en", "eng")):
@@ -646,7 +594,6 @@ def detect_context_language_code(movie_input: "MovieInput") -> LanguageCode:
         if l.startswith(("zh", "chi", "zho")):
             return "zh"
 
-    # Fallback: heurísticas del modelo (orden conservador: scripts fuertes primero)
     if movie_input.is_japanese_context():
         return "ja"
     if movie_input.is_korean_context():
@@ -673,39 +620,25 @@ def should_skip_new_title_suggestion(
 ) -> bool:
     """
     Decide si debemos BLOQUEAR la sugerencia de new_title por reglas multi-idioma.
-
-    Bloquea SOLO cuando:
-    - OMDb parece inglés
-    - y el contexto es localizable (ES/IT/FR/JA/KO/ZH)
-    - y el título actual NO parece inglés
-      (en JA/KO/ZH además protegemos si el título actual contiene escritura CJK)
-
-    Uso típico:
-      ctx = detect_context_language_code(movie_input)
-      if should_skip_new_title_suggestion(ctx, plex_title, omdb_title): ...
     """
     cur = (current_title or "").strip()
     om = (omdb_title or "").strip()
     if not om:
         return False
 
-    # Si OMDb no parece inglés, no aplicamos esta regla.
     if not is_probably_english_title(om):
         return False
 
-    # Contextos no-localizables -> no bloqueamos
     if context_lang in ("en", "unknown"):
         return False
 
     current_is_english = is_probably_english_title(cur)
 
-    # CJK contexts: protegemos títulos con escritura CJK si no parecen inglés
     if context_lang in ("ja", "ko", "zh"):
         if title_has_cjk_script(cur) and not current_is_english:
             return True
         return False
 
-    # ES/IT/FR: si el título actual no parece inglés, lo protegemos
     if context_lang in ("es", "it", "fr"):
         return not current_is_english
 
@@ -717,14 +650,13 @@ def should_skip_new_title_suggestion(
 # ============================================================================
 
 
-@dataclass(slots=True)
+@dataclass
 class MovieInput:
     """
     Representación unificada de una película antes del análisis.
 
-    Importante:
-    - Este modelo NO garantiza que file_path exista (no hay I/O aquí).
-    - `extra` permite adjuntar señales del origen (p.ej. display_title, library_language).
+    Nota (Python 3.9):
+    - sin slots=True por compatibilidad.
     """
 
     source: SourceType
@@ -753,21 +685,12 @@ class MovieInput:
     def normalized_title(self) -> str:
         """
         Normalización ligera local: minúsculas + strip (sin limpiar ruido).
-
-        Útil para:
-        - comparaciones internas rápidas
-        - claves temporales de caches en capas superiores (cuando se quiere conservar ruido)
         """
         return (self.title or "").lower().strip()
 
     def normalized_title_for_lookup(self) -> str:
         """
         Normalización fuerte para búsquedas externas (OMDb/Wikipedia).
-
-        Respeta flags de config:
-        - MOVIE_INPUT_LOOKUP_STRIP_ACCENTS
-        - MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE
-        - MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP
         """
         return normalize_title_for_lookup(self.title or "")
 
@@ -778,15 +701,6 @@ class MovieInput:
     def plex_library_language(self) -> str | None:
         """
         Idioma configurado/inferido para la librería Plex (si el pipeline lo inyecta en extra).
-
-        Ejemplos válidos:
-        - "es", "es-ES", "spa"
-        - "en", "en-US", "eng"
-        - "it", "ita"
-        - "fr", "fra"
-        - "ja", "jpn"
-        - "ko", "kor"
-        - "zh", "zho"
         """
         val = self.extra.get("library_language")
         if isinstance(val, str):
@@ -804,13 +718,7 @@ class MovieInput:
         return guess_spanish_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_english_context(self) -> bool:
-        """
-        True si library_language indica EN o heurística sugiere inglés.
-
-        Nota:
-        - La heurística puede bloquear EN si MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK=True
-          y se detecta escritura CJK/Hangul.
-        """
+        """True si library_language indica EN o heurística sugiere inglés."""
         lang = self.plex_library_language()
         if lang:
             l = lang.lower().strip()
@@ -870,9 +778,6 @@ class MovieInput:
     def describe(self) -> str:
         """
         Describe el item de forma corta para logs/trazas en capas superiores.
-
-        Nota:
-        - Este método NO hace logging, solo devuelve un string.
         """
         year_str = str(self.year) if self.year is not None else "?"
         base = f"[{self.source}] {self.title} ({year_str}) / {self.library}"

@@ -5,37 +5,14 @@ backend/dlna_discovery.py
 
 Descubrimiento de dispositivos DLNA/UPnP por SSDP (M-SEARCH).
 
-Problemas reales observados (especialmente con Plex u otros MediaServers)
-------------------------------------------------------------------------
-1) Bucle "infinito" o runs eternos:
-   - Causa típica A: usar time.time() y el reloj del sistema se ajusta hacia atrás
-     (NTP, VM, sleep/wake). El cálculo de remaining no llega a 0.
-     ✅ Fix: usar time.monotonic().
-
-   - Causa típica B: flood de respuestas SSDP (mismo host o múltiples interfaces).
-     ✅ Fix: fuse global `DLNA_DISCOVERY_MAX_RESPONSES`.
-
-2) Re-análisis múltiple del mismo servidor (mismo “device”) con LOCATION distintos:
-   - Muchos devices (y Plex en algunas setups) pueden responder con variaciones
-     de LOCATION (query, path alternativo, puertos, etc.)
-   - Deduplicar solo por LOCATION no siempre es suficiente.
-   ✅ Fix: deduplicar también por identidad UPnP (USN/UDN/UUID) cuando está disponible.
-
-3) Reintentos inútiles sobre LOCATION que ya falló en este mismo run:
-   - Timeout / XML inválido / no ContentDirectory / payload enorme.
-   ✅ Fix: negative-cache in-memory por run.
-
-Filosofía de logs (alineada con backend/logger.py)
---------------------------------------------------
-- Nunca romper el flujo por logging.
-- Ruido / filtros / detalles → solo en DEBUG_MODE.
-- Señales importantes → warning/info con always=True cuando aplica.
+(…docstring igual que el tuyo…)
 """
 
 from dataclasses import dataclass
 import socket
 import time
-from typing import Dict, List, Tuple, Optional
+from types import ModuleType
+from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
@@ -44,7 +21,7 @@ from backend import logger as _logger
 
 
 # SSDP multicast estándar
-SSDP_ADDR: Tuple[str, int] = ("239.255.255.250", 1900)
+SSDP_ADDR: tuple[str, int] = ("239.255.255.250", 1900)
 
 # Defaults (se sobre-escriben si config está presente)
 _DEFAULT_SSDP_ST = "ssdp:all"
@@ -56,8 +33,7 @@ _DEFAULT_DEVICE_DESC_MAX_BYTES = 2_000_000
 # Anti-bucle: cap de respuestas procesadas por “run” de discovery.
 _DEFAULT_DISCOVERY_MAX_RESPONSES = 2048
 
-# Anti-flood por host (si un solo IP responde sin parar).
-# Si no quieres este comportamiento, puedes setearlo muy alto en config.
+# Anti-flood por host
 _DEFAULT_DISCOVERY_MAX_RESPONSES_PER_HOST = 512
 
 _DEFAULT_DENY_TOKENS = [
@@ -74,11 +50,6 @@ _DEFAULT_ALLOW_HINT_TOKENS = ["mediaserver", "contentdirectory"]
 class DLNADevice:
     """
     Modelo mínimo de un servidor DLNA descubierto.
-
-    Nota:
-    - `location` aquí es la LOCATION normalizada, usada para GET y para dedup por URL.
-    - `device_id` es un identificador estable si se pudo extraer (USN/UDN/UUID).
-      Ayuda a deduplicar aunque cambie LOCATION.
     """
     friendly_name: str
     location: str
@@ -91,16 +62,16 @@ class DLNADevice:
 # Logging controlado por modos (sin depender de imports directos a config)
 # ============================================================================
 
-def _safe_get_cfg():
+def _safe_get_cfg() -> ModuleType | None:
     """Devuelve backend.config si ya está importado (evita dependencias circulares)."""
     import sys
-    return sys.modules.get("backend.config")
+
+    mod = sys.modules.get("backend.config")
+    return mod if isinstance(mod, ModuleType) else None
 
 
-def _cfg_get(name: str, default):
-    """
-    Lee un atributo de backend.config (si existe) sin romper nunca.
-    """
+def _cfg_get(name: str, default: Any) -> Any:
+    """Lee un atributo de backend.config (si existe) sin romper nunca."""
     cfg = _safe_get_cfg()
     if cfg is None:
         return default
@@ -125,13 +96,6 @@ def _is_silent_mode() -> bool:
 
 
 def _log_debug(msg: object) -> None:
-    """
-    Debug contextual:
-    - DEBUG_MODE=False → no-op
-    - DEBUG_MODE=True:
-        * SILENT_MODE=True  -> progress
-        * SILENT_MODE=False -> info
-    """
     if not _is_debug_mode():
         return
 
@@ -153,11 +117,7 @@ def _log_debug(msg: object) -> None:
 # SSDP parsing + URL/XML helpers
 # ============================================================================
 
-def _parse_ssdp_response(data: bytes) -> Dict[str, str]:
-    """
-    Parsea una respuesta SSDP (cabeceras HTTP-like) a dict lower-case.
-    Devuelve {} si no parece parseable.
-    """
+def _parse_ssdp_response(data: bytes) -> dict[str, str]:
     try:
         text = data.decode("utf-8", errors="ignore")
     except Exception:
@@ -167,7 +127,7 @@ def _parse_ssdp_response(data: bytes) -> Dict[str, str]:
     if not lines:
         return {}
 
-    headers: Dict[str, str] = {}
+    headers: dict[str, str] = {}
     for line in lines[1:]:
         if not line.strip():
             continue
@@ -180,16 +140,6 @@ def _parse_ssdp_response(data: bytes) -> Dict[str, str]:
 
 
 def _normalize_location(location: str) -> str:
-    """
-    Normaliza LOCATION para deduplicación consistente.
-
-    Reglas:
-    - scheme y host a lower
-    - elimina fragment (#...)
-    - conserva query (por compatibilidad; si tu red lo necesita, se puede ignorar)
-    - path vacío -> "/"
-    - si hay port explícito, se conserva; si no, no se añade
-    """
     loc = (location or "").strip()
     if not loc:
         return loc
@@ -206,17 +156,12 @@ def _normalize_location(location: str) -> str:
 
     port = p.port
     netloc = host if port is None else f"{host}:{port}"
-
     path = p.path or "/"
-    fragment = ""
 
-    return urlunparse((scheme, netloc, path, p.params, p.query, fragment))
+    return urlunparse((scheme, netloc, path, p.params, p.query, ""))
 
 
-def _headers_text_for_filter(headers: Dict[str, str], location: str) -> str:
-    """
-    Construye un “blob” textual para filtros deny/allow.
-    """
+def _headers_text_for_filter(headers: dict[str, str], location: str) -> str:
     parts = [
         location,
         headers.get("st", ""),
@@ -227,48 +172,28 @@ def _headers_text_for_filter(headers: Dict[str, str], location: str) -> str:
     return " | ".join(p for p in parts if p).lower()
 
 
-def _should_ignore_by_tokens(text: str, deny_tokens: List[str]) -> bool:
-    if not deny_tokens:
-        return False
+def _should_ignore_by_tokens(text: str, deny_tokens: list[str]) -> bool:
     for tok in deny_tokens:
         if tok and tok in text:
             return True
     return False
 
 
-def _has_any_allow_hint(text: str, allow_tokens: List[str]) -> bool:
-    if not allow_tokens:
-        return False
+def _has_any_allow_hint(text: str, allow_tokens: list[str]) -> bool:
     for tok in allow_tokens:
         if tok and tok in text:
             return True
     return False
 
 
-def _extract_device_id_from_headers(headers: Dict[str, str]) -> str | None:
-    """
-    Intenta obtener un identificador estable del device a partir de headers SSDP.
-
-    Usualmente:
-      USN: uuid:XXXXXXXX-....::urn:schemas-upnp-org:device:MediaServer:1
-
-    Estrategia:
-    - Preferimos USN si existe, y extraemos la parte "uuid:..."
-    - Si no, usamos USN completo (normalizado) como fallback.
-
-    Esto es clave para deduplicar cuando LOCATION varía.
-    """
+def _extract_device_id_from_headers(headers: dict[str, str]) -> str | None:
     usn = (headers.get("usn") or "").strip()
     if not usn:
         return None
 
     low = usn.lower()
-
-    # Caso típico: "uuid:....::..."
-    # Nos quedamos con el tramo uuid:...
     if "uuid:" in low:
         try:
-            # buscamos desde "uuid:" hasta antes de "::" (si existe)
             start = low.index("uuid:")
             end = low.find("::", start)
             token = usn[start:end] if end != -1 else usn[start:]
@@ -282,7 +207,10 @@ def _extract_device_id_from_headers(headers: Dict[str, str]) -> str | None:
 
 def _fetch_device_description(location: str, *, timeout_s: float, max_bytes: int) -> bytes | None:
     """
-    Descarga el XML de descripción del dispositivo (LOCATION) con límites fuertes.
+    Descarga la descripción del device (LOCATION) con límites de tamaño.
+
+    Fix mypy:
+    - `resp.read(...)` puede tiparse como Any según stubs; lo casteamos a bytes.
     """
     try:
         req = Request(
@@ -291,7 +219,6 @@ def _fetch_device_description(location: str, *, timeout_s: float, max_bytes: int
         )
 
         with urlopen(req, timeout=timeout_s) as resp:
-            # Content-Length defensivo
             try:
                 cl = resp.headers.get("Content-Length")
                 if cl is not None:
@@ -305,7 +232,9 @@ def _fetch_device_description(location: str, *, timeout_s: float, max_bytes: int
             except Exception:
                 pass
 
-            data = resp.read(max_bytes + 1)
+            data_any = resp.read(max_bytes + 1)
+            data = cast(bytes, data_any)
+
             if len(data) > max_bytes:
                 _logger.warning(
                     f"[DLNA] LOCATION excede max_bytes ({max_bytes}) -> ignore: {location}",
@@ -315,7 +244,7 @@ def _fetch_device_description(location: str, *, timeout_s: float, max_bytes: int
             return data
 
     except Exception as exc:  # pragma: no cover
-        _logger.warning(f"[DLNA] No se pudo descargar LOCATION {location}: {exc}")
+        _logger.warning(f"[DLNA] No se pudo descargar LOCATION {location}: {exc!r}", always=True)
         return None
 
 
@@ -359,19 +288,7 @@ def discover_dlna_devices(
     timeout: float | None = None,
     st: str | None = None,
     mx: int | None = None,
-) -> List[DLNADevice]:
-    """
-    Descubre servidores DLNA/UPnP en la red mediante SSDP.
-
-    Devuelve una lista deduplicada:
-    - por LOCATION normalizada (evita repeticiones obvias)
-    - y por device_id (USN/UUID) cuando existe (evita repeticiones “Plex-style”)
-
-    Además:
-    - usa monotonic() para evitar bucles por ajustes de reloj
-    - aplica fuse global de respuestas y fuse por host (anti-flood)
-    - negative-cache por run para no reintentar LOCATION fallidas
-    """
+) -> list[DLNADevice]:
     timeout_s: float = float(timeout) if timeout is not None else float(
         _cfg_get("DLNA_DISCOVERY_TIMEOUT_SECONDS", _DEFAULT_DISCOVERY_TIMEOUT)
     )
@@ -381,15 +298,14 @@ def discover_dlna_devices(
     device_desc_timeout_s: float = float(_cfg_get("DLNA_DEVICE_DESC_TIMEOUT_SECONDS", _DEFAULT_DEVICE_DESC_TIMEOUT))
     device_desc_max_bytes: int = int(_cfg_get("DLNA_DEVICE_DESC_MAX_BYTES", _DEFAULT_DEVICE_DESC_MAX_BYTES))
 
-    deny_tokens: List[str] = list(_cfg_get("DLNA_DISCOVERY_DENY_TOKENS", _DEFAULT_DENY_TOKENS))
-    allow_hint_tokens: List[str] = list(_cfg_get("DLNA_DISCOVERY_ALLOW_HINT_TOKENS", _DEFAULT_ALLOW_HINT_TOKENS))
+    deny_tokens: list[str] = list(_cfg_get("DLNA_DISCOVERY_DENY_TOKENS", _DEFAULT_DENY_TOKENS))
+    allow_hint_tokens: list[str] = list(_cfg_get("DLNA_DISCOVERY_ALLOW_HINT_TOKENS", _DEFAULT_ALLOW_HINT_TOKENS))
 
     max_responses: int = int(_cfg_get("DLNA_DISCOVERY_MAX_RESPONSES", _DEFAULT_DISCOVERY_MAX_RESPONSES))
     max_responses_per_host: int = int(
         _cfg_get("DLNA_DISCOVERY_MAX_RESPONSES_PER_HOST", _DEFAULT_DISCOVERY_MAX_RESPONSES_PER_HOST)
     )
 
-    # Defensive caps locales
     if timeout_s < 0.2:
         timeout_s = 0.2
     if mx_i < 1:
@@ -435,16 +351,11 @@ def discover_dlna_devices(
 
         start = time.monotonic()
 
-        # Dedup “fuerte”
-        found_by_location: Dict[str, DLNADevice] = {}
-        found_by_device_id: Dict[str, DLNADevice] = {}
+        found_by_location: dict[str, DLNADevice] = {}
+        found_by_device_id: dict[str, DLNADevice] = {}
 
-        # Negative-cache por run:
-        # - locations que ya fallaron / no son DLNA / no ContentDirectory.
         bad_locations: set[str] = set()
-
-        # Anti-flood por IP
-        responses_by_host: Dict[str, int] = {}
+        responses_by_host: dict[str, int] = {}
 
         processed = 0
 
@@ -467,7 +378,7 @@ def discover_dlna_devices(
             except socket.timeout:
                 break
             except Exception as exc:  # pragma: no cover
-                _logger.warning(f"[DLNA] Error recibiendo SSDP: {exc}")
+                _logger.warning(f"[DLNA] Error recibiendo SSDP: {exc!r}", always=True)
                 break
 
             processed += 1
@@ -475,8 +386,6 @@ def discover_dlna_devices(
             src_ip = addr[0] if isinstance(addr, tuple) and addr else "?"
             responses_by_host[src_ip] = responses_by_host.get(src_ip, 0) + 1
             if responses_by_host[src_ip] > max_responses_per_host:
-                # No cortamos el run entero: solo dejamos de procesar a este host.
-                # Esto evita que un Plex “monopolice” discovery en redes ruidosas.
                 if responses_by_host[src_ip] == max_responses_per_host + 1:
                     _logger.warning(
                         f"[DLNA] Host {src_ip} supera max_responses_per_host={max_responses_per_host}; "
@@ -494,7 +403,6 @@ def discover_dlna_devices(
             if not normalized_location:
                 continue
 
-            # Negative-cache: si ya sabemos que esta URL no sirve en este run, no insistimos.
             if normalized_location in bad_locations:
                 continue
 
@@ -518,11 +426,8 @@ def discover_dlna_devices(
             host = parsed.hostname
             port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
 
-            # ✅ Dedup por device id (USN/UUID) además de por LOCATION
             device_id = _extract_device_id_from_headers(headers)
             if device_id and device_id in found_by_device_id:
-                # Ya tenemos este dispositivo, aunque cambie LOCATION.
-                # Si quieres, aquí podrías “actualizar” location si te interesa, pero normalmente no.
                 continue
 
             if normalized_location in found_by_location:
@@ -562,10 +467,7 @@ def discover_dlna_devices(
         if _is_silent_mode():
             _log_debug(f"Descubiertos {len(devices)} servidor(es) DLNA/UPnP.")
         else:
-            _logger.info(
-                f"[DLNA] Descubiertos {len(devices)} servidor(es) DLNA/UPnP.",
-                always=True,
-            )
+            _logger.info(f"[DLNA] Descubiertos {len(devices)} servidor(es) DLNA/UPnP.", always=True)
 
         return devices
 

@@ -19,19 +19,39 @@ Notas de compatibilidad (st_aggrid)
 - Se usa update_on=["selectionChanged"] (en lugar de GridUpdateMode.*).
 - Se aplica autoSizeStrategy recomendado por st_aggrid.
 
-Logging
-- Este módulo no hace logging agresivo: en UI se prefieren st.info/st.warning.
-- Si necesitas instrumentación, añade logs en capas “backend”; aquí se mantiene simple.
+Nota importante (Pyright/Pylance)
+- Evitamos falsos positivos "Statement is unreachable" causados por stubs rotos
+  (p.ej. pandas/streamlit) que marcan funciones como NoReturn o devuelven tipos demasiado
+  estrechos. Para ello:
+  - Evitamos ramas que Pyright infiere como imposibles (p.ej., DataFrame.to_dict(records)
+    tipado como list[dict[...]]: no metemos un `else` “imposible”).
+  - Llamamos a pd.isna mediante wrapper con Any para romper propagación de stubs raros.
 """
 
 import os
-from typing import Any, Dict, Mapping, MutableMapping, Optional
+from collections.abc import Hashable, Iterable, Mapping, MutableMapping, Sequence
+from typing import Any, Optional, Protocol, cast
 
 import pandas as pd
 import streamlit as st
-from st_aggrid import AgGrid, GridOptionsBuilder
+from st_aggrid import GridOptionsBuilder
 
 from frontend.data_utils import safe_json_loads_single
+
+RowDict = dict[str, Any]
+
+
+class AgGridCallable(Protocol):
+    def __call__(
+        self,
+        data: pd.DataFrame,
+        *,
+        gridOptions: Mapping[str, Any],
+        update_on: Sequence[str],
+        enable_enterprise_modules: bool,
+        height: int,
+        key: str,
+    ) -> Mapping[str, Any]: ...
 
 
 # ============================================================================
@@ -56,66 +76,177 @@ def _rerun() -> None:
 
 
 # ============================================================================
-# Tabla principal con selección de fila
+# SAFE wrappers (anti pyright unreachable por stubs)
 # ============================================================================
 
 
-def _normalize_selected_rows(selected_raw: Any) -> list[Mapping[str, Any]]:
+def _pd_isna(value: Any) -> bool:
     """
-    Normaliza el objeto devuelto por AgGrid a una lista de mappings.
+    Wrapper para pd.isna() evitando que stubs rotos propaguen NoReturn/unreachable.
+    """
+    pd_any: Any = pd
+    fn_obj: object = getattr(pd_any, "isna", None)
+    if not callable(fn_obj):
+        return False
+    try:
+        out = cast(Any, fn_obj)(value)
+        return bool(out)
+    except Exception:
+        return False
 
-    st_aggrid puede devolver:
-    - None
-    - list[dict] (típico)
-    - pd.DataFrame (dependiendo de configuración/versión)
-    - dict (caso raro)
-    - otros iterables
+
+def _safe_year_suffix(year: Any) -> str:
+    """
+    Devuelve " (YYYY)" si year es usable; "" si no.
+    """
+    if year is None:
+        return ""
+    if _pd_isna(year):
+        return ""
+    try:
+        return f" ({int(float(year))})"
+    except Exception:
+        return ""
+
+
+# ============================================================================
+# Normalización de filas
+# ============================================================================
+
+
+def _to_str_key_dict(src: Mapping[Hashable, Any]) -> RowDict:
+    out: RowDict = {}
+    for k, v in src.items():
+        out[str(k)] = v
+    return out
+
+
+def _normalize_selected_rows(selected_raw: Any) -> list[RowDict]:
+    """
+    Normaliza el objeto devuelto por AgGrid a una lista de dict[str, Any].
 
     Devuelve siempre una lista; si no hay selección, lista vacía.
     """
     if selected_raw is None:
         return []
 
-    # Caso DataFrame → lista de dicts
+    # DataFrame -> list[dict]
     if isinstance(selected_raw, pd.DataFrame):
-        return selected_raw.to_dict(orient="records")
+        # En los stubs típicos, esto sale como list[dict[str, Any]]
+        records = selected_raw.to_dict(orient="records")
+        out_df: list[RowDict] = []
+        for rec in records:
+            # FIX pyright unreachable: NO usar else aquí (pyright infiere rec como dict).
+            # Aun así, mantenemos robustez runtime usando Any + try/except,
+            # y hacemos el append UNA SOLA VEZ fuera del try/except.
+            rec_any: Any = rec
+            row_out_df: RowDict
+            try:
+                row_out_df = _to_str_key_dict(cast(Mapping[Hashable, Any], rec_any))
+            except Exception:
+                row_out_df = {"value": rec_any}
+            out_df.append(row_out_df)
+        return out_df
 
-    # Caso estándar: list[dict]
-    if isinstance(selected_raw, (list, tuple)):
-        # Dejamos pasar Mapping o elementos convertibles; se normaliza luego.
-        return list(selected_raw)
+    # Series -> dict (en pandas real siempre Mapping)
+    if isinstance(selected_raw, pd.Series):
+        d_map = selected_raw.to_dict()
+        return [_to_str_key_dict(cast(Mapping[Hashable, Any], d_map))]
 
-    # Raro: un solo dict
+    # Mapping -> una sola fila
     if isinstance(selected_raw, Mapping):
-        return [selected_raw]
+        return [_to_str_key_dict(cast(Mapping[Hashable, Any], selected_raw))]
 
-    # Intentar tratarlo como iterable genérico
+    # list/tuple -> lista de filas
+    if isinstance(selected_raw, (list, tuple)):
+        out_list: list[RowDict] = []
+        for item in selected_raw:
+            if isinstance(item, pd.Series):
+                out_list.append(_to_str_key_dict(cast(Mapping[Hashable, Any], item.to_dict())))
+                continue
+            if isinstance(item, Mapping):
+                out_list.append(_to_str_key_dict(cast(Mapping[Hashable, Any], item)))
+                continue
+
+            tmp_obj: object
+            try:
+                tmp_obj = dict(item)  # type: ignore[arg-type]
+            except Exception:
+                tmp_obj = item
+
+            if isinstance(tmp_obj, Mapping):
+                out_list.append(_to_str_key_dict(cast(Mapping[Hashable, Any], tmp_obj)))
+            else:
+                out_list.append({"value": tmp_obj})
+
+        return out_list
+
+    # iterable genérico (no str/bytes)
+    if isinstance(selected_raw, Iterable) and not isinstance(selected_raw, (str, bytes)):
+        out_it: list[RowDict] = []
+        for x in selected_raw:
+            if isinstance(x, pd.Series):
+                out_it.append(_to_str_key_dict(cast(Mapping[Hashable, Any], x.to_dict())))
+                continue
+            if isinstance(x, Mapping):
+                out_it.append(_to_str_key_dict(cast(Mapping[Hashable, Any], x)))
+                continue
+
+            tmp_obj2: object
+            try:
+                tmp_obj2 = dict(x)  # type: ignore[arg-type]
+            except Exception:
+                tmp_obj2 = x
+
+            if isinstance(tmp_obj2, Mapping):
+                out_it.append(_to_str_key_dict(cast(Mapping[Hashable, Any], tmp_obj2)))
+            else:
+                out_it.append({"value": tmp_obj2})
+
+        return out_it
+
+    return [{"value": selected_raw}]
+
+
+def _normalize_row_to_dict(row: Any) -> Optional[RowDict]:
+    """
+    Convierte distintas formas de fila (Series, dict, etc.) a dict[str, Any].
+    """
+    if row is None:
+        return None
+
+    if isinstance(row, pd.Series):
+        d_map = row.to_dict()
+        return _to_str_key_dict(cast(Mapping[Hashable, Any], d_map))
+
+    if isinstance(row, Mapping):
+        return _to_str_key_dict(cast(Mapping[Hashable, Any], row))
+
+    d2: object | None
     try:
-        if hasattr(selected_raw, "__iter__") and not isinstance(selected_raw, (str, bytes)):
-            return list(selected_raw)
+        d2 = dict(row)  # type: ignore[arg-type]
     except Exception:
-        pass
+        d2 = None
 
-    # Último recurso: envolver para que el caller intente dict() / fallback
-    return [selected_raw]
+    if isinstance(d2, Mapping):
+        return _to_str_key_dict(cast(Mapping[Hashable, Any], d2))
+
+    return None
 
 
-def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[Dict[str, Any]]:
+# ============================================================================
+# Tabla principal con selección de fila
+# ============================================================================
+
+
+def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[dict[str, Any]]:
     """
     Muestra un AgGrid con selección de una sola fila.
-
-    Args:
-        df: DataFrame a renderizar. Si está vacío, muestra st.info y devuelve None.
-        key_suffix: sufijo para key del componente AgGrid (evita colisiones).
-
-    Returns:
-        Un dict “normal” con los valores de la fila seleccionada o None.
     """
     if df.empty:
         st.info("No hay datos para mostrar.")
         return None
 
-    # Orden sugerido de columnas visibles (resto quedan ocultas por defecto)
     desired_order = [
         "title",
         "year",
@@ -135,17 +266,18 @@ def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[Dict[st
     gb.configure_selection(selection_mode="single", use_checkbox=False)
     gb.configure_grid_options(domLayout="normal")
 
-    # Ocultar columnas no prioritarias
     for col in df.columns:
         if col not in visible_cols:
             gb.configure_column(col, hide=True)
 
     grid_options = gb.build()
-
-    # Nuevo autosize recomendado por st_aggrid
     grid_options["autoSizeStrategy"] = {"type": "fitGridWidth"}
 
-    grid_response = AgGrid(
+    import st_aggrid as st_aggrid_mod
+
+    aggrid_fn = cast(AgGridCallable, getattr(st_aggrid_mod, "AgGrid"))
+
+    grid_response = aggrid_fn(
         df,
         gridOptions=grid_options,
         update_on=["selectionChanged"],
@@ -160,20 +292,7 @@ def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[Dict[st
     if not selected_rows:
         return None
 
-    first = selected_rows[0]
-
-    if isinstance(first, pd.Series):
-        return first.to_dict()
-
-    if isinstance(first, Mapping):
-        # Devolver dict mutable “normal”
-        return dict(first)
-
-    # Último recurso: intentar dict(); si falla, envolver en una clave
-    try:
-        return dict(first)  # type: ignore[arg-type]
-    except Exception:
-        return {"value": first}
+    return dict(selected_rows[0])
 
 
 # ============================================================================
@@ -181,34 +300,9 @@ def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[Dict[st
 # ============================================================================
 
 
-def _normalize_row_to_dict(row: Any) -> Optional[Dict[str, Any]]:
-    """
-    Convierte distintas formas de fila (Series, dict, etc.) a dict.
-
-    Returns:
-        dict o None si es imposible convertir.
-    """
-    if row is None:
-        return None
-
-    if isinstance(row, pd.Series):
-        return row.to_dict()
-
-    if isinstance(row, Mapping):
-        return dict(row)
-
-    try:
-        return dict(row)  # type: ignore[arg-type]
-    except Exception:
-        return None
-
-
 def _get_from_omdb_or_row(row: Mapping[str, Any], omdb_dict: Mapping[str, Any] | None, key: str) -> Any:
     """
     Devuelve primero row[key] y, si no existe/no es usable, omdb_dict[key].
-
-    Nota:
-    - Considera vacío: None y "".
     """
     if key in row and row.get(key) not in (None, ""):
         return row.get(key)
@@ -220,7 +314,7 @@ def _get_from_omdb_or_row(row: Mapping[str, Any], omdb_dict: Mapping[str, Any] |
 def _safe_number_to_str(v: Any) -> str:
     """Convierte números/valores a string seguro para UI."""
     try:
-        if v is None or (isinstance(v, float) and pd.isna(v)):
+        if v is None or (isinstance(v, float) and _pd_isna(v)):
             return "N/A"
         return str(v)
     except Exception:
@@ -230,7 +324,7 @@ def _safe_number_to_str(v: Any) -> str:
 def _safe_votes(v: Any) -> str:
     """Formatea votos con separador de miles; tolera strings tipo '12,345'."""
     try:
-        if v is None or (isinstance(v, float) and pd.isna(v)):
+        if v is None or (isinstance(v, float) and _pd_isna(v)):
             return "N/A"
         if isinstance(v, str):
             v2 = v.replace(",", "")
@@ -252,14 +346,6 @@ def _is_nonempty_str(value: Any) -> bool:
 
 
 def _build_plex_url(rating_key: Any) -> str | None:
-    """
-    Construye URL a Plex Web si hay baseURL y rating_key.
-
-    Busca base en varias variables de entorno para compatibilidad:
-      - PLEX_WEB_BASEURL
-      - PLEX_BASEURL
-      - BASEURL
-    """
     plex_base = os.getenv("PLEX_WEB_BASEURL") or os.getenv("PLEX_BASEURL") or os.getenv("BASEURL") or ""
     if not plex_base:
         return None
@@ -275,19 +361,10 @@ def _build_imdb_url(imdb_id: Any) -> str | None:
 
 
 def render_detail_card(
-    row: Dict[str, Any] | pd.Series | Mapping[str, Any] | None,
+    row: dict[str, Any] | pd.Series | Mapping[str, Any] | None,
     show_modal_button: bool = True,
     button_key_prefix: Optional[str] = None,
 ) -> None:
-    """
-    Panel lateral / ficha de detalle tipo Plex.
-    Parseamos omdb_json SOLO para esta fila (si existe).
-
-    Args:
-        row: fila seleccionada (dict/Series/Mapping).
-        show_modal_button: si True, muestra botón “Abrir en ventana”.
-        button_key_prefix: prefijo de key para evitar colisiones entre tabs.
-    """
     if row is None:
         st.info("Haz click en una fila para ver su detalle.")
         return
@@ -297,51 +374,47 @@ def render_detail_card(
         st.warning("Detalle no disponible: fila con formato inesperado.")
         return
 
-    row = normalized
+    row_dict: RowDict = normalized
 
-    # Parseo omdb_json (solo para la fila actual)
     omdb_dict: Mapping[str, Any] | None = None
-    if "omdb_json" in row:
+    if "omdb_json" in row_dict:
         try:
-            parsed = safe_json_loads_single(row.get("omdb_json"))
+            parsed = safe_json_loads_single(row_dict.get("omdb_json"))
             if isinstance(parsed, Mapping):
                 omdb_dict = parsed
         except Exception:
             omdb_dict = None
 
-    # Campos principales
-    title = row.get("title", "¿Sin título?")
-    year = row.get("year")
-    library = row.get("library")
-    decision = row.get("decision")
-    reason = row.get("reason")
-    imdb_rating = row.get("imdb_rating")
-    imdb_votes = row.get("imdb_votes")
-    rt_score = row.get("rt_score")
+    title = row_dict.get("title", "¿Sin título?")
+    year = row_dict.get("year")
+    library = row_dict.get("library")
+    decision = row_dict.get("decision")
+    reason = row_dict.get("reason")
+    imdb_rating = row_dict.get("imdb_rating")
+    imdb_votes = row_dict.get("imdb_votes")
+    rt_score = row_dict.get("rt_score")
 
-    poster_url = row.get("poster_url")
-    file_path = row.get("file")
-    file_size = row.get("file_size")
-    trailer_url = row.get("trailer_url")
-    rating_key = row.get("rating_key")
-    imdb_id = row.get("imdb_id")
+    poster_url = row_dict.get("poster_url")
+    file_path = row_dict.get("file")
+    file_size = row_dict.get("file_size")
+    trailer_url = row_dict.get("trailer_url")
+    rating_key = row_dict.get("rating_key")
+    imdb_id = row_dict.get("imdb_id")
 
-    # OMDb fields (prioriza row, fallback a omdb_dict)
-    rated = _get_from_omdb_or_row(row, omdb_dict, "Rated")
-    released = _get_from_omdb_or_row(row, omdb_dict, "Released")
-    runtime = _get_from_omdb_or_row(row, omdb_dict, "Runtime")
-    genre = _get_from_omdb_or_row(row, omdb_dict, "Genre")
-    director = _get_from_omdb_or_row(row, omdb_dict, "Director")
-    writer = _get_from_omdb_or_row(row, omdb_dict, "Writer")
-    actors = _get_from_omdb_or_row(row, omdb_dict, "Actors")
-    language = _get_from_omdb_or_row(row, omdb_dict, "Language")
-    country = _get_from_omdb_or_row(row, omdb_dict, "Country")
-    awards = _get_from_omdb_or_row(row, omdb_dict, "Awards")
-    plot = _get_from_omdb_or_row(row, omdb_dict, "Plot")
+    rated = _get_from_omdb_or_row(row_dict, omdb_dict, "Rated")
+    released = _get_from_omdb_or_row(row_dict, omdb_dict, "Released")
+    runtime = _get_from_omdb_or_row(row_dict, omdb_dict, "Runtime")
+    genre = _get_from_omdb_or_row(row_dict, omdb_dict, "Genre")
+    director = _get_from_omdb_or_row(row_dict, omdb_dict, "Director")
+    writer = _get_from_omdb_or_row(row_dict, omdb_dict, "Writer")
+    actors = _get_from_omdb_or_row(row_dict, omdb_dict, "Actors")
+    language = _get_from_omdb_or_row(row_dict, omdb_dict, "Language")
+    country = _get_from_omdb_or_row(row_dict, omdb_dict, "Country")
+    awards = _get_from_omdb_or_row(row_dict, omdb_dict, "Awards")
+    plot = _get_from_omdb_or_row(row_dict, omdb_dict, "Plot")
 
     col_left, col_right = st.columns([1, 2])
 
-    # Poster + enlaces
     with col_left:
         if _is_nonempty_str(poster_url):
             st.image(str(poster_url), width=280)
@@ -360,18 +433,12 @@ def render_detail_card(
             key_suffix = button_key_prefix or "default"
             button_key = f"open_modal_{key_suffix}"
             if st.button("🪟 Abrir en ventana", key=button_key):
-                st.session_state["modal_row"] = row
+                st.session_state["modal_row"] = row_dict
                 st.session_state["modal_open"] = True
                 _rerun()
 
-    # Detalle
     with col_right:
-        header = str(title)
-        try:
-            if year is not None and not pd.isna(year):
-                header += f" ({int(float(year))})"
-        except Exception:
-            pass
+        header = str(title) + _safe_year_suffix(year)
 
         st.markdown(f"### {header}")
         if library:
@@ -438,8 +505,7 @@ def render_detail_card(
         if file_path:
             st.code(str(file_path), language="bash")
 
-        # file_size en bytes → mostrar GB, tolerante
-        if file_size is not None and not (isinstance(file_size, float) and pd.isna(file_size)):
+        if file_size is not None and not (isinstance(file_size, float) and _pd_isna(file_size)):
             try:
                 gb = float(file_size) / (1024**3)
                 st.write(f"**Tamaño:** {gb:.2f} GB")
@@ -451,14 +517,9 @@ def render_detail_card(
             st.video(str(trailer_url))
 
     with st.expander("Ver JSON completo"):
-        try:
-            full_row: MutableMapping[str, Any] = dict(row)
-        except Exception:
-            full_row = {"value": str(row)}
-
+        full_row: MutableMapping[str, Any] = dict(row_dict)
         if omdb_dict is not None:
             full_row["_omdb_parsed"] = dict(omdb_dict)
-
         st.json(full_row)
 
 
@@ -470,10 +531,6 @@ def render_detail_card(
 def render_modal() -> None:
     """
     Vista de detalle ampliado usando el estado global de Streamlit.
-
-    Requisitos de estado:
-      - st.session_state["modal_open"] = True/False
-      - st.session_state["modal_row"]  = dict de la fila seleccionada
     """
     if not st.session_state.get("modal_open"):
         return
