@@ -5,86 +5,11 @@ backend/analyze_input_core.py
 
 Core genérico de análisis para una película (MovieInput), independiente del origen
 (Plex, DLNA, fichero local, etc.).
-
-Principios de diseño
---------------------
-- Puro y testeable:
-    * No hace IO de disco.
-    * No hace red directamente (inyecta fetch_omdb).
-    * No escribe caches.
-    * No hace logging imperativo:
-        - Solo emite trazas si se inyecta callback (analysis_trace)
-        - O, en modo debug, usa logger central debug_ctx (si existe)
-- Defensivo:
-    * Nunca debe lanzar por instrumentación, parseo o scoring.
-    * Un fallo en OMDb / parseo de ratings NO debe cambiar una decisión fuerte.
-    * Normaliza decision/reason y añade reason_code estable.
-- Performante:
-    * Lazy OMDb en 2 fases: evita llamadas externas cuando no aportan valor.
-    * Minimiza branching (fase B extraída a helper).
-    * Optimiza integración con run_metrics (lazy bind opcional).
-
-Normalización
--------------
-- decision: {KEEP, DELETE, MAYBE, UNKNOWN}
-- reason: texto legible para UI/logs humanos
-- reason_code: código estable para métricas/analytics (evita texto libre)
-
-Lazy OMDb (2 fases)
--------------------
-Fase A (barata):
-- scoring sin ratings (IMDB/RT/votes None)
-- si decisión es fuerte (KEEP/DELETE) => NO se llama a OMDb
-
-Fase B (cara):
-- solo si decisión es MAYBE/UNKNOWN:
-    * fetch_omdb(title, year)
-    * valida payload “usable”
-    * extrae ratings
-    * recalcula scoring con señales reales
-    * si OMDb usable, ejecuta detect_misidentified()
-
-Guardrails
-----------
-- Si OMDb falla / no usable / ratings no parsean:
-    * No altera decisiones fuertes (no aplicable porque fuertes no llaman OMDb)
-    * Para MAYBE/UNKNOWN: la decisión final queda como la de fase A
-      (o equivalente si compute_scoring es estable a señales None).
-
-Observabilidad: micro-métricas (best-effort)
---------------------------------------------
-- analyze_core.decision_strong_without_omdb
-- analyze_core.decision_changed_after_omdb
-- analyze_core.decision_changed_after_omdb.to_keep / to_delete / to_maybe / to_unknown
-- analyze_core.inconsistency.delete_with_high_imdb
-- analyze_core.inconsistency.keep_with_low_imdb
-- analyze_core.delete_but_misidentified
-- analyze_core.strong_potential_contradiction_without_omdb (heurística; no hace red)
-
-Knobs centralizables (backend/config o backend/config_core)
-----------------------------------------------------------
-Este módulo hace best-effort: si una variable no existe, usa defaults razonables.
-
-- COLLECTION_TRACE_LINE_MAX_CHARS
-- ANALYZE_TRACE_REASON_MAX_CHARS
-- ANALYZE_CORE_METRICS_ENABLED
-- ANALYZE_INCONSISTENCY_DELETE_IMDB_MIN_RATING
-- ANALYZE_INCONSISTENCY_DELETE_IMDB_MIN_VOTES
-- ANALYZE_INCONSISTENCY_KEEP_IMDB_MAX_RATING
-- ANALYZE_INCONSISTENCY_KEEP_IMDB_MIN_VOTES
-- ANALYZE_LOOKUP_TITLE_FALLBACK_ENABLED
-- ANALYZE_LOOKUP_TITLE_FALLBACK_MAX_CHARS
-- ANALYZE_METRICS_STRONG_POTENTIAL_CONTRADICTION_ENABLED
-- ANALYZE_METRICS_LAZY_BIND_ENABLED
-
-Salida
-------
-Devuelve un AnalysisRow (fila base). Capas superiores pueden enriquecer con:
-- poster_url, trailer_url, omdb_json, wiki ids, etc.
 """
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from types import TracebackType
 from typing import Final, Protocol, TypedDict, cast
 
 from backend.decision_logic import detect_misidentified
@@ -126,7 +51,7 @@ except Exception:  # pragma: no cover
 # Helpers de configuración (NO lanzan)
 # =============================================================================
 
-def _cfg_get_attr(name: str) -> object:
+def _cfg_get_attr(name: str) -> object | None:
     """
     Busca un atributo en:
       1) backend.config (si existe)
@@ -146,34 +71,91 @@ def _cfg_get_attr(name: str) -> object:
     return None
 
 
-def _cfg_get_int(name: str, default: int) -> int:
-    v = _cfg_get_attr(name)
-    if v is None:
-        return int(default)
+def _to_int(value: object | None, default: int) -> int:
+    """
+    Conversión defensiva y Pyright-friendly a int.
+    Acepta: int/float/bool/str; cualquier otra cosa -> default.
+    """
+    if value is None:
+        return default
     try:
-        return int(v)
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return default
+            # permite "12.0"
+            return int(float(s))
+        # último intento (puede fallar si no es int-like)
+        return int(value)  # type: ignore[arg-type]
     except Exception:
-        return int(default)
+        return default
+
+
+def _to_float(value: object | None, default: float) -> float:
+    """
+    Conversión defensiva y Pyright-friendly a float.
+    Acepta: int/float/bool/str; cualquier otra cosa -> default.
+    """
+    if value is None:
+        return default
+    try:
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return default
+            return float(s)
+        return float(value)  # type: ignore[arg-type]
+    except Exception:
+        return default
+
+
+def _to_bool(value: object | None, default: bool) -> bool:
+    """
+    Conversión defensiva a bool.
+    - bool -> mismo
+    - int/float -> bool(x)
+    - str -> reconoce true/false comunes
+    - resto -> default
+    """
+    if value is None:
+        return default
+    try:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            s = value.strip().lower()
+            if s in {"1", "true", "t", "yes", "y", "on"}:
+                return True
+            if s in {"0", "false", "f", "no", "n", "off"}:
+                return False
+            return default
+        return bool(value)
+    except Exception:
+        return default
+
+
+def _cfg_get_int(name: str, default: int) -> int:
+    return _to_int(_cfg_get_attr(name), default)
 
 
 def _cfg_get_float(name: str, default: float) -> float:
-    v = _cfg_get_attr(name)
-    if v is None:
-        return float(default)
-    try:
-        return float(v)
-    except Exception:
-        return float(default)
+    return _to_float(_cfg_get_attr(name), default)
 
 
 def _cfg_get_bool(name: str, default: bool) -> bool:
-    v = _cfg_get_attr(name)
-    if v is None:
-        return bool(default)
-    try:
-        return bool(v)
-    except Exception:
-        return bool(default)
+    return _to_bool(_cfg_get_attr(name), default)
 
 
 # =============================================================================
@@ -193,11 +175,11 @@ _INCONS_DELETE_MIN_VOTES: Final[int] = _cfg_get_int("ANALYZE_INCONSISTENCY_DELET
 _INCONS_KEEP_MAX_RATING: Final[float] = _cfg_get_float("ANALYZE_INCONSISTENCY_KEEP_IMDB_MAX_RATING", 4.5)
 _INCONS_KEEP_MIN_VOTES: Final[int] = _cfg_get_int("ANALYZE_INCONSISTENCY_KEEP_IMDB_MIN_VOTES", 25_000)
 
-# Fallback de lookup_title (si normalized_title_for_lookup() devuelve vacío)
+# Fallback de lookup_title
 _LOOKUP_TITLE_FALLBACK_ENABLED: Final[bool] = _cfg_get_bool("ANALYZE_LOOKUP_TITLE_FALLBACK_ENABLED", True)
 _LOOKUP_TITLE_FALLBACK_MAX_CHARS: Final[int] = _cfg_get_int("ANALYZE_LOOKUP_TITLE_FALLBACK_MAX_CHARS", 180)
 
-# Métrica heurística para “contradicción” sin OMDb (no hace red)
+# Métrica heurística
 _STRONG_POTENTIAL_CONTRADICTION_ENABLED: Final[bool] = _cfg_get_bool(
     "ANALYZE_METRICS_STRONG_POTENTIAL_CONTRADICTION_ENABLED",
     True,
@@ -206,8 +188,6 @@ _STRONG_POTENTIAL_CONTRADICTION_ENABLED: Final[bool] = _cfg_get_bool(
 _REASON_FALLBACK: Final[str] = "scoring did not provide a usable reason"
 _VALID_DECISIONS: Final[set[str]] = {"KEEP", "MAYBE", "DELETE", "UNKNOWN"}
 _LOG_TAG: Final[str] = "analyze_core"
-
-# Prefijo centralizado de métricas (evita typos)
 _METRIC_PREFIX: Final[str] = "analyze_core."
 
 
@@ -223,7 +203,6 @@ class _ObserveSecondsFn(Protocol):
     def __call__(self, name: str, *, seconds: float) -> None: ...
 
 
-# Cache de binding (opcional) para reducir getattr en hot path
 _METRICS_BIND_LOCKED: bool = False
 _METRICS_INC_FN: _IncFn | None = None
 _METRICS_OBS_FN: _ObserveSecondsFn | None = None
@@ -251,10 +230,6 @@ def _metrics_bind_once() -> None:
 
 
 def _m(name: str, value: int = 1) -> None:
-    """
-    Incrementa métrica con prefijo unificado.
-    Nunca rompe el análisis.
-    """
     if not _METRICS_ENABLED or _rm is None:
         return
     full = f"{_METRIC_PREFIX}{name}"
@@ -264,7 +239,6 @@ def _m(name: str, value: int = 1) -> None:
             if _METRICS_INC_FN is not None:
                 _METRICS_INC_FN(full, value=value)
                 return
-        # fallback sin binding
         fn_obj = getattr(_rm, "inc", None) or getattr(_rm, "counter_inc", None)
         if callable(fn_obj):
             cast(_IncFn, fn_obj)(full, value=value)
@@ -273,10 +247,6 @@ def _m(name: str, value: int = 1) -> None:
 
 
 def _m_obs(name: str, seconds: float) -> None:
-    """
-    Observa timing con prefijo unificado.
-    Nunca rompe el análisis.
-    """
     if not _METRICS_ENABLED or _rm is None:
         return
     full = f"{_METRIC_PREFIX}{name}"
@@ -303,7 +273,12 @@ class _RM_Timer:
         self._t0 = monotonic()
         return self
 
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         from time import monotonic
         _m_obs(self._name, monotonic() - self._t0)
 
@@ -313,14 +288,6 @@ class _RM_Timer:
 # =============================================================================
 
 class AnalysisRow(TypedDict, total=False):
-    """
-    Contrato de salida mínimo del core.
-
-    Compatibilidad:
-    - Mantiene: decision, reason.
-    - Añade: reason_code (estable) y metadatos (phaseA/phaseB).
-    """
-
     source: str
     library: str
     title: str
@@ -400,12 +367,6 @@ def _extract_bayes_from_scoring(scoring: Mapping[str, object]) -> float | None:
 
 
 def _is_omdb_usable(omdb_data: Mapping[str, object]) -> bool:
-    """
-    Determina si el payload OMDb es usable.
-
-    Evita falsos positivos típicos:
-    - {"Response":"False", "Error":"Movie not found!"}
-    """
     resp = omdb_data.get("Response")
     if isinstance(resp, str) and resp.strip().lower() == "true":
         return True
@@ -426,18 +387,6 @@ def _collapse_spaces(s: str) -> str:
 
 
 def _get_lookup_title(movie: MovieInput, *, trace: Callable[[str], None]) -> str:
-    """
-    Obtiene el título “lookup” para OMDb.
-
-    Política:
-    1) movie.normalized_title_for_lookup().strip()
-    2) Si queda vacío y fallback habilitado:
-        - usa movie.title colapsando espacios
-        - recorta a ANALYZE_LOOKUP_TITLE_FALLBACK_MAX_CHARS
-
-    Nota:
-    - Solo mejora cobertura; no cambia decisiones fuertes (porque fuertes no llaman OMDb).
-    """
     try:
         primary = (movie.normalized_title_for_lookup() or "").strip()
     except Exception:
@@ -466,14 +415,6 @@ def _get_lookup_title(movie: MovieInput, *, trace: Callable[[str], None]) -> str
 # =============================================================================
 
 def _make_tracer(analysis_trace: TraceCallable | None) -> Callable[[str], None]:
-    """
-    Devuelve una función trace(msg) segura y truncada.
-
-    Prioridad:
-    - Si analysis_trace está inyectado: se usa ese callback
-    - Si no: logger.debug_ctx(tag=analyze_core) si existe
-    - Si no hay logger: no hace nada
-    """
     def _trace(msg: str) -> None:
         clipped = _clip(msg, max_len=_TRACE_LINE_MAX_CHARS)
 
@@ -507,20 +448,6 @@ def _derive_reason_code(
     omdb_usable: bool,
     has_signals: bool,
 ) -> str:
-    """
-    Construye un reason_code estable.
-
-    Prioridad:
-    1) scoring["reason_code"] si existe y es str no vacío
-    2) Heurística local conservadora:
-        - decision final
-        - si se usó OMDb
-        - si OMDb era usable
-        - si existen señales reales
-
-    Nota:
-    - reason_code es para telemetría estable (no string-matching del reason humano).
-    """
     if scoring is not None:
         rc = scoring.get("reason_code")
         if isinstance(rc, str) and rc.strip():
@@ -552,17 +479,6 @@ def _compute_scoring_safe(
     metacritic_score: int | None,
     trace: Callable[[str], None],
 ) -> tuple[str, str, float | None, Mapping[str, object] | None]:
-    """
-    Ejecuta compute_scoring de forma defensiva.
-
-    Returns:
-        (decision_norm, reason_norm, imdb_bayes_opt, scoring_or_none)
-
-    Garantías:
-    - No lanza.
-    - decision siempre pertenece a _VALID_DECISIONS.
-    - reason siempre es string no vacío.
-    """
     try:
         scoring = compute_scoring(
             imdb_rating=imdb_rating,
@@ -597,7 +513,7 @@ def _compute_scoring_safe(
 
 
 # =============================================================================
-# Phase B (OMDb) – extraído para reducir branching
+# Phase B (OMDb)
 # =============================================================================
 
 @dataclass(frozen=True)
@@ -622,17 +538,6 @@ def _run_phaseB_omdb(
     metacritic_score: int | None,
     trace: Callable[[str], None],
 ) -> _PhaseBResult:
-    """
-    Ejecuta:
-      - fetch_omdb
-      - validación de payload
-      - extracción de ratings
-      - re-scoring
-
-    Garantías:
-    - No lanza.
-    - Si OMDb falla/no usable: ratings quedan None y la decisión saldrá estable.
-    """
     used_omdb = False
     omdb_usable = False
     omdb_data: dict[str, object] = {}
@@ -744,15 +649,6 @@ def analyze_input_movie(
     metacritic_score: int | None = None,
     analysis_trace: TraceCallable | None = None,
 ) -> AnalysisRow:
-    """
-    Analiza una película genérica (MovieInput) usando señales externas (OMDb).
-
-    - Fase A: scoring sin OMDb
-    - Fase B: OMDb solo si fase A es MAYBE/UNKNOWN
-    - Misidentified: solo si OMDb usable
-
-    Devuelve una fila base robusta y consistente.
-    """
     _m("calls", 1)
 
     with _RM_Timer("seconds"):
@@ -761,7 +657,6 @@ def analyze_input_movie(
         lib = movie.library or ""
         title_raw = movie.title or ""
 
-        # lookup_title: normalizado + fallback defensivo (para no perder cobertura)
         lookup_title = _get_lookup_title(movie, trace=trace)
 
         trace(
@@ -773,9 +668,6 @@ def analyze_input_movie(
             f"lookup_title={_safe_str(lookup_title, max_len=120)}"
         )
 
-        # ------------------------------------------------------------------
-        # Fase A: scoring sin OMDb
-        # ------------------------------------------------------------------
         _m("phaseA.calls", 1)
         decisionA, reasonA, imdb_bayesA, scoringA = _compute_scoring_safe(
             imdb_rating=None,
@@ -805,11 +697,7 @@ def analyze_input_movie(
             _m("decision_strong_without_omdb", 1)
             trace(f"phaseB | skipped omdb (decision strong: {decisionA})")
 
-            # (2) Heurística: “strong” con posible contradicción sin OMDb (NO hace red)
             if _STRONG_POTENTIAL_CONTRADICTION_ENABLED:
-                # Ejemplos conservadores:
-                # - DELETE pero plex_rating alto (si está disponible)
-                # - KEEP pero plex_rating extremadamente bajo
                 try:
                     if decisionA == "DELETE" and isinstance(plex_rating, (int, float)) and float(plex_rating) >= 8.0:
                         _m("strong_potential_contradiction_without_omdb", 1)
@@ -843,7 +731,6 @@ def analyze_input_movie(
 
         decision_phaseB = decision_final
 
-        # Micro-métrica: decisión cambió tras OMDb
         if used_omdb and decision_phaseA != decision_phaseB:
             _m("decision_changed_after_omdb", 1)
             _m(f"decision_changed_after_omdb.to_{decision_phaseB.lower()}", 1)
@@ -852,9 +739,6 @@ def analyze_input_movie(
         _m("used_omdb.true", 1 if used_omdb else 0)
         _m("used_omdb.false", 1 if not used_omdb else 0)
 
-        # ------------------------------------------------------------------
-        # Misidentified: solo si OMDb usable (no solo “used_omdb”)
-        # ------------------------------------------------------------------
         misidentified_hint = ""
         if omdb_data:
             _m("misidentified.ran", 1)
@@ -893,15 +777,10 @@ def analyze_input_movie(
         else:
             trace("misidentified | skipped (no usable omdb data)")
 
-        # (4) Métrica: DELETE pero misidentified sugiere mismatch (solo observación)
         if decision_phaseB == "DELETE" and misidentified_hint.strip():
             _m("delete_but_misidentified", 1)
             trace("inconsistency | DELETE but misidentified_hint is present")
 
-        # ------------------------------------------------------------------
-        # Inconsistencias (observación; NO cambia decisión)
-        # ------------------------------------------------------------------
-        # DELETE con IMDb muy alto + votos altos
         if (
             decision_phaseB == "DELETE"
             and isinstance(imdb_rating, (int, float))
@@ -916,7 +795,6 @@ def analyze_input_movie(
                 f"min_rating={_INCONS_DELETE_MIN_RATING} min_votes={_INCONS_DELETE_MIN_VOTES}"
             )
 
-        # KEEP con IMDb muy bajo + votos altos
         if (
             decision_phaseB == "KEEP"
             and isinstance(imdb_rating, (int, float))
@@ -931,9 +809,6 @@ def analyze_input_movie(
                 f"max_rating={_INCONS_KEEP_MAX_RATING} min_votes={_INCONS_KEEP_MIN_VOTES}"
             )
 
-        # ------------------------------------------------------------------
-        # reason_code estable (5)
-        # ------------------------------------------------------------------
         has_signals = any(v is not None for v in (imdb_rating, imdb_votes, rt_score))
         reason_code = _derive_reason_code(
             scoring=scoring_final,
@@ -943,9 +818,6 @@ def analyze_input_movie(
             has_signals=has_signals,
         )
 
-        # ------------------------------------------------------------------
-        # Fila base
-        # ------------------------------------------------------------------
         row: AnalysisRow = {
             "source": movie.source,
             "library": movie.library,

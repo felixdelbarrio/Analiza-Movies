@@ -14,8 +14,16 @@
     "tests"
   ],
   "typeCheckingMode": "standard",
-  "pythonVersion": "3.9",
+  "pythonVersion": "3.14",
   "pythonPlatform": "All",
+  "venvPath": ".",
+  "venv": ".venv",
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": ["."]
+    }
+  ],
   "reportMissingImports": "none",
   "reportMissingTypeStubs": "none",
   "reportUnknownMemberType": "none",
@@ -23,5 +31,5 @@
   "reportUnknownArgumentType": "none",
   "reportUnusedImport": "warning",
   "reportUnusedVariable": "warning",
-  "useLibraryCodeForTypes": true
+  "useLibraryCodeForTypes": false
 }

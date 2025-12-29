@@ -57,7 +57,64 @@ import logging
 import os
 import sys
 import threading
-from typing import Final
+from types import ModuleType, TracebackType
+from typing import Final, Mapping, TypedDict, Unpack
+
+# ============================================================================
+# TIPOS: kwargs seguros para logging
+# ============================================================================
+
+_ExcInfoTuple = tuple[type[BaseException], BaseException, TracebackType | None]
+ExcInfo = bool | _ExcInfoTuple | BaseException | None
+
+
+class LogKwargs(TypedDict, total=False):
+    """
+    Subconjunto útil de kwargs soportados por logging.Logger.*.
+
+    Nota:
+    - logging acepta más kwargs (p.ej. "extra"), pero aquí recogemos lo relevante.
+    - Esto hace feliz a Pyright y mantiene compatibilidad.
+    """
+    exc_info: ExcInfo
+    stack_info: bool
+    stacklevel: int
+    extra: Mapping[str, object] | None
+
+
+def _filter_log_kwargs(kwargs: Mapping[str, object]) -> LogKwargs:
+    """
+    Best-effort: filtra kwargs no tipados a un conjunto seguro para logging.
+
+    Motivo:
+    - Nuestro API público históricamente aceptaba **kwargs: object.
+    - Pyright (y los stubs de logging) no aceptan reenviar `object` como kwargs.
+    """
+    out: LogKwargs = {}
+
+    if "exc_info" in kwargs:
+        # Aceptamos lo que logging soporta; si no cuadra, lo ignoramos.
+        v = kwargs.get("exc_info")
+        if v is None or isinstance(v, (bool, BaseException)) or isinstance(v, tuple):
+            out["exc_info"] = v  # type: ignore[assignment]
+
+    if "stack_info" in kwargs:
+        v = kwargs.get("stack_info")
+        if isinstance(v, bool):
+            out["stack_info"] = v
+
+    if "stacklevel" in kwargs:
+        v = kwargs.get("stacklevel")
+        if isinstance(v, int):
+            out["stacklevel"] = v
+
+    if "extra" in kwargs:
+        v = kwargs.get("extra")
+        if v is None or isinstance(v, Mapping):
+            out["extra"] = v  # type: ignore[assignment]
+
+    return out
+
 
 # ============================================================================
 # CONFIGURACIÓN GLOBAL
@@ -77,19 +134,20 @@ _FILE_HANDLER_TAG: Final[str] = "_movies_cleaner_file_handler"
 # Lock para evitar mezclar líneas del progress() cuando hay hilos.
 _PROGRESS_FILE_LOCK = threading.Lock()
 
-
 # ============================================================================
 # UTILIDADES CONFIG / FLAGS (sin importar backend.config directamente)
 # ============================================================================
 
-def _safe_get_cfg() -> object | None:
+
+def _safe_get_cfg() -> ModuleType | None:
     """
     Devuelve el módulo backend.config si ya ha sido importado.
 
     Motivo:
     - Evita dependencias circulares (config importando logger y logger importando config).
     """
-    return sys.modules.get("backend.config")
+    mod = sys.modules.get("backend.config")
+    return mod if isinstance(mod, ModuleType) else None
 
 
 def _cfg_bool(name: str, default: bool = False) -> bool:
@@ -139,6 +197,7 @@ def is_debug_mode() -> bool:
 # ============================================================================
 # RESOLUCIÓN DE LEVEL + EXTERNAL LOGGERS
 # ============================================================================
+
 
 def _resolve_level_from_config() -> int:
     """
@@ -192,7 +251,7 @@ def _apply_root_level(level: int) -> None:
             pass
 
 
-def _should_enable_http_debug(cfg: object | None) -> bool:
+def _should_enable_http_debug(cfg: ModuleType | None) -> bool:
     """Si HTTP_DEBUG=True, no silenciamos urllib3/requests/plexapi."""
     if cfg is None:
         return False
@@ -232,6 +291,7 @@ def _configure_external_loggers(*, level: int) -> None:
 # ============================================================================
 # FILE LOGGING (opcional, controlado por config)
 # ============================================================================
+
 
 def _file_logging_enabled() -> bool:
     """
@@ -374,8 +434,7 @@ def _append_progress_to_file(message: str) -> None:
 
         with _PROGRESS_FILE_LOCK:
             with open(path, "a", encoding="utf-8") as f:
-                # Importante: progress es “señal limpia” (sin timestamps).
-                # En el fichero convivirá con logs con timestamp (FileHandler).
+                # progress es señal limpia (sin timestamps)
                 f.write(f"{message}\n")
     except Exception:
         return
@@ -384,6 +443,7 @@ def _append_progress_to_file(message: str) -> None:
 # ============================================================================
 # INICIALIZACIÓN DEL LOGGER
 # ============================================================================
+
 
 def _ensure_configured() -> logging.Logger:
     """
@@ -444,6 +504,7 @@ def get_logger() -> logging.Logger:
 # CONTROL DE SILENT MODE (para logs con niveles)
 # ============================================================================
 
+
 def _should_log(*, always: bool = False) -> bool:
     """
     Decide si un mensaje debe emitirse (para debug/info/warning).
@@ -459,6 +520,7 @@ def _should_log(*, always: bool = False) -> bool:
 # ============================================================================
 # PROGRESO / HEARTBEAT (NO logging)
 # ============================================================================
+
 
 def progress(message: str) -> None:
     """
@@ -493,47 +555,125 @@ def progressf(fmt: str, *args: object) -> None:
 # API PÚBLICA DE LOGGING
 # ============================================================================
 
-def debug(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+# Nota: dejamos el API “friendly”:
+# - Se puede llamar con kwargs tipados (ideal)
+# - Si alguien mete kwargs raros, los filtramos y seguimos (best-effort)
+
+
+def debug(
+    msg: str,
+    *args: object,
+    always: bool = False,
+    **kwargs: Unpack[LogKwargs],
+) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
-    kwargs.pop("always", None)
     try:
         log.debug(msg, *args, **kwargs)
     except Exception:
         pass
 
 
-def info(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+def info(
+    msg: str,
+    *args: object,
+    always: bool = False,
+    **kwargs: Unpack[LogKwargs],
+) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
-    kwargs.pop("always", None)
     try:
         log.info(msg, *args, **kwargs)
     except Exception:
         pass
 
 
-def warning(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+def warning(
+    msg: str,
+    *args: object,
+    always: bool = False,
+    **kwargs: Unpack[LogKwargs],
+) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
-    kwargs.pop("always", None)
     try:
         log.warning(msg, *args, **kwargs)
     except Exception:
         pass
 
 
-def error(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+def error(
+    msg: str,
+    *args: object,
+    always: bool = False,
+    **kwargs: Unpack[LogKwargs],
+) -> None:
     """
     ERROR siempre se emite (ignora SILENT_MODE). `always` se acepta por compat.
     """
     log = _ensure_configured()
-    kwargs.pop("always", None)
     try:
         log.error(msg, *args, **kwargs)
+    except Exception:
+        try:
+            print(msg)
+        except Exception:
+            pass
+
+
+# ============================================================================
+# COMPAT: si hay llamadas legacy con **kwargs: object
+# ============================================================================
+# Si en algún punto de tu proyecto haces cosas como:
+#   logger.info("x", extra=algo_no_mapping, foo=123)
+# y no quieres tocar todos los callsites, puedes usar estas variantes:
+#
+#   info_any(..., **kwargs: object)
+#
+# No las uso en debug_ctx porque ahí ya controlas tú el payload.
+
+
+def debug_any(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+    if not _should_log(always=always):
+        return
+    log = _ensure_configured()
+    try:
+        safe = _filter_log_kwargs(kwargs)  # type: ignore[arg-type]
+        log.debug(msg, *args, **safe)
+    except Exception:
+        pass
+
+
+def info_any(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+    if not _should_log(always=always):
+        return
+    log = _ensure_configured()
+    try:
+        safe = _filter_log_kwargs(kwargs)  # type: ignore[arg-type]
+        log.info(msg, *args, **safe)
+    except Exception:
+        pass
+
+
+def warning_any(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+    if not _should_log(always=always):
+        return
+    log = _ensure_configured()
+    try:
+        safe = _filter_log_kwargs(kwargs)  # type: ignore[arg-type]
+        log.warning(msg, *args, **safe)
+    except Exception:
+        pass
+
+
+def error_any(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+    log = _ensure_configured()
+    try:
+        safe = _filter_log_kwargs(kwargs)  # type: ignore[arg-type]
+        log.error(msg, *args, **safe)
     except Exception:
         try:
             print(msg)

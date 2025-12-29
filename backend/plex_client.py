@@ -30,9 +30,9 @@ Acumula contadores para:
 
 Sin I/O a disco y sin datos sensibles (no IDs, no paths, no tokens).
 
-Configuración (backend/config.py)
----------------------------------
-Este archivo usa directamente variables del config (ya existen):
+Configuración (backend/config_plex.py)
+--------------------------------------
+Este archivo usa directamente variables del config:
 
 - PLEX_METRICS_ENABLED: bool
 - PLEX_METRICS_TOP_N: int
@@ -41,7 +41,7 @@ Este archivo usa directamente variables del config (ya existen):
 """
 
 from collections import Counter
-from collections.abc import Mapping, Sequence  # ✅ Mapping definido (parche Pylance)
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
@@ -50,33 +50,27 @@ import requests  # type: ignore[import-not-found]
 from plexapi.server import PlexServer  # type: ignore[import-not-found]
 
 from backend import logger as _logger
+from backend.config_base import DEBUG_MODE, SILENT_MODE
 from backend.config_plex import (
     BASEURL,
     EXCLUDE_PLEX_LIBRARIES,
     PLEX_PORT,
     PLEX_TOKEN,
-    # ✅ ya están en config.py: sin try/except
     PLEX_METRICS_ENABLED,
     PLEX_METRICS_TOP_N,
     PLEX_METRICS_LOG_ON_SILENT_DEBUG,
     PLEX_METRICS_LOG_EVEN_IF_ZERO,
-)
-from backend.config_base import (
-    DEBUG_MODE,
-    SILENT_MODE,
 )
 
 # ============================================================
 #                        LOGGING
 # ============================================================
 
+
 def _log(msg: object) -> None:
     """
     Info normal (visible si SILENT_MODE=False).
-
-    Regla:
-    - Preferimos backend/logger.py.
-    - Si por lo que sea falla el logger, fallback a print solo si NO silent.
+    Preferimos backend/logger.py. Fallback a print solo si NO silent.
     """
     try:
         _logger.info(str(msg))
@@ -88,7 +82,6 @@ def _log(msg: object) -> None:
 def _log_always(msg: object) -> None:
     """
     Aviso importante, visible incluso en SILENT_MODE.
-
     Mantiene la semántica del proyecto: warning(always=True).
     """
     try:
@@ -99,7 +92,7 @@ def _log_always(msg: object) -> None:
 
 def _log_debug(msg: object) -> None:
     """
-    Debug contextual:
+    Debug contextual (respeta backend/config_base).
 
     - DEBUG_MODE=False => no emite.
     - DEBUG_MODE=True:
@@ -124,15 +117,16 @@ def _log_debug(msg: object) -> None:
 #                 MÉTRICAS (in-memory, thread-safe)
 # ============================================================
 
+
 @dataclass(slots=True)
 class PlexMetrics:
     """
     Contadores agregados de eventos relevantes del cliente Plex.
 
-    Diseño:
     - Actualización concurrente (ThreadPool) => lock externo global.
-    - Sin datos sensibles: NO IDs, NO rutas de archivo, NO tokens.
+    - Sin datos sensibles.
     """
+
     network_attr_errors_total: int = 0
     network_attr_errors_by_attr: Counter[str] = field(default_factory=Counter)
     network_attr_errors_by_exc: Counter[str] = field(default_factory=Counter)
@@ -163,12 +157,10 @@ _METRICS_LOCK = Lock()
 
 
 def _metrics_enabled() -> bool:
-    """Permite apagar métricas completamente desde config/env."""
     return bool(PLEX_METRICS_ENABLED)
 
 
 def _metrics_inc_network_attr_error(attr: str, exc: BaseException) -> None:
-    """Incrementa métricas de fallo de red en lectura de atributo."""
     if not _metrics_enabled():
         return
     exc_name = exc.__class__.__name__
@@ -179,7 +171,6 @@ def _metrics_inc_network_attr_error(attr: str, exc: BaseException) -> None:
 
 
 def _metrics_inc_helper_failure(helper_name: str, exc: BaseException) -> None:
-    """Incrementa métricas de fallo interno de helper (defensivo)."""
     if not _metrics_enabled():
         return
     exc_name = exc.__class__.__name__
@@ -190,7 +181,6 @@ def _metrics_inc_helper_failure(helper_name: str, exc: BaseException) -> None:
 
 
 def _metrics_inc_connect_failure(exc: BaseException) -> None:
-    """Incrementa métricas de fallo de conexión a Plex."""
     if not _metrics_enabled():
         return
     exc_name = exc.__class__.__name__
@@ -200,11 +190,7 @@ def _metrics_inc_connect_failure(exc: BaseException) -> None:
 
 
 def get_plex_metrics_snapshot() -> dict[str, object]:
-    """
-    API pública: snapshot de métricas (para reports/tests).
-
-    Si las métricas están desactivadas, devuelve estructura “vacía” estable.
-    """
+    """API pública: snapshot de métricas (estructura estable)."""
     if not _metrics_enabled():
         return {
             "network_attr_errors_total": 0,
@@ -243,9 +229,15 @@ def log_plex_metrics(*, force: bool = False) -> None:
     """
     snap = get_plex_metrics_snapshot()
 
-    net_total = int(snap.get("network_attr_errors_total") or 0)
-    helper_total = int(snap.get("helper_failures_total") or 0)
-    conn_total = int(snap.get("connect_failures_total") or 0)
+    def _safe_int(v: object) -> int:
+        try:
+            return int(v)  # type: ignore[arg-type]
+        except Exception:
+            return 0
+
+    net_total = _safe_int(snap.get("network_attr_errors_total"))
+    helper_total = _safe_int(snap.get("helper_failures_total"))
+    conn_total = _safe_int(snap.get("connect_failures_total"))
 
     if (
         not force
@@ -261,24 +253,23 @@ def log_plex_metrics(*, force: bool = False) -> None:
     except Exception:
         top_n = 5
 
-    def _top(d: Mapping[str, object], n: int) -> list[tuple[str, int]]:
-        items: list[tuple[str, int]] = []
-        try:
-            for k, v in d.items():
-                try:
-                    items.append((str(k), int(v)))  # type: ignore[arg-type]
-                except Exception:
-                    continue
-        except Exception:
+    def _top(d: object, n: int) -> list[tuple[str, int]]:
+        if not isinstance(d, Mapping):
             return []
-        items.sort(key=lambda kv: kv[1], reverse=True)
+        items: list[tuple[str, int]] = []
+        for k, v in d.items():
+            try:
+                items.append((str(k), int(v)))  # type: ignore[arg-type]
+            except Exception:
+                continue
+        items.sort(key=lambda kv: (-kv[1], kv[0]))
         return items[:n]
 
-    top_attrs = _top(snap.get("network_attr_errors_by_attr") or {}, top_n)
-    top_exc = _top(snap.get("network_attr_errors_by_exc") or {}, top_n)
-    top_helpers = _top(snap.get("helper_failures_by_name") or {}, top_n)
-    top_helper_exc = _top(snap.get("helper_failures_by_exc") or {}, top_n)
-    top_conn_exc = _top(snap.get("connect_failures_by_exc") or {}, top_n)
+    top_attrs = _top(snap.get("network_attr_errors_by_attr"), top_n)
+    top_exc = _top(snap.get("network_attr_errors_by_exc"), top_n)
+    top_helpers = _top(snap.get("helper_failures_by_name"), top_n)
+    top_helper_exc = _top(snap.get("helper_failures_by_exc"), top_n)
+    top_conn_exc = _top(snap.get("connect_failures_by_exc"), top_n)
 
     lines: list[str] = []
     lines.append("[PLEX] Metrics summary")
@@ -312,17 +303,15 @@ def log_plex_metrics(*, force: bool = False) -> None:
 #               Helpers defensivos (plexapi / red)
 # ============================================================
 
+
 def _is_networkish_exception(exc: BaseException) -> bool:
     """
     Heurística para detectar errores típicos de red en plexapi.
 
     Cubre:
     - requests.exceptions.RequestException
-    - ConnectionError / OSError
+    - OSError / ConnectionError
     - nombres típicos de http.client / urllib3 (RemoteDisconnected, ProtocolError, timeouts, resets)
-
-    Nota:
-    - plexapi puede envolver errores; matching por nombre ayuda a capturar más casos.
     """
     try:
         if isinstance(exc, (requests.exceptions.RequestException, OSError, ConnectionError)):
@@ -346,18 +335,13 @@ def _is_networkish_exception(exc: BaseException) -> bool:
 def _safe_getattr(obj: object, attr: str, default: Any = None) -> Any:
     """
     getattr() robusto:
-
     - Nunca lanza.
     - Captura fallos de red provocados por lazy reload de plexapi.
     - Devuelve default si algo va mal.
 
     Logs:
-    - Error de red: warning always=True (se ve incluso en SILENT).
-    - Otros errores: debug (para no ensuciar modo normal).
-
-    Métricas:
-    - Error de red: network_attr_errors_*
-    - Otros: helper_failures_* (para diagnosticar estructuras raras)
+    - Error de red: warning always=True.
+    - Otros errores: debug.
     """
     try:
         return getattr(obj, attr, default)
@@ -365,24 +349,17 @@ def _safe_getattr(obj: object, attr: str, default: Any = None) -> Any:
         if _is_networkish_exception(exc):
             _metrics_inc_network_attr_error(attr, exc)
             _log_always(
-                f"[PLEX] Network error reading attribute {attr!r} "
-                f"(lazy reload skipped): {exc!r}"
+                f"[PLEX] Network error reading attribute {attr!r} (lazy reload skipped): {exc!r}"
             )
             return default
 
         _metrics_inc_helper_failure("_safe_getattr", exc)
-        _log_debug(f"_safe_getattr({attr}) failed: {exc!r}")
+        _log_debug(f"_safe_getattr({attr!r}) failed: {exc!r}")
         return default
 
 
 def _safe_getattr_str(obj: object, attr: str) -> str | None:
-    """
-    Lee un atributo string de forma segura.
-
-    - Si es str: strip() y devuelve None si queda vacío.
-    - Si no: None.
-    - Nunca lanza.
-    """
+    """Lee un atributo string de forma segura (strip; vacío => None)."""
     val = _safe_getattr(obj, attr, None)
     if isinstance(val, str):
         s = val.strip()
@@ -394,15 +371,13 @@ def _safe_getattr_str(obj: object, attr: str) -> str | None:
 #                     CONEXIÓN A PLEX
 # ============================================================
 
+
 def _build_plex_base_url() -> str:
     """
     Construye la URL base para Plex:
-
         BASEURL="http://192.168.1.10"
         PLEX_PORT=32400
         -> "http://192.168.1.10:32400"
-
-    Falla rápido si BASEURL falta.
     """
     if not BASEURL or not str(BASEURL).strip():
         raise RuntimeError("BASEURL no está definido en el entorno (.env)")
@@ -419,14 +394,10 @@ def connect_plex() -> PlexServer:
     """
     Conecta a Plex y devuelve PlexServer.
 
-    Reglas:
     - Faltan BASEURL/PLEX_TOKEN -> RuntimeError
     - Fallo de conexión -> se re-lanza (caller decide)
-
-    Métricas:
-    - connect_failures_*.
     """
-    if not BASEURL or not PLEX_TOKEN:
+    if not BASEURL or not str(BASEURL).strip() or not PLEX_TOKEN or not str(PLEX_TOKEN).strip():
         raise RuntimeError("Faltan BASEURL o PLEX_TOKEN en el .env")
 
     base_url = _build_plex_base_url()
@@ -435,7 +406,7 @@ def connect_plex() -> PlexServer:
         _log_debug(f"Connecting to Plex at {base_url}")
 
     try:
-        plex = PlexServer(base_url, PLEX_TOKEN)
+        plex = PlexServer(base_url, str(PLEX_TOKEN))
     except Exception as exc:
         _metrics_inc_connect_failure(exc)
         _log_always(f"[PLEX] ERROR conectando a Plex ({base_url}): {exc!r}")
@@ -452,6 +423,7 @@ def connect_plex() -> PlexServer:
 # ============================================================
 #              BIBLIOTECAS A ANALIZAR
 # ============================================================
+
 
 def get_libraries_to_analyze(plex: PlexServer) -> list[object]:
     """
@@ -491,6 +463,7 @@ def get_libraries_to_analyze(plex: PlexServer) -> list[object]:
 #            INFO DE ARCHIVOS DE PELÍCULAS
 # ============================================================
 
+
 def get_movie_file_info(movie: object) -> tuple[str | None, int | None]:
     """
     Devuelve (ruta_principal, tamaño_total_en_bytes).
@@ -521,9 +494,21 @@ def get_movie_file_info(movie: object) -> tuple[str | None, int | None]:
                 if best_path is None and isinstance(file_path, str) and file_path.strip():
                     best_path = file_path.strip()
 
-                if isinstance(size_val, int) and size_val > 0:
-                    total_size += size_val
-                    size_seen = True
+                # ✅ Pylance: size puede venir como float/str; normalizamos defensivo a int
+                if isinstance(size_val, bool):
+                    continue
+                if isinstance(size_val, (int, float)):
+                    iv = int(size_val)
+                    if iv > 0:
+                        total_size += iv
+                        size_seen = True
+                elif isinstance(size_val, str):
+                    s = size_val.strip().replace(",", "")
+                    if s.isdigit():
+                        iv = int(s)
+                        if iv > 0:
+                            total_size += iv
+                            size_seen = True
 
         if best_path is None:
             return None, None
@@ -540,15 +525,11 @@ def get_movie_file_info(movie: object) -> tuple[str | None, int | None]:
 #           IMDB ID DESDE GUIDS PLEX
 # ============================================================
 
-def get_imdb_id_from_plex_guid(guid: str) -> str | None:
-    """
-    Extrae imdb_id (tt1234567) desde un guid de Plex.
 
-    Solo reconoce guids con 'imdb://'.
-    """
+def get_imdb_id_from_plex_guid(guid: str) -> str | None:
+    """Extrae imdb_id (tt1234567) desde un guid de Plex (reconoce 'imdb://')."""
     if not isinstance(guid, str) or "imdb://" not in guid:
         return None
-
     try:
         after = guid.split("imdb://", 1)[1]
         imdb_id = after.split("?", 1)[0].strip()
@@ -560,10 +541,8 @@ def get_imdb_id_from_plex_guid(guid: str) -> str | None:
 def get_imdb_id_from_movie(movie: object) -> str | None:
     """
     Intenta obtener imdb_id desde:
-    1) movie.guids
-    2) movie.guid (fallback)
-
-    Best-effort: nunca lanza.
+      1) movie.guids
+      2) movie.guid (fallback)
     """
     try:
         guids = _safe_getattr(movie, "guids", None) or []
@@ -589,6 +568,7 @@ def get_imdb_id_from_movie(movie: object) -> str | None:
 #        MEJOR TÍTULO PARA BÚSQUEDA (OMDb / Wiki)
 # ============================================================
 
+
 def get_best_search_title(movie: object) -> str | None:
     """
     Devuelve el mejor título para buscar en OMDb/Wiki.
@@ -596,8 +576,6 @@ def get_best_search_title(movie: object) -> str | None:
     Prioridad:
       1) originalTitle
       2) title
-
-    100% no-throw.
     """
     t1 = _safe_getattr_str(movie, "originalTitle")
     if t1:
@@ -608,3 +586,16 @@ def get_best_search_title(movie: object) -> str | None:
         return t2
 
     return None
+
+
+__all__ = [
+    "connect_plex",
+    "get_libraries_to_analyze",
+    "get_movie_file_info",
+    "get_imdb_id_from_movie",
+    "get_imdb_id_from_plex_guid",
+    "get_best_search_title",
+    "get_plex_metrics_snapshot",
+    "reset_plex_metrics",
+    "log_plex_metrics",
+]

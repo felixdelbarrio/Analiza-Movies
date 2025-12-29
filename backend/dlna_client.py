@@ -5,73 +5,19 @@ backend/dlna_client.py
 
 Cliente DLNA/UPnP: discovery + navegación + traversal seguro (ContentDirectory).
 
-Por qué existe
---------------
-El orquestador DLNA había crecido demasiado mezclando:
-- IO de red DLNA (SOAP, device description XML, browse/paginación)
-- Lógica de UX (selecciones CLI)
-- Traversal anti-loop
-- Orquestación de análisis / reporting
-
-Este módulo extrae el “cliente” DLNA para:
-- Reutilización y testabilidad (aislar IO DLNA).
-- Robustez (anti-loops, fuses, retry/backoff, circuit breaker opcional).
-- Rendimiento (cache de endpoints por device.location, early exits, parse tolerante DIDL).
-
-Política de logs (alineada con backend/logger.py)
-------------------------------------------------
-- Menús/prompt y validación de input: SIEMPRE visibles -> logger.info(..., always=True)
-- Hitos de flujo (selecciones, pasos principales): logger.progress(...)
-- Debug contextual: logger.debug_ctx("DLNA", ...) cuando DEBUG_MODE=True (el logger decide visibilidad).
-- Errores de IO/pipeline DLNA: logger.error(..., always=True)
-- Nunca lanzar por logging (best-effort).
-
-Garantías / guardrails
-----------------------
-- Traversal con visited_containers para evitar ciclos.
-- Fuses configurables para evitar catálogos virtuales/paginación infinita:
-    * DLNA_TRAVERSE_MAX_DEPTH
-    * DLNA_TRAVERSE_MAX_CONTAINERS
-    * DLNA_TRAVERSE_MAX_ITEMS_TOTAL
-    * DLNA_TRAVERSE_MAX_EMPTY_PAGES
-    * DLNA_TRAVERSE_MAX_PAGES_PER_CONTAINER
-- Parseo DIDL-Lite tolerante (Result escapado).
-- Retry/backoff y circuit breaker opcional (backend.resilience si existe).
-- No depende de OMDb / scoring / reporting: solo navegación DLNA.
-
-API (alto nivel)
-----------------
-- DLNAClient.discover() -> list[DLNADevice]
-- DLNAClient.ask_user_to_select_device() -> DLNADevice | None
-
-- DLNAClient.list_root_containers(device) -> list[DlnaContainer]
-- DLNAClient.list_video_root_containers(device) -> list[DlnaContainer]
-- DLNAClient.list_child_containers(device, parent_object_id) -> list[DlnaContainer]
-- DLNAClient.auto_descend_folder_browse(device, container, max_levels=3) -> DlnaContainer
-- DLNAClient.iter_video_items_recursive(device, root_object_id, limits=...) -> (items, stats)
-
-UX de contenedores (centralizada aquí)
---------------------------------------
-- DLNAClient.ask_user_to_select_video_containers(device)
-    -> (chosen_video_root, selected_containers) | None
-
-Contadores agregados (para resumen del orquestador)
----------------------------------------------------
-Este módulo incrementa contadores agregados para que el resumen en analiza_dlna.py
-cuadre sin tener que conocer detalles internos:
-- dlna.browse.errors
-- dlna.xml_fetch.errors
-Además de:
-- dlna.{action}.calls / dlna.{action}.errors / dlna.{action}.latency_ms
-- dlna.{action}.blocked_by_circuit (si hay circuit breaker)
+Objetivo (post-split):
+- Este módulo SOLO hace: discovery + UX (selecciones) + Browse/Traversal robusto.
+- El orquestador (analiza_dlna.py) hace: orquestación, concurrencia, writers, reporting.
 """
 
+import importlib
 import random
 import threading
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final, TypeVar
 from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
@@ -107,38 +53,44 @@ except Exception:  # pragma: no cover
 
     METRICS = _NoopMetrics()  # type: ignore[assignment]
 
+
 # ---------------------------------------------------------------------------
-# Config best-effort (preferimos backend.config agregador)
+# Config best-effort (SIN imports estáticos -> Pylance 0)
+# 1) backend.config_dlna
+# 2) backend.config (fachada)
+# 3) defaults locales
 # ---------------------------------------------------------------------------
-try:
-    from backend.config import DLNA_BROWSE_MAX_RETRIES  # type: ignore
-except Exception:  # pragma: no cover
-    DLNA_BROWSE_MAX_RETRIES = 2  # type: ignore
 
-try:
-    from backend.config import DLNA_CB_FAILURE_THRESHOLD  # type: ignore
-except Exception:  # pragma: no cover
-    DLNA_CB_FAILURE_THRESHOLD = 5  # type: ignore
 
-try:
-    from backend.config import DLNA_CB_OPEN_SECONDS  # type: ignore
-except Exception:  # pragma: no cover
-    DLNA_CB_OPEN_SECONDS = 20.0  # type: ignore
+def _get_cfg(name: str, default: Any) -> Any:
+    """
+    Lee una constante de config de forma segura y sin imports estáticos.
+    Así Pylance no marca "símbolo de importación desconocido".
+    """
+    for modname in ("backend.config_dlna", "backend.config"):
+        try:
+            mod = importlib.import_module(modname)
+        except Exception:
+            continue
+        try:
+            if hasattr(mod, name):
+                return getattr(mod, name)
+        except Exception:
+            continue
+    return default
 
-try:
-    from backend.config import (  # type: ignore
-        DLNA_TRAVERSE_MAX_CONTAINERS,
-        DLNA_TRAVERSE_MAX_DEPTH,
-        DLNA_TRAVERSE_MAX_EMPTY_PAGES,
-        DLNA_TRAVERSE_MAX_ITEMS_TOTAL,
-        DLNA_TRAVERSE_MAX_PAGES_PER_CONTAINER,
-    )
-except Exception:  # pragma: no cover
-    DLNA_TRAVERSE_MAX_DEPTH = 30  # type: ignore
-    DLNA_TRAVERSE_MAX_CONTAINERS = 20_000  # type: ignore
-    DLNA_TRAVERSE_MAX_ITEMS_TOTAL = 300_000  # type: ignore
-    DLNA_TRAVERSE_MAX_EMPTY_PAGES = 3  # type: ignore
-    DLNA_TRAVERSE_MAX_PAGES_PER_CONTAINER = 20_000  # type: ignore
+
+# Retries / circuit breaker knobs
+DLNA_BROWSE_MAX_RETRIES: int = int(_get_cfg("DLNA_BROWSE_MAX_RETRIES", 2))
+DLNA_CB_FAILURE_THRESHOLD: int = int(_get_cfg("DLNA_CB_FAILURE_THRESHOLD", 5))
+DLNA_CB_OPEN_SECONDS: float = float(_get_cfg("DLNA_CB_OPEN_SECONDS", 20.0))
+
+# Traversal fuses
+DLNA_TRAVERSE_MAX_DEPTH: int = int(_get_cfg("DLNA_TRAVERSE_MAX_DEPTH", 30))
+DLNA_TRAVERSE_MAX_CONTAINERS: int = int(_get_cfg("DLNA_TRAVERSE_MAX_CONTAINERS", 20_000))
+DLNA_TRAVERSE_MAX_ITEMS_TOTAL: int = int(_get_cfg("DLNA_TRAVERSE_MAX_ITEMS_TOTAL", 300_000))
+DLNA_TRAVERSE_MAX_EMPTY_PAGES: int = int(_get_cfg("DLNA_TRAVERSE_MAX_EMPTY_PAGES", 3))
+DLNA_TRAVERSE_MAX_PAGES_PER_CONTAINER: int = int(_get_cfg("DLNA_TRAVERSE_MAX_PAGES_PER_CONTAINER", 20_000))
 
 # ---------------------------------------------------------------------------
 # Constantes locales deliberadas (estabilidad con servers DLNA “quirky”)
@@ -162,9 +114,11 @@ _USER_AGENT: Final[str] = "AnalizaMovies-DLNAClient/1.0"
 # Modelos públicos
 # =============================================================================
 
+
 @dataclass(frozen=True, slots=True)
 class DLNAEndpoints:
     """Endpoints ContentDirectory necesarios para ejecutar Browse."""
+
     control_url: str
     service_type: str
 
@@ -172,6 +126,7 @@ class DLNAEndpoints:
 @dataclass(frozen=True, slots=True)
 class DlnaContainer:
     """Contenedor DLNA (carpeta/categoría) accesible por ObjectID."""
+
     object_id: str
     title: str
 
@@ -186,6 +141,7 @@ class DlnaVideoItem:
     - size_bytes: tamaño aproximado si el server lo aporta.
     - item_id: DIDL item@id si existe (útil para dedupe adicional local).
     """
+
     title: str
     resource_url: str
     size_bytes: int | None
@@ -199,6 +155,7 @@ class TraversalLimits:
 
     Son límites duros; al alcanzarlos, el traversal corta.
     """
+
     max_depth: int
     max_containers: int
     max_items_total: int
@@ -226,17 +183,16 @@ if CircuitBreaker is not None:
 # Logging centralizado (best-effort)
 # =============================================================================
 
-def _dbg(msg: object) -> None:
-    """
-    Debug contextual DLNA. No decide visibilidad; delega en logger.debug_ctx.
-    """
+
+def _dbg(msg: str) -> None:
+    """Debug contextual DLNA (tipado estable)."""
     if not DEBUG_MODE:
         return
     try:
         if hasattr(logger, "debug_ctx"):
             logger.debug_ctx("DLNA", msg)  # type: ignore[attr-defined]
         else:
-            logger.debug(str(msg))
+            logger.debug(msg)
     except Exception:
         return
 
@@ -244,6 +200,7 @@ def _dbg(msg: object) -> None:
 # =============================================================================
 # Helpers XML / HTTP
 # =============================================================================
+
 
 def _xml_text(elem: ET.Element | None) -> str | None:
     if elem is None or elem.text is None:
@@ -254,7 +211,7 @@ def _xml_text(elem: ET.Element | None) -> str | None:
 
 def _backoff_sleep(attempt: int) -> None:
     a = max(0, int(attempt))
-    delay = min(_DLNA_RETRY_CAP_SECONDS, _DLNA_RETRY_BASE_SECONDS * (2 ** a))
+    delay = min(_DLNA_RETRY_CAP_SECONDS, _DLNA_RETRY_BASE_SECONDS * (2**a))
     if _DLNA_RETRY_JITTER > 0:
         delay = max(0.0, delay * (1.0 + random.uniform(-_DLNA_RETRY_JITTER, _DLNA_RETRY_JITTER)))
     time.sleep(delay)
@@ -274,10 +231,7 @@ def _dlna_should_retry(exc: BaseException) -> bool:
 
 
 def _incr_aggregate_error_counter(action: str) -> None:
-    """
-    Contadores agregados (para resumen del orquestador).
-    Centralizamos aquí para no duplicar lógica en varios sitios.
-    """
+    """Contadores agregados (para resumen del orquestador)."""
     try:
         if action == "browse":
             METRICS.incr("dlna.browse.errors")
@@ -287,12 +241,14 @@ def _incr_aggregate_error_counter(action: str) -> None:
         return
 
 
-def _resilient_call(*, endpoint_key: str, action: str, fn):
+_T = TypeVar("_T")
+
+
+def _resilient_call(*, endpoint_key: str, action: str, fn: Callable[[], _T]) -> _T | None:
     """
     Ejecuta IO DLNA con:
     - circuit breaker si backend.resilience está disponible
     - retry/backoff si no
-
     Devuelve resultado o None.
     """
     t0 = time.monotonic()
@@ -354,7 +310,6 @@ def _fetch_xml_root(url: str, timeout_s: float = _XML_FETCH_TIMEOUT_S) -> ET.Ele
 
     root = _resilient_call(endpoint_key=endpoint_key, action="xml_fetch", fn=_do)
     if root is None:
-        # xml_fetch.errors ya se incrementa en _resilient_call
         logger.warning(f"[DLNA] No se pudo descargar/parsear XML {url}", always=True)
     return root
 
@@ -429,6 +384,7 @@ def _find_content_directory_endpoints(device_location: str) -> DLNAEndpoints | N
 # SOAP Browse
 # =============================================================================
 
+
 def _soap_browse_direct_children(
     control_url: str,
     service_type: str,
@@ -439,11 +395,6 @@ def _soap_browse_direct_children(
     """
     Ejecuta BrowseDirectChildren y devuelve:
         (children_elements, total_matches)
-
-    Robustez:
-    - Resiliente (retry/backoff + circuit breaker) sobre el POST SOAP.
-    - DIDL-Lite puede venir escapado dentro de <Result>.
-    - TotalMatches puede faltar -> fallback len(children).
     """
     endpoint_key = f"dlna:soap:{control_url}"
 
@@ -479,7 +430,6 @@ def _soap_browse_direct_children(
 
     raw = _resilient_call(endpoint_key=endpoint_key, action="browse", fn=_do)
     if raw is None:
-        # browse.errors ya se incrementa en _resilient_call
         return None
 
     try:
@@ -512,7 +462,6 @@ def _soap_browse_direct_children(
     try:
         didl = ET.fromstring(result_text)
     except Exception:
-        # Caso típico DLNA: entidades escapadas dentro de <Result>
         unescaped = (
             result_text.replace("&lt;", "<")
             .replace("&gt;", ">")
@@ -537,6 +486,7 @@ def _soap_browse_direct_children(
 # Heurísticas DLNA (Plex / roots / carpetas)
 # =============================================================================
 
+
 def is_plex_server(device: DLNADevice) -> bool:
     """Heurística: Plex Media Server suele anunciarse así en friendly_name."""
     try:
@@ -546,15 +496,22 @@ def is_plex_server(device: DLNADevice) -> bool:
 
 
 def _is_likely_video_root_title(title: str) -> bool:
-    """Heurística para detectar raíces de vídeo."""
     t = (title or "").strip().lower()
     if not t:
         return False
 
     negative = (
-        "music", "música", "audio",
-        "photo", "photos", "foto", "fotos",
-        "picture", "pictures", "imagen", "imágenes",
+        "music",
+        "música",
+        "audio",
+        "photo",
+        "photos",
+        "foto",
+        "fotos",
+        "picture",
+        "pictures",
+        "imagen",
+        "imágenes",
     )
     if any(n in t for n in negative):
         return False
@@ -564,7 +521,6 @@ def _is_likely_video_root_title(title: str) -> bool:
 
 
 def _folder_browse_container_score(title: str) -> int:
-    """Score para detectar “Browse by folder / Folders / Carpetas”."""
     t = (title or "").strip().lower()
     if not t:
         return 0
@@ -576,18 +532,34 @@ def _folder_browse_container_score(title: str) -> int:
 
 
 def is_plex_virtual_container_title(title: str) -> bool:
-    """Plex expone “vistas virtuales” por DLNA; normalmente no son buenas para análisis/borrado."""
     t = (title or "").strip().lower()
     if not t:
         return True
 
     plex_virtual_tokens = (
-        "video channels", "channels", "shared video", "remote video",
-        "watch later", "recommended", "preferences", "continue watching",
-        "recently viewed", "recently added", "recently released",
-        "by collection", "by edition", "by genre", "by year", "by decade",
-        "by director", "by starring actor", "by country", "by content rating",
-        "by rating", "by resolution", "by first letter",
+        "video channels",
+        "channels",
+        "shared video",
+        "remote video",
+        "watch later",
+        "recommended",
+        "preferences",
+        "continue watching",
+        "recently viewed",
+        "recently added",
+        "recently released",
+        "by collection",
+        "by edition",
+        "by genre",
+        "by year",
+        "by decade",
+        "by director",
+        "by starring actor",
+        "by country",
+        "by content rating",
+        "by rating",
+        "by resolution",
+        "by first letter",
     )
     return any(tok in t for tok in plex_virtual_tokens)
 
@@ -596,8 +568,8 @@ def is_plex_virtual_container_title(title: str) -> bool:
 # Extracción DIDL video items
 # =============================================================================
 
+
 def _is_video_item(elem: ET.Element) -> bool:
-    """Heurística: upnp:class o protocolInfo sugieren vídeo."""
     upnp_class: str | None = None
     protocol_info: str | None = None
 
@@ -617,7 +589,6 @@ def _is_video_item(elem: ET.Element) -> bool:
 
 
 def _safe_parse_int(value: object) -> int | None:
-    """Parse defensivo para size bytes."""
     try:
         if value is None:
             return None
@@ -633,15 +604,10 @@ def _safe_parse_int(value: object) -> int | None:
 
 
 def _normalize_resource_url(url: str) -> str:
-    """
-    Normaliza resource URL para dedupe local.
-    - No tocamos query/params (Plex puede incluir tokens).
-    """
     return (url or "").strip()
 
 
 def _extract_video_item(elem: ET.Element) -> DlnaVideoItem | None:
-    """Extrae (title, resource_url, size, item_id) de un <item>."""
     title: str | None = None
     resource_url: str | None = None
     size_bytes: int | None = None
@@ -670,10 +636,8 @@ def _extract_video_item(elem: ET.Element) -> DlnaVideoItem | None:
 # Limits
 # =============================================================================
 
+
 def build_traversal_limits() -> TraversalLimits:
-    """
-    Construye límites desde config + clamps ultra defensivos.
-    """
     max_depth = max(1, int(DLNA_TRAVERSE_MAX_DEPTH))
     max_containers = max(100, int(DLNA_TRAVERSE_MAX_CONTAINERS))
     max_items_total = max(1_000, int(DLNA_TRAVERSE_MAX_ITEMS_TOTAL))
@@ -693,11 +657,8 @@ def build_traversal_limits() -> TraversalLimits:
 # CLI helpers (selección de carpetas / contenedores)
 # =============================================================================
 
+
 def _parse_multi_selection(raw: str, max_value: int) -> list[int] | None:
-    """
-    Parsea selección múltiple "1,2,5" (1-indexed).
-    Devuelve lista unique preservando orden, o None si inválida.
-    """
     parts = [p.strip() for p in raw.split(",") if p.strip()]
     if not parts:
         return None
@@ -803,20 +764,15 @@ def _select_folders_plex(client: "DLNAClient", base: DlnaContainer, device: DLNA
 # Cliente DLNA
 # =============================================================================
 
-class DLNAClient:
-    """
-    Cliente DLNA/UPnP orientado a navegación.
 
-    Nota:
-    - Instancia ligera; el cache de endpoints está a nivel de módulo (thread-safe).
-    """
+class DLNAClient:
+    """Cliente DLNA/UPnP orientado a navegación."""
 
     # -----------------------------
     # Discovery / selección
     # -----------------------------
 
     def discover(self) -> list[DLNADevice]:
-        """Descubre servidores DLNA/UPnP en red (wrapping backend.dlna_discovery)."""
         try:
             return discover_dlna_devices()
         except Exception as exc:
@@ -824,7 +780,6 @@ class DLNAClient:
             return []
 
     def ask_user_to_select_device(self) -> DLNADevice | None:
-        """Selección interactiva CLI de servidor (Enter cancela)."""
         logger.info("\nBuscando servidores DLNA/UPnP en la red...\n", always=True)
         devices = self.discover()
 
@@ -870,12 +825,6 @@ class DLNAClient:
             return chosen
 
     def ask_user_to_select_video_containers(self, device: DLNADevice) -> tuple[DlnaContainer, list[DlnaContainer]] | None:
-        """
-        UX completa de navegación:
-        - selecciona root de vídeo si hay varios
-        - auto_descend_folder_browse (si aplica)
-        - menú Plex/no-Plex y selección final de contenedores
-        """
         roots = self.list_video_root_containers(device)
         if not roots:
             logger.error("[DLNA] No se han encontrado contenedores raíz de vídeo.", always=True)
@@ -909,7 +858,6 @@ class DLNAClient:
         if DEBUG_MODE and base.object_id != chosen_root.object_id:
             _dbg(f"auto_descend: {chosen_root.title!r} -> {base.title!r}")
 
-        # Plex vs no-Plex se decide aquí; el orquestador no debería conocerlo.
         selected = _select_folders_plex(self, base, device) if is_plex_server(device) else _select_folders_non_plex(self, base, device)
         if selected is None:
             return None
@@ -926,7 +874,6 @@ class DLNAClient:
     # -----------------------------
 
     def list_root_containers(self, device: DLNADevice) -> list[DlnaContainer]:
-        """Lista contenedores bajo ObjectID raíz '0'."""
         endpoints = _find_content_directory_endpoints(device.location)
         if endpoints is None:
             logger.error(f"[DLNA] El dispositivo '{device.friendly_name}' no expone ContentDirectory.", always=True)
@@ -950,12 +897,10 @@ class DLNAClient:
         return out
 
     def list_video_root_containers(self, device: DLNADevice) -> list[DlnaContainer]:
-        """Filtra raíces que parecen de vídeo."""
         roots = self.list_root_containers(device)
         return [c for c in roots if _is_likely_video_root_title(c.title)]
 
     def list_child_containers(self, device: DLNADevice, parent_object_id: str) -> list[DlnaContainer]:
-        """Lista contenedores hijo de un parent ObjectID."""
         endpoints = _find_content_directory_endpoints(device.location)
         if endpoints is None:
             return []
@@ -978,10 +923,6 @@ class DLNAClient:
         return out
 
     def auto_descend_folder_browse(self, device: DLNADevice, container: DlnaContainer, *, max_levels: int = 3) -> DlnaContainer:
-        """
-        Baja automáticamente hasta `max_levels` niveles si detecta una carpeta “fuerte”
-        tipo “Browse by folder”.
-        """
         current = container
         for _ in range(max(0, int(max_levels))):
             children = self.list_child_containers(device, current.object_id)
@@ -1004,7 +945,6 @@ class DLNAClient:
 
     @staticmethod
     def _extract_container_title_and_id(container: ET.Element) -> DlnaContainer | None:
-        """Extrae id + dc:title (o similar) de un <container>."""
         obj_id = container.attrib.get("id")
         if not obj_id:
             return None
@@ -1031,13 +971,6 @@ class DLNAClient:
         *,
         limits: TraversalLimits | None = None,
     ) -> tuple[list[DlnaVideoItem], dict[str, int]]:
-        """
-        Recorre recursivamente el árbol de contenedores DLNA desde root_object_id y devuelve items de vídeo.
-
-        Returns:
-            (items, stats)
-            stats: {containers_seen, cycle_skips, items, dedup_skips_local}
-        """
         lim = limits or build_traversal_limits()
 
         endpoints = _find_content_directory_endpoints(device.location)
@@ -1180,7 +1113,7 @@ class DLNAClient:
         return results, stats
 
     # -----------------------------
-    # Utilidades (opcionales)
+    # Utilidades
     # -----------------------------
 
     @staticmethod
@@ -1206,6 +1139,7 @@ class DLNAClient:
 
 __all__ = [
     "DLNAClient",
+    "DLNADevice",
     "DLNAEndpoints",
     "DlnaContainer",
     "DlnaVideoItem",

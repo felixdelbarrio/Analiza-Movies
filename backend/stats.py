@@ -25,7 +25,7 @@ Notas de diseño
   del config (IMDB_KEEP_MIN_RATING / IMDB_DELETE_MAX_RATING).
 """
 
-from typing import Final
+import threading
 
 import pandas as pd
 
@@ -54,17 +54,27 @@ def _log_stats(msg: object) -> None:
     """
     Logging “best-effort” para stats:
     - No debe romper el flujo aunque el logger falle por cualquier motivo.
+    - Si el logger falla, NO spameamos stdout en silent (best-effort real).
     """
     try:
         _logger.info(str(msg))
     except Exception:
-        # fallback ultra defensivo; no debería ocurrir, pero evita crash.
-        print(msg)
+        try:
+            if hasattr(_logger, "is_silent_mode") and _logger.is_silent_mode():
+                return
+        except Exception:
+            return
+        try:
+            print(str(msg))
+        except Exception:
+            return
 
 
 # ============================================================================
 # Cache en memoria (se calcula una vez por ejecución)
 # ============================================================================
+
+_STATS_LOCK = threading.Lock()
 
 # Media global IMDb (para bayes)
 _GLOBAL_IMDB_MEAN_FROM_CACHE: float | None = None
@@ -137,30 +147,34 @@ def get_global_imdb_mean_from_cache() -> float:
     if _GLOBAL_IMDB_MEAN_FROM_CACHE is not None:
         return _GLOBAL_IMDB_MEAN_FROM_CACHE
 
-    mean_cache, count = _compute_global_imdb_mean_from_cache_raw()
+    with _STATS_LOCK:
+        if _GLOBAL_IMDB_MEAN_FROM_CACHE is not None:
+            return _GLOBAL_IMDB_MEAN_FROM_CACHE
 
-    if mean_cache is not None and count >= BAYES_MIN_TITLES_FOR_GLOBAL_MEAN:
-        _GLOBAL_IMDB_MEAN_FROM_CACHE = float(mean_cache)
-        _GLOBAL_IMDB_MEAN_SOURCE = f"omdb_cache (n={count})"
-        _GLOBAL_IMDB_MEAN_COUNT = count
-        _log_stats(
-            "INFO [stats] Media global IMDb desde omdb_cache = "
-            f"{_GLOBAL_IMDB_MEAN_FROM_CACHE:.3f} (n={count})"
-        )
-    else:
-        reason = (
-            "sin ratings válidos"
-            if mean_cache is None
-            else f"{count} < BAYES_MIN_TITLES_FOR_GLOBAL_MEAN={BAYES_MIN_TITLES_FOR_GLOBAL_MEAN}"
-        )
-        _GLOBAL_IMDB_MEAN_FROM_CACHE = float(BAYES_GLOBAL_MEAN_DEFAULT)
-        _GLOBAL_IMDB_MEAN_SOURCE = f"default {BAYES_GLOBAL_MEAN_DEFAULT}"
-        _GLOBAL_IMDB_MEAN_COUNT = count
-        _log_stats(
-            f"INFO [stats] Usando BAYES_GLOBAL_MEAN_DEFAULT={BAYES_GLOBAL_MEAN_DEFAULT} porque {reason}"
-        )
+        mean_cache, count = _compute_global_imdb_mean_from_cache_raw()
 
-    return _GLOBAL_IMDB_MEAN_FROM_CACHE
+        if mean_cache is not None and count >= BAYES_MIN_TITLES_FOR_GLOBAL_MEAN:
+            _GLOBAL_IMDB_MEAN_FROM_CACHE = float(mean_cache)
+            _GLOBAL_IMDB_MEAN_SOURCE = f"omdb_cache (n={count})"
+            _GLOBAL_IMDB_MEAN_COUNT = count
+            _log_stats(
+                "INFO [stats] Media global IMDb desde omdb_cache = "
+                f"{_GLOBAL_IMDB_MEAN_FROM_CACHE:.3f} (n={count})"
+            )
+        else:
+            reason = (
+                "sin ratings válidos"
+                if mean_cache is None
+                else f"{count} < BAYES_MIN_TITLES_FOR_GLOBAL_MEAN={BAYES_MIN_TITLES_FOR_GLOBAL_MEAN}"
+            )
+            _GLOBAL_IMDB_MEAN_FROM_CACHE = float(BAYES_GLOBAL_MEAN_DEFAULT)
+            _GLOBAL_IMDB_MEAN_SOURCE = f"default {BAYES_GLOBAL_MEAN_DEFAULT}"
+            _GLOBAL_IMDB_MEAN_COUNT = count
+            _log_stats(
+                f"INFO [stats] Usando BAYES_GLOBAL_MEAN_DEFAULT={BAYES_GLOBAL_MEAN_DEFAULT} porque {reason}"
+            )
+
+        return _GLOBAL_IMDB_MEAN_FROM_CACHE
 
 
 def get_global_imdb_mean_info() -> tuple[float, str, int]:
@@ -218,26 +232,30 @@ def _load_imdb_ratings_list_from_cache() -> tuple[list[float], int]:
     if _RATINGS_LIST is not None:
         return _RATINGS_LIST, _RATINGS_COUNT
 
-    ratings: list[float] = []
-    for data in iter_cached_omdb_records():
-        if not isinstance(data, dict):
-            continue
-        r = parse_imdb_rating_from_omdb(data)
-        if r is None:
-            continue
-        try:
-            ratings.append(float(r))
-        except Exception:
-            continue
+    with _STATS_LOCK:
+        if _RATINGS_LIST is not None:
+            return _RATINGS_LIST, _RATINGS_COUNT
 
-    ratings.sort()
-    _RATINGS_LIST = ratings
-    _RATINGS_COUNT = len(ratings)
+        ratings: list[float] = []
+        for data in iter_cached_omdb_records():
+            if not isinstance(data, dict):
+                continue
+            r = parse_imdb_rating_from_omdb(data)
+            if r is None:
+                continue
+            try:
+                ratings.append(float(r))
+            except Exception:
+                continue
 
-    if _RATINGS_COUNT == 0:
-        _log_stats("INFO [stats] omdb_cache sin ratings válidos para auto-umbrales.")
+        ratings.sort()
+        _RATINGS_LIST = ratings
+        _RATINGS_COUNT = len(ratings)
 
-    return _RATINGS_LIST, _RATINGS_COUNT
+        if _RATINGS_COUNT == 0:
+            _log_stats("INFO [stats] omdb_cache sin ratings válidos para auto-umbrales.")
+
+        return _RATINGS_LIST, _RATINGS_COUNT
 
 
 def _load_imdb_ratings_list_no_rt_from_cache() -> tuple[list[float], int]:
@@ -253,32 +271,36 @@ def _load_imdb_ratings_list_no_rt_from_cache() -> tuple[list[float], int]:
     if _RATINGS_NO_RT_LIST is not None:
         return _RATINGS_NO_RT_LIST, _RATINGS_NO_RT_COUNT
 
-    ratings: list[float] = []
-    for data in iter_cached_omdb_records():
-        if not isinstance(data, dict):
-            continue
+    with _STATS_LOCK:
+        if _RATINGS_NO_RT_LIST is not None:
+            return _RATINGS_NO_RT_LIST, _RATINGS_NO_RT_COUNT
 
-        r = parse_imdb_rating_from_omdb(data)
-        if r is None:
-            continue
+        ratings: list[float] = []
+        for data in iter_cached_omdb_records():
+            if not isinstance(data, dict):
+                continue
 
-        rt = parse_rt_score_from_omdb(data)
-        if rt is not None:
-            continue
+            r = parse_imdb_rating_from_omdb(data)
+            if r is None:
+                continue
 
-        try:
-            ratings.append(float(r))
-        except Exception:
-            continue
+            rt = parse_rt_score_from_omdb(data)
+            if rt is not None:
+                continue
 
-    ratings.sort()
-    _RATINGS_NO_RT_LIST = ratings
-    _RATINGS_NO_RT_COUNT = len(ratings)
+            try:
+                ratings.append(float(r))
+            except Exception:
+                continue
 
-    if _RATINGS_NO_RT_COUNT == 0:
-        _log_stats("INFO [stats] omdb_cache sin títulos válidos para auto-umbrales NO_RT.")
+        ratings.sort()
+        _RATINGS_NO_RT_LIST = ratings
+        _RATINGS_NO_RT_COUNT = len(ratings)
 
-    return _RATINGS_NO_RT_LIST, _RATINGS_NO_RT_COUNT
+        if _RATINGS_NO_RT_COUNT == 0:
+            _log_stats("INFO [stats] omdb_cache sin títulos válidos para auto-umbrales NO_RT.")
+
+        return _RATINGS_NO_RT_LIST, _RATINGS_NO_RT_COUNT
 
 
 def _percentile(sorted_vals: list[float], p: float) -> float | None:
@@ -287,10 +309,6 @@ def _percentile(sorted_vals: list[float], p: float) -> float | None:
 
     - p se clampa a [0, 1]
     - no interpola: usa idx = int(p * (n - 1))
-
-    Ventajas:
-    - estable (no depende de librerías/implementaciones externas)
-    - suficiente para generar umbrales operativos
     """
     if not sorted_vals:
         return None
@@ -313,14 +331,6 @@ def _percentile(sorted_vals: list[float], p: float) -> float | None:
 
 
 def get_auto_keep_rating_threshold() -> float:
-    """
-    Umbral KEEP global (auto-ajustado por percentil o fallback fijo).
-
-    - Si n >= RATING_MIN_TITLES_FOR_AUTO:
-        threshold = percentile(ratings, AUTO_KEEP_RATING_PERCENTILE)
-    - Si no:
-        threshold = IMDB_KEEP_MIN_RATING
-    """
     global _AUTO_KEEP_RATING_THRESHOLD
 
     if _AUTO_KEEP_RATING_THRESHOLD is not None:
@@ -347,14 +357,6 @@ def get_auto_keep_rating_threshold() -> float:
 
 
 def get_auto_delete_rating_threshold() -> float:
-    """
-    Umbral DELETE global (auto-ajustado por percentil o fallback fijo).
-
-    - Si n >= RATING_MIN_TITLES_FOR_AUTO:
-        threshold = percentile(ratings, AUTO_DELETE_RATING_PERCENTILE)
-    - Si no:
-        threshold = IMDB_DELETE_MAX_RATING
-    """
     global _AUTO_DELETE_RATING_THRESHOLD
 
     if _AUTO_DELETE_RATING_THRESHOLD is not None:
@@ -386,12 +388,6 @@ def get_auto_delete_rating_threshold() -> float:
 
 
 def get_auto_keep_rating_threshold_no_rt() -> float:
-    """
-    Umbral KEEP para títulos sin Rotten Tomatoes.
-
-    - Si hay suficientes títulos sin RT: percentil sobre esa distribución.
-    - Si no: fallback al umbral KEEP global.
-    """
     global _AUTO_KEEP_RATING_THRESHOLD_NO_RT
 
     if _AUTO_KEEP_RATING_THRESHOLD_NO_RT is not None:
@@ -419,12 +415,6 @@ def get_auto_keep_rating_threshold_no_rt() -> float:
 
 
 def get_auto_delete_rating_threshold_no_rt() -> float:
-    """
-    Umbral DELETE para títulos sin Rotten Tomatoes.
-
-    - Si hay suficientes títulos sin RT: percentil sobre esa distribución.
-    - Si no: fallback al umbral DELETE global.
-    """
     global _AUTO_DELETE_RATING_THRESHOLD_NO_RT
 
     if _AUTO_DELETE_RATING_THRESHOLD_NO_RT is not None:

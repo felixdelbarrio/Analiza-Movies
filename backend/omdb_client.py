@@ -814,20 +814,52 @@ def _omdb_http_get(*, base_url: str, params: Mapping[str, str], timeout_seconds:
 # AUX: safe parsing / ratings
 # ============================================================
 
-def _safe_int(value: object) -> int | None:
+def _safe_int(value: object | None) -> int | None:
+    """
+    Pyright-friendly:
+    - estrecha tipos antes de llamar int()/float()
+    - soporta strings "12", "12.0", "12,000"
+    """
     try:
         if value is None:
             return None
-        return int(value)
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            s = value.strip()
+            if not s or s.upper() == "N/A":
+                return None
+            s = s.replace(",", "")
+            return int(float(s))
+        return int(value)  # type: ignore[arg-type]
     except (ValueError, TypeError):
         return None
 
 
-def _safe_float(value: object) -> float | None:
+def _safe_float(value: object | None) -> float | None:
+    """
+    Pyright-friendly:
+    - estrecha tipos antes de llamar float()
+    - soporta strings "7.5", "7,5" NO (locale), pero "7,500" sí como miles
+    """
     try:
         if value is None:
             return None
-        return float(value)
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            s = value.strip()
+            if not s or s.upper() == "N/A":
+                return None
+            s = s.replace(",", "")
+            return float(s)
+        return float(value)  # type: ignore[arg-type]
     except (ValueError, TypeError):
         return None
 
