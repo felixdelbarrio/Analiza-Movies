@@ -7,9 +7,10 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
-from typing import Callable, TypeVar
+from typing import Callable, TypeVar, cast
 
 import pandas as pd
+from pandas._typing import DtypeArg
 
 from server.api.services import metrics
 from server.api.settings import Settings
@@ -142,10 +143,11 @@ class FileCache:
 
             metrics.inc("cache_csv_miss_total", 1)
 
-            dtype_map: dict[str, object] = {c: "string" for c in text_columns}
+            dtype_map: dict[str, DtypeArg] = {c: "string" for c in text_columns}
+            dtype_arg = cast(DtypeArg, dtype_map)
 
             def _read() -> pd.DataFrame:
-                return pd.read_csv(path, dtype=dtype_map, encoding="utf-8")
+                return pd.read_csv(path, dtype=dtype_arg, encoding="utf-8")
 
             df = self._read_with_retries(_read)
 
