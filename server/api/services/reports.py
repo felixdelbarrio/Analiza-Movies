@@ -32,6 +32,19 @@ def strip_internal_cols(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=internal_cols, errors="ignore")
 
 
+def _json_safe_value(value: Any) -> Any:
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        return value
+
+    return value
+
+
 def df_to_page(
     df: pd.DataFrame,
     *,
@@ -78,7 +91,14 @@ def df_to_page(
     page = cast(pd.DataFrame, view.iloc[offset : offset + limit])
     page = strip_internal_cols(page)
 
-    items = page.where(pd.notnull(page), None).to_dict(orient="records")
+    raw_items = page.to_dict(orient="records")
+    records = cast(list[dict[str, Any]], raw_items)
+
+    items: list[dict[str, Any]] = [
+        {k: _json_safe_value(v) for k, v in row.items()}
+        for row in records
+    ]
+
     return {
         "items": items,
         "total": total,
