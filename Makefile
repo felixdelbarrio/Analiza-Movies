@@ -48,18 +48,19 @@ help:
 
 venv:
 	@test -d "$(VENV)" || python3 -m venv "$(VENV)"
-	@$(PY) -m pip install -q --upgrade pip
+	@$(PY) -m pip install -q --upgrade pip setuptools wheel
 
 # Runtime install: setup.py / install_requires es la fuente de verdad
 install: venv
-	@$(PIP) install -q -e .
+	@$(PIP) install -q -r requirements.txt
+	@$(PIP) install -q -e .[dev]
 
 # Dev install: incluye extras dev (mypy/pyright/stubs/black/ruff/pytest)
 dev: venv
 	@$(PIP) install -q -e ".[dev]"
 
 reinstall: venv
-	@$(PIP) install -q -e .
+	@$(PIP) install -q -e .[dev]
 
 # -------------------------------------------------
 # Targets principales
