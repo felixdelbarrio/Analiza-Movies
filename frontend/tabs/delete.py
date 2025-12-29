@@ -15,16 +15,42 @@ Notas st_aggrid:
 - autoSizeStrategy = {"type": "fitGridWidth"}
 """
 
-from typing import Any, Iterable
+from collections.abc import Hashable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Protocol, cast
 
 import pandas as pd
 import streamlit as st
-from st_aggrid import AgGrid, GridOptionsBuilder
+from st_aggrid import GridOptionsBuilder
+
+
+Row = Mapping[str, Any]
+Rows = Sequence[Row]
+DeleteFilesFromRowsFn = Callable[[pd.DataFrame, bool], tuple[int, int, Sequence[str]]]
+
+
+class AgGridCallable(Protocol):
+    def __call__(
+        self,
+        data: pd.DataFrame,
+        *,
+        gridOptions: Mapping[str, Any],
+        update_on: Sequence[str],
+        enable_enterprise_modules: bool,
+        height: int,
+        key: str,
+    ) -> Mapping[str, Any]: ...
 
 
 # ============================================================================
 # Helpers selección / tamaños
 # ============================================================================
+
+
+def _to_str_key_dict(src: Mapping[Hashable, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in src.items():
+        out[str(k)] = v
+    return out
 
 
 def _normalize_selected_rows(selected_raw: Any) -> list[dict[str, Any]]:
@@ -42,32 +68,68 @@ def _normalize_selected_rows(selected_raw: Any) -> list[dict[str, Any]]:
         return []
 
     if isinstance(selected_raw, pd.DataFrame):
-        return selected_raw.to_dict(orient="records")
+        records = selected_raw.to_dict(orient="records")
+        out_df: list[dict[str, Any]] = []
+        for r in records:
+            # Pandas suele devolver dict[Hashable, Any], pero reforzamos el contrato (claves str).
+            if isinstance(r, dict):
+                out_df.append(_to_str_key_dict(r))
+            else:
+                out_df.append({"value": r})
+        return out_df
+
+    if isinstance(selected_raw, pd.Series):
+        # Caso raro, pero mejor soportarlo.
+        return [_to_str_key_dict(selected_raw.to_dict())]
+
+    if isinstance(selected_raw, Mapping):
+        return [_to_str_key_dict(selected_raw)]
 
     if isinstance(selected_raw, (list, tuple)):
         rows: list[dict[str, Any]] = []
         for item in selected_raw:
             if isinstance(item, pd.Series):
-                rows.append(item.to_dict())
-            elif isinstance(item, dict):
-                rows.append(item)
-            else:
+                rows.append(_to_str_key_dict(item.to_dict()))
+                continue
+
+            if isinstance(item, Mapping):
+                rows.append(_to_str_key_dict(item))
+                continue
+
+            if isinstance(item, Iterable) and not isinstance(item, (str, bytes)):
                 try:
-                    rows.append(dict(item))  # type: ignore[arg-type]
+                    # item debería ser iterable de pares (k, v)
+                    tmp = dict(item)  # type: ignore[arg-type]
                 except Exception:
                     rows.append({"value": item})
-        return rows
+                else:
+                    rows.append(_to_str_key_dict(tmp))
+                continue
 
-    if isinstance(selected_raw, dict):
-        return [selected_raw]
+            rows.append({"value": item})
+        return rows
 
     if isinstance(selected_raw, Iterable) and not isinstance(selected_raw, (str, bytes)):
         out: list[dict[str, Any]] = []
         for x in selected_raw:
-            try:
-                out.append(dict(x))  # type: ignore[arg-type]
-            except Exception:
-                out.append({"value": x})
+            if isinstance(x, pd.Series):
+                out.append(_to_str_key_dict(x.to_dict()))
+                continue
+
+            if isinstance(x, Mapping):
+                out.append(_to_str_key_dict(x))
+                continue
+
+            if isinstance(x, Iterable) and not isinstance(x, (str, bytes)):
+                try:
+                    tmp = dict(x)  # type: ignore[arg-type]
+                except Exception:
+                    out.append({"value": x})
+                else:
+                    out.append(_to_str_key_dict(tmp))
+                continue
+
+            out.append({"value": x})
         return out
 
     return [{"value": selected_raw}]
@@ -90,7 +152,7 @@ def _safe_float(x: Any) -> float | None:
         return None
 
 
-def _compute_total_size_gb(rows: list[dict[str, Any]]) -> float | None:
+def _compute_total_size_gb(rows: Rows) -> float | None:
     """
     Calcula el tamaño total en GB de las filas seleccionadas, si hay `file_size` en bytes.
 
@@ -118,7 +180,7 @@ def _compute_total_size_gb(rows: list[dict[str, Any]]) -> float | None:
     return total_bytes / (1024**3)
 
 
-def _count_existing_files(rows: list[dict[str, Any]]) -> int:
+def _count_existing_files(rows: Rows) -> int:
     """
     Cuenta cuántas filas apuntan a ficheros existentes (mejor UX).
     """
@@ -144,12 +206,12 @@ def _count_existing_files(rows: list[dict[str, Any]]) -> int:
     return n
 
 
-def _truncate_logs(lines: list[str], max_lines: int = 400) -> list[str]:
+def _truncate_logs(lines: Sequence[str], max_lines: int = 400) -> list[str]:
     """Evita reventar la UI si hay miles de líneas de log."""
     if len(lines) <= max_lines:
-        return lines
-    head = lines[: max_lines // 2]
-    tail = lines[-max_lines // 2 :]
+        return list(lines)
+    head = list(lines[: max_lines // 2])
+    tail = list(lines[-max_lines // 2 :])
     return head + [f"... ({len(lines) - len(head) - len(tail)} líneas omitidas) ..."] + tail
 
 
@@ -172,7 +234,17 @@ def render(
         delete_require_confirm: Si True, requiere checkbox de confirmación antes de borrar.
     """
     # Lazy import para evitar circular imports (backend <-> frontend).
-    from frontend.delete_logic import delete_files_from_rows
+    import frontend.delete_logic as delete_logic
+
+    delete_files_from_rows_fn = cast(
+        DeleteFilesFromRowsFn,
+        getattr(delete_logic, "delete_files_from_rows"),
+    )
+
+    # Lazy import + getattr para evitar que Pylance trate "AgGrid" como módulo no callable.
+    import st_aggrid as st_aggrid_mod
+
+    aggrid_fn = cast(AgGridCallable, getattr(st_aggrid_mod, "AgGrid"))
 
     st.write("### Borrado controlado de archivos")
 
@@ -246,7 +318,7 @@ def render(
     grid_options = gb.build()
     grid_options["autoSizeStrategy"] = {"type": "fitGridWidth"}
 
-    grid_response = AgGrid(
+    grid_response = aggrid_fn(
         df_view,
         gridOptions=grid_options,
         update_on=["selectionChanged"],
@@ -289,7 +361,7 @@ def render(
             return
 
         df_sel = pd.DataFrame(selected_rows)
-        ok, err, logs = delete_files_from_rows(df_sel, delete_dry_run)
+        ok, err, logs = delete_files_from_rows_fn(df_sel, delete_dry_run)
 
         if delete_dry_run:
             st.success(f"DRY RUN completado. Se habrían borrado {ok} archivo(s), {err} error(es).")

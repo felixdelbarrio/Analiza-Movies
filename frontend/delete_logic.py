@@ -1,59 +1,101 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Hashable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
-
-from frontend import front_logger as _logger
+from typing import Any, Protocol, cast
 
 from frontend.config_front_artifacts import REPORT_FILTERED_PATH
+from frontend.config_front_base import DELETE_DRY_RUN, DELETE_REQUIRE_CONFIRM, SILENT_MODE
 
-from frontend.config_front_base import (
-    DELETE_DRY_RUN,
-    DELETE_REQUIRE_CONFIRM,
-    SILENT_MODE,
-)
+
+class LoggerLike(Protocol):
+    def progress(self, msg: str) -> None: ...
+    def info(self, msg: str) -> None: ...
+
+
+Row = Mapping[str, Any]
+Rows = Sequence[Row]
+
+
+def _get_logger() -> LoggerLike:
+    import frontend.front_logger as front_logger
+
+    return cast(LoggerLike, front_logger)
+
 
 # ============================================================================
 # Helpers
 # ============================================================================
 
 
-def _as_rows_iter(rows: object) -> Iterable[Mapping[str, Any]]:
+def _to_str_key_dict(src: Mapping[Hashable, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in src.items():
+        out[str(k)] = v
+    return out
+
+
+def _as_rows_iter(rows: object) -> list[dict[str, Any]]:
     """
-    Normaliza el input a un iterable de mappings.
+    Normaliza el input a una lista de dict[str, Any].
 
     Acepta:
-      - list[dict]
+      - list/tuple de dict-like
       - iterable de dict-like
-      - pandas.DataFrame (si está disponible)
+      - pandas.DataFrame / pandas.Series (si está disponible)
+      - Mapping (una sola fila)
     """
     if rows is None:
         return []
 
-    # Pandas DataFrame -> records
+    # Pandas DataFrame/Series -> records
     try:
         import pandas as pd  # type: ignore[import-not-found]
 
         if isinstance(rows, pd.DataFrame):
-            return rows.to_dict(orient="records")
+            records = rows.to_dict(orient="records")
+            out_df: list[dict[str, Any]] = []
+            for r in records:
+                if isinstance(r, Mapping):
+                    out_df.append(_to_str_key_dict(cast(Mapping[Hashable, Any], r)))
+                else:
+                    out_df.append({"value": r})
+            return out_df
+
+        if isinstance(rows, pd.Series):
+            series_dict = rows.to_dict()
+            if isinstance(series_dict, Mapping):
+                return [_to_str_key_dict(cast(Mapping[Hashable, Any], series_dict))]
+            return [{"value": series_dict}]
     except Exception:
         pass
 
     if isinstance(rows, Mapping):
-        return [rows]
+        return [_to_str_key_dict(cast(Mapping[Hashable, Any], rows))]
 
     if isinstance(rows, (list, tuple)):
-        return rows
+        out_list: list[dict[str, Any]] = []
+        for x in rows:
+            if isinstance(x, Mapping):
+                out_list.append(_to_str_key_dict(cast(Mapping[Hashable, Any], x)))
+            else:
+                out_list.append({"value": x})
+        return out_list
 
     if isinstance(rows, Iterable) and not isinstance(rows, (str, bytes)):
-        return rows  # type: ignore[return-value]
+        out_it: list[dict[str, Any]] = []
+        for x in rows:
+            if isinstance(x, Mapping):
+                out_it.append(_to_str_key_dict(cast(Mapping[Hashable, Any], x)))
+            else:
+                out_it.append({"value": x})
+        return out_it
 
     return []
 
 
-def _safe_path_from_row(row: Mapping[str, Any]) -> Path | None:
+def _safe_path_from_row(row: Row) -> Path | None:
     """
     Extrae y normaliza la ruta del fichero desde una fila.
 
@@ -68,13 +110,10 @@ def _safe_path_from_row(row: Mapping[str, Any]) -> Path | None:
     if not s:
         return None
 
-    # Nota: En DLNA, "library/title.ext" NO será ruta real; eso se filtrará por exists().
     try:
-        p = Path(s).expanduser()
+        return Path(s).expanduser()
     except Exception:
         return None
-
-    return p
 
 
 def _is_probably_safe_file(path: Path) -> bool:
@@ -119,11 +158,6 @@ def delete_files_from_rows(
     it = _as_rows_iter(rows)
 
     for i, row_obj in enumerate(it, start=1):
-        if not isinstance(row_obj, Mapping):
-            err += 1
-            logs.append(f"[DELETE] row#{i}: formato inválido (no mapping): {type(row_obj)}")
-            continue
-
         path = _safe_path_from_row(row_obj)
         title = str(row_obj.get("title") or "").strip()
 
@@ -132,15 +166,15 @@ def delete_files_from_rows(
             logs.append(f"[DELETE] row#{i}: sin 'file' válido (title={title!r})")
             continue
 
-        # Resolver (sin obligar: algunos paths pueden ser relativos)
         try:
             resolved = path.expanduser().resolve()
         except Exception:
             resolved = path
 
         if not _is_probably_safe_file(resolved):
-            # No lo contamos como error duro: normalmente serán filas DLNA o paths no montados.
-            logs.append(f"[DELETE] row#{i}: skip (no existe/no es fichero): {resolved} (title={title!r})")
+            logs.append(
+                f"[DELETE] row#{i}: skip (no existe/no es fichero): {resolved} (title={title!r})"
+            )
             continue
 
         if delete_dry_run:
@@ -164,14 +198,14 @@ def delete_files_from_rows(
 # ============================================================================
 
 
-def _read_filtered_rows(csv_path: str) -> list[dict[str, Any]]:
+def _read_filtered_rows(csv_path: str | Path) -> list[dict[str, Any]]:
     """
     Lee el CSV filtrado y devuelve lista de dicts.
 
     - Intenta pandas si está disponible.
     - Fallback a csv.DictReader si pandas no existe.
     """
-    p = Path(csv_path)
+    p = csv_path if isinstance(csv_path, Path) else Path(str(csv_path))
     if not p.exists():
         return []
 
@@ -180,7 +214,14 @@ def _read_filtered_rows(csv_path: str) -> list[dict[str, Any]]:
         import pandas as pd  # type: ignore[import-not-found]
 
         df = pd.read_csv(p, dtype=str, keep_default_na=False)
-        return df.to_dict(orient="records")
+        records = df.to_dict(orient="records")
+        out_df: list[dict[str, Any]] = []
+        for r in records:
+            if isinstance(r, Mapping):
+                out_df.append(_to_str_key_dict(cast(Mapping[Hashable, Any], r)))
+            else:
+                out_df.append({"value": r})
+        return out_df
     except Exception:
         pass
 
@@ -191,11 +232,11 @@ def _read_filtered_rows(csv_path: str) -> list[dict[str, Any]]:
     with p.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for r in reader:
-            out.append(dict(r))
+            out.append(_to_str_key_dict(cast(Mapping[Hashable, Any], r)))
     return out
 
 
-def _normalize_rows_for_delete(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_rows_for_delete(rows: Iterable[Row]) -> list[dict[str, Any]]:
     """
     Reduce filas a claves mínimas:
       - file
@@ -212,7 +253,7 @@ def _normalize_rows_for_delete(rows: Iterable[dict[str, Any]]) -> list[dict[str,
     return out
 
 
-def _count_existing_files(rows: Iterable[dict[str, Any]]) -> int:
+def _count_existing_files(rows: Iterable[Row]) -> int:
     """
     Cuenta cuántas filas apuntan a ficheros existentes.
     """
@@ -232,7 +273,7 @@ def _count_existing_files(rows: Iterable[dict[str, Any]]) -> int:
 
 def run_delete_from_report_filtered(
     *,
-    csv_path: str = REPORT_FILTERED_PATH,
+    csv_path: str | Path = REPORT_FILTERED_PATH,
     delete_dry_run: bool | None = None,
     require_confirm: bool | None = None,
 ) -> None:
@@ -243,43 +284,46 @@ def run_delete_from_report_filtered(
     - Si no hay filas, informa y sale.
     - delete_dry_run/require_confirm por defecto vienen de config.py.
     """
+    logger = _get_logger()
+
     dry = DELETE_DRY_RUN if delete_dry_run is None else bool(delete_dry_run)
     confirm = DELETE_REQUIRE_CONFIRM if require_confirm is None else bool(require_confirm)
 
-    _logger.progress("[DELETE] Inicio")
+    logger.progress("[DELETE] Inicio")
 
     rows_raw = _read_filtered_rows(csv_path)
+    csv_path_str = str(csv_path)
+
     if not rows_raw:
-        _logger.progress(f"[DELETE] No hay filas en '{csv_path}' (o no existe).")
+        logger.progress(f"[DELETE] No hay filas en '{csv_path_str}' (o no existe).")
         return
 
     rows = _normalize_rows_for_delete(rows_raw)
     existing = _count_existing_files(rows)
 
     mode = "DRY_RUN" if dry else "REAL_DELETE"
-    _logger.progress(f"[DELETE] Fuente: {csv_path}")
-    _logger.progress(f"[DELETE] Filas: {len(rows)} | ficheros existentes: {existing} | modo={mode}")
+    logger.progress(f"[DELETE] Fuente: {csv_path_str}")
+    logger.progress(f"[DELETE] Filas: {len(rows)} | ficheros existentes: {existing} | modo={mode}")
 
     if existing == 0:
-        _logger.progress("[DELETE] Nada que borrar (no se detectan ficheros reales en disco).")
+        logger.progress("[DELETE] Nada que borrar (no se detectan ficheros reales en disco).")
         return
 
     if confirm:
-        _logger.progress(
+        logger.progress(
             "[DELETE] Confirmación requerida.\n"
             "  - Escribe 'DELETE' para continuar\n"
             "  - Enter para cancelar"
         )
         ans = input("> ").strip()
         if ans != "DELETE":
-            _logger.progress("[DELETE] Cancelado por el usuario.")
+            logger.progress("[DELETE] Cancelado por el usuario.")
             return
 
     num_ok, num_err, logs = delete_files_from_rows(rows, delete_dry_run=dry)
 
-    # En SILENT_MODE evitamos spam
     if not SILENT_MODE:
         for line in logs:
-            _logger.info(line)
+            logger.info(line)
 
-    _logger.progress(f"[DELETE] Fin | ok={num_ok} err={num_err} dry_run={dry}")
+    logger.progress(f"[DELETE] Fin | ok={num_ok} err={num_err} dry_run={dry}")

@@ -107,8 +107,9 @@ def _read_csv_or_raise(path: Path, *, label: str) -> pd.DataFrame:
     if cached is not None and cached.mtime_ns == mtime:
         return cached.data
 
-    dtype_map: dict[str, Any] = {c: "string" for c in TEXT_COLUMNS}
-    df = pd.read_csv(path, dtype=dtype_map, encoding="utf-8")
+    # Nota: en runtime pandas acepta dtype=dict por columna, pero los stubs que tienes
+    # no lo permiten. Como todas las columnas objetivo son "string", usamos dtype global.
+    df = pd.read_csv(path, dtype="string", encoding="utf-8")
 
     for col in TEXT_COLUMNS:
         if col in df.columns:
