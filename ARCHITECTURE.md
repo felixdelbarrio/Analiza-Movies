@@ -13,6 +13,12 @@
 
 Analiza Movies is designed as a **modular, resilient, and scalable media intelligence system**.
 
+## Typing support
+
+This project is fully typed and compliant with **PEP 561**.
+Type checkers such as **mypy** and **pyright** are fully supported.
+![Typing: PEP 561](https://img.shields.io/badge/typing-PEP%20561-informational)
+
 Its architecture cleanly separates **analysis**, **data access**, **API exposure**, and **visual exploration**, ensuring that each layer can evolve independently without cascading changes.
 
 ---
