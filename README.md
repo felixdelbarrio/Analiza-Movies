@@ -121,6 +121,11 @@ Está diseñado para trabajar tanto con **informes CSV** como con la **API REST*
 📐 **Architecture details / Detalle técnico:**  
 ➡️ [ARCHITECTURE.md](ARCHITECTURE.md)
 
+## Typing support
+
+This project is fully typed and compliant with **PEP 561**.
+Type checkers such as **mypy** and **pyright** are fully supported.
+![Typing: PEP 561](https://img.shields.io/badge/typing-PEP%20561-informational)
 ---
 
 ## 🏗️ High-Level Architecture
