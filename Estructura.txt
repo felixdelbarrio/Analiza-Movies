@@ -61,6 +61,7 @@
 │   ├── dlna_discovery.py
 │   ├── logger.py
 │   ├── logs
+│   │   └── run_2025-12-29_15-09-09_65786.log
 │   ├── main.py
 │   ├── metadata_fix.py
 │   ├── movie_input.py
@@ -123,13 +124,16 @@
 ├── LICENSE
 ├── Makefile
 ├── MANIFEST.in
+├── mypy.ini
 ├── py.typed
+├── pyrightconfig.json
 ├── python
 ├── README.md
 ├── reports
 │   ├── metadata_fix.csv
 │   ├── report_all.csv
 │   └── report_filtered.csv
+├── requirements-dev.txt
 ├── requirements.txt
 ├── server
 │   ├── __init__.py
@@ -201,36 +205,6 @@
 │   │   │   └── wiki.py
 │   │   └── settings.py
 │   └── readme.txt
-├── setup.py
-└── tests
-    ├── test_advanced.py
-    ├── test_all_movies.py
-    ├── test_analiza_dlna.py
-    ├── test_analiza_plex.py
-    ├── test_analiza.py
-    ├── test_analyze_input_core.py
-    ├── test_candidates.py
-    ├── test_charts.py
-    ├── test_components.py
-    ├── test_config.py
-    ├── test_dashboard.py
-    ├── test_data_utils.py
-    ├── test_decision_logic.py
-    ├── test_delete_logic.py
-    ├── test_delete.py
-    ├── test_dlna_discovery.py
-    ├── test_logger.py
-    ├── test_metadata_fix.py
-    ├── test_metadata.py
-    ├── test_movie_analyzer.py
-    ├── test_movie_input.py
-    ├── test_omdb_client.py
-    ├── test_plex_client.py
-    ├── test_report_loader.py
-    ├── test_reporting.py
-    ├── test_scoring.py
-    ├── test_stats.py
-    ├── test_summary.py
-    └── test_wiki_client.py
+└── setup.py
 
-25 directories, 209 files
+24 directories, 184 files
