@@ -17,7 +17,48 @@ from backend.config_base import (
 # OMDb (API + throttling + TTLs + flush)
 # ============================================================
 
+# Backwards compatible (single key):
 OMDB_API_KEY: str | None = _get_env_str("OMDB_API_KEY", None)
+
+# NEW ✅ Multi-key support (rotation handled in omdb_client.py)
+#
+# You can provide keys in either:
+#  - OMDB_API_KEYS="k1,k2,k3"
+#  - OMDB_API_KEYS="k1 k2 k3"
+#  - OMDB_API_KEYS="k1;k2;k3"
+#
+# If OMDB_API_KEYS is provided and non-empty, the client should use these keys in order.
+# If not provided, it falls back to OMDB_API_KEY (legacy behavior).
+_raw_keys = (_get_env_str("OMDB_API_KEYS", "") or "").strip()
+if _raw_keys:
+    _parts = [p.strip() for p in _raw_keys.replace(";", ",").replace(" ", ",").split(",")]
+    OMDB_API_KEYS: list[str] = [p for p in _parts if p]
+else:
+    OMDB_API_KEYS = []
+
+# Optional: persist multi-key runtime state (e.g., exhausted/until) separate from omdb_cache.json
+# If you don't want a second file, leave it as is and ignore in the client.
+OMDB_KEYS_STATE_PATH: Final[Path] = DATA_DIR / "omdb_keys_state.json"
+
+# When a key is detected as "limit reached", mark it as exhausted for this many seconds.
+# (Client can choose to override using smarter "until midnight" logic.)
+OMDB_KEY_EXHAUSTED_TTL_SECONDS: int = _cap_int(
+    "OMDB_KEY_EXHAUSTED_TTL_SECONDS",
+    _get_env_int("OMDB_KEY_EXHAUSTED_TTL_SECONDS", 60 * 60 * 12),
+    min_v=60,
+    max_v=60 * 60 * 24 * 7,
+)
+
+# Whether the client should automatically switch keys on "limit reached"/quota errors.
+OMDB_KEY_ROTATION_ENABLED: bool = _get_env_bool("OMDB_KEY_ROTATION_ENABLED", True)
+
+# Max number of keys to try for a single request (0 => try all available keys).
+OMDB_KEY_ROTATION_MAX_TRIES: int = _cap_int(
+    "OMDB_KEY_ROTATION_MAX_TRIES",
+    _get_env_int("OMDB_KEY_ROTATION_MAX_TRIES", 0),
+    min_v=0,
+    max_v=1000,
+)
 
 OMDB_RATE_LIMIT_WAIT_SECONDS: int = _cap_int(
     "OMDB_RATE_LIMIT_WAIT_SECONDS",

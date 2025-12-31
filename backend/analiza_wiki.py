@@ -4,46 +4,18 @@ from __future__ import annotations
 backend/analiza_wiki.py
 
 Orquestador de enriquecimiento Wikipedia/Wikidata (cache warmup / batch).
-
-Responsabilidades (post-split)
------------------------------
-✅ Se queda con:
-- Orquestación de un “run” de Wiki: iteración -> get_wiki_for_input/get_wiki -> métricas.
-- Concurrencia: ThreadPoolExecutor + bounded inflight (backpressure).
-- Dedupe GLOBAL por run (por imdb o title/year) para evitar trabajo duplicado.
-- Logging de ejecución (inicio/progreso/fin) sin “spam”.
-- flush_wiki_cache() y log_wiki_metrics_summary() en finally.
-
-🚫 Se delega en backend.wiki_client:
-- HTTP + retry/circuit breaker + throttle WDQS.
-- Cache persistente + SWR + single-flight interno.
-- Heurísticas de búsqueda/ranking + parsers.
-- Métricas internas del cliente (get_wiki_metrics_snapshot).
-
-Política de logs (alineada con backend/logger.py)
-------------------------------------------------
-- Estado global (inicio / progreso / fin) sin “spam” -> logger.progress(...)
-- Debug contextual -> logger.debug_ctx("WIKI", "...") (respeta DEBUG/SILENT)
-- Errores de pipeline siempre visibles -> logger.error(..., always=True)
-- Este módulo NO presenta menús/prompt (si se añadieran, always=True).
-
-Notas de diseño
----------------
-- Este orquestador es “best-effort”: no rompe el pipeline si Wikipedia/Wikidata fallan.
-- En NO-SILENT prioriza determinismo (orden estable de items procesados).
-- En SILENT usa streaming concurrente para rendimiento.
 """
 
 import time
 from collections.abc import Iterable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, SupportsIndex, SupportsInt
 
 from backend import logger as logger
 from backend.config_base import DEBUG_MODE, SILENT_MODE
-from backend.movie_input import MovieInput, normalize_title_for_lookup
-
+from backend.movie_input import MovieInput, coalesce_movie_identity
+from backend.title_utils import normalize_title_for_lookup
 from backend.wiki_client import (
     flush_wiki_cache,
     get_wiki,
@@ -54,7 +26,7 @@ from backend.wiki_client import (
 )
 
 # --------------------------------------------------------------------------------------
-# Best-effort config.py knobs (preferimos backend.config agregador, como en DLNA/Plex)
+# Best-effort config.py knobs
 # --------------------------------------------------------------------------------------
 try:
     from backend.config import WIKI_ANALYZE_WORKERS  # type: ignore
@@ -71,23 +43,72 @@ try:
 except Exception:  # pragma: no cover
     WIKI_PROGRESS_EVERY_N_ITEMS = 200  # type: ignore
 
-# Cap defensivo global (no queremos reventar CPU/FDs si config viene mal)
 _MAX_WORKERS_CAP: int = 64
+
+
+# ======================================================================================
+# Helpers “typing-safe”
+# ======================================================================================
+
+
+def _safe_int(v: object, default: int) -> int:
+    """
+    Convierte v a int de forma segura (sin int(object) genérico para Pyright).
+    Acepta: None/bool/int/float/str-numérico/SupportsInt/SupportsIndex.
+    """
+    try:
+        if v is None:
+            return default
+        if isinstance(v, bool):
+            return int(v)
+        if isinstance(v, int):
+            return v
+        if isinstance(v, float):
+            return int(v)
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return default
+            try:
+                return int(s)
+            except ValueError:
+                # "8.0"
+                try:
+                    return int(float(s))
+                except Exception:
+                    return default
+
+        # last resort tipado
+        if isinstance(v, SupportsInt):
+            return int(v)
+        if isinstance(v, SupportsIndex):
+            return int(v)
+
+        return default
+    except Exception:
+        return default
+
+
+def _clip_hint(s: str, max_len: int = 512) -> str:
+    s2 = (s or "").strip()
+    if not s2:
+        return ""
+    return s2[:max_len]
 
 
 # ======================================================================================
 # Dedupe global por run
 # ======================================================================================
 
+
 @dataclass(slots=True)
 class _WikiRunDedupe:
     """
-    Dedupe global por run.
-
-    Evita refrescar/buscar lo mismo N veces si el input trae duplicados:
+    Dedupe global por run:
     - imdb:<imdb_id_lower>
     - ty:<norm_title>|<year_str>
     """
+
     seen_keys: set[str]
     skipped: int = 0
 
@@ -117,13 +138,16 @@ def _request_key(title: str, year: int | None, imdb_id: str | None) -> str | Non
 # Concurrency knobs
 # ======================================================================================
 
+
 def _compute_max_workers(requested: int) -> int:
     w = int(requested) if int(requested) > 0 else 1
     return max(1, min(_MAX_WORKERS_CAP, w))
 
 
 def _compute_max_inflight(max_workers: int) -> int:
-    factor = int(WIKI_MAX_INFLIGHT_FACTOR) if int(WIKI_MAX_INFLIGHT_FACTOR) > 0 else 4
+    factor = _safe_int(WIKI_MAX_INFLIGHT_FACTOR, 4)
+    if factor <= 0:
+        factor = 4
     inflight = max_workers * factor
     return max(max_workers, inflight)
 
@@ -132,6 +156,7 @@ def _compute_max_inflight(max_workers: int) -> int:
 # Public API
 # ======================================================================================
 
+
 def analyze_wiki_for_movie_inputs(
     movie_inputs: Iterable[MovieInput],
     *,
@@ -139,19 +164,13 @@ def analyze_wiki_for_movie_inputs(
 ) -> dict[str, Any]:
     """
     Orquesta un run de enriquecimiento Wiki para un iterable de MovieInput.
-
-    Uso típico:
-      - warmup de cache antes de análisis pesado
-      - runs batch sobre una lista de items (Plex/DLNA/CSV import)
-
-    Devuelve un dict con estadísticas del run (para tests o reporting opcional).
     """
     t0 = time.monotonic()
     reset_wiki_metrics()
 
-    max_workers = _compute_max_workers(int(WIKI_ANALYZE_WORKERS))
+    max_workers = _compute_max_workers(_safe_int(WIKI_ANALYZE_WORKERS, 8))
     max_inflight = _compute_max_inflight(max_workers)
-    progress_every = max(50, int(WIKI_PROGRESS_EVERY_N_ITEMS))
+    progress_every = max(50, _safe_int(WIKI_PROGRESS_EVERY_N_ITEMS, 200))
 
     dedupe = _WikiRunDedupe(seen_keys=set())
 
@@ -161,25 +180,51 @@ def analyze_wiki_for_movie_inputs(
     total_errors = 0
     total_skipped_dedupe = 0
 
-    # Para no depender de que el caller pase list, iteramos “una sola vez” (streaming).
     def _iter_inputs(it: Iterable[MovieInput]) -> Iterator[MovieInput]:
         for x in it:
             yield x
 
-    def _fetch_one(mi: MovieInput) -> None:
-        """
-        Best-effort: llama al cliente y no lanza exceptions hacia arriba.
-        """
-        try:
-            title = str(getattr(mi, "title", "") or "")
-            year = getattr(mi, "year", None)
-            imdb_id = getattr(mi, "imdb_id_hint", None)
+    def _extract_path_hints(mi: MovieInput) -> tuple[str, str]:
+        file_path = str(getattr(mi, "file_path", "") or "")
+        extra = getattr(mi, "extra", {}) or {}
+        source_url = ""
+        if isinstance(extra, dict):
+            v = extra.get("source_url")
+            if isinstance(v, str):
+                source_url = v
+        return file_path, source_url
 
-            # Preferimos el path “aware” del input (idioma por librería/contexto).
-            _ = get_wiki_for_input(movie_input=mi, title=title, year=year, imdb_id=imdb_id)
+    def _coalesce_identity(mi: MovieInput) -> tuple[str, int | None, str | None]:
+        title_raw = str(getattr(mi, "title", "") or "")
+        year_raw = getattr(mi, "year", None)
+        imdb_raw = getattr(mi, "imdb_id_hint", None)
+
+        file_path, source_url = _extract_path_hints(mi)
+        hint = _clip_hint(f"{file_path} {source_url}".strip(), max_len=512)
+
+        title2, year2, imdb2 = coalesce_movie_identity(
+            title=title_raw,
+            year=year_raw,
+            file_path=hint,
+            imdb_id_hint=imdb_raw,
+        )
+        return title2, year2, imdb2
+
+    def _fetch_one(mi: MovieInput) -> None:
+        nonlocal total_errors
+        try:
+            title2, year2, imdb2 = _coalesce_identity(mi)
+            title_norm = normalize_title_for_lookup(title2)
+
+            res = None
+            if title_norm:
+                res = get_wiki_for_input(movie_input=mi, title=title_norm, year=year2, imdb_id=imdb2)
+
+            # fallback muy conservador
+            if res is None and title2 and (not title_norm or len(title_norm) < 3):
+                _ = get_wiki_for_input(movie_input=mi, title=title2, year=year2, imdb_id=imdb2)
+
         except Exception as exc:  # pragma: no cover
-            # Errores siempre visibles, pero sin reventar el run.
-            nonlocal total_errors
             total_errors += 1
             logger.error(f"[{label}] Error en wiki enrichment: {exc!r}", always=True)
 
@@ -192,9 +237,7 @@ def analyze_wiki_for_movie_inputs(
         logger.debug_ctx("WIKI", f"analyze_wiki_for_movie_inputs: workers={max_workers} inflight={max_inflight}")
 
     try:
-        # ----------------------------------------------------------------------------
-        # Modo NO-SILENT: determinista (orden estable)
-        # ----------------------------------------------------------------------------
+        # NO-SILENT: determinista
         if not SILENT_MODE:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 inflight: set[Future[None]] = set()
@@ -202,24 +245,18 @@ def analyze_wiki_for_movie_inputs(
                 for idx, mi in enumerate(_iter_inputs(movie_inputs), start=1):
                     total_seen += 1
 
-                    title = str(getattr(mi, "title", "") or "")
-                    year = getattr(mi, "year", None)
-                    imdb_id = getattr(mi, "imdb_id_hint", None)
-
-                    key = _request_key(title, year, imdb_id)
+                    title2, year2, imdb2 = _coalesce_identity(mi)
+                    key = _request_key(title2, year2, imdb2)
                     if not key or key in dedupe.seen_keys:
                         dedupe.skipped += 1
                         total_skipped_dedupe += 1
                         continue
                     dedupe.seen_keys.add(key)
 
-                    # Progreso “humano” (visible)
-                    # Nota: no hacemos “spam” de URLs ni payloads.
                     if DEBUG_MODE:
-                        logger.info(f"[{label}] ({idx}) {title} ({year if year is not None else '?'})")
+                        logger.info(f"[{label}] ({idx}) {title2} ({year2 if year2 is not None else '?'})")
                     else:
-                        # En NO-DEBUG, línea más compacta.
-                        logger.info(f"[{label}] ({idx}) {title}")
+                        logger.info(f"[{label}] ({idx}) {title2}")
 
                     inflight.add(pool.submit(_fetch_one, mi))
                     total_submitted += 1
@@ -231,11 +268,9 @@ def analyze_wiki_for_movie_inputs(
                             try:
                                 f.result()
                             except Exception:
-                                # _fetch_one ya hace best-effort, pero por seguridad:
                                 total_errors += 1
                             total_processed += 1
 
-                # drain
                 while inflight:
                     done, _ = wait(inflight, return_when=FIRST_COMPLETED)
                     for f in done:
@@ -246,9 +281,7 @@ def analyze_wiki_for_movie_inputs(
                             total_errors += 1
                         total_processed += 1
 
-        # ----------------------------------------------------------------------------
-        # Modo SILENT: streaming concurrente + progreso “cada N”
-        # ----------------------------------------------------------------------------
+        # SILENT: streaming
         else:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 inflight2: set[Future[None]] = set()
@@ -256,11 +289,8 @@ def analyze_wiki_for_movie_inputs(
                 for mi in _iter_inputs(movie_inputs):
                     total_seen += 1
 
-                    title = str(getattr(mi, "title", "") or "")
-                    year = getattr(mi, "year", None)
-                    imdb_id = getattr(mi, "imdb_id_hint", None)
-
-                    key = _request_key(title, year, imdb_id)
+                    title2, year2, imdb2 = _coalesce_identity(mi)
+                    key = _request_key(title2, year2, imdb2)
                     if not key or key in dedupe.seen_keys:
                         dedupe.skipped += 1
                         total_skipped_dedupe += 1
@@ -283,7 +313,6 @@ def analyze_wiki_for_movie_inputs(
                                 total_errors += 1
                             total_processed += 1
 
-                # drain
                 while inflight2:
                     done, _ = wait(inflight2, return_when=FIRST_COMPLETED)
                     for f in done:
@@ -303,7 +332,6 @@ def analyze_wiki_for_movie_inputs(
             f"dedupe_skipped={total_skipped_dedupe} errors={total_errors}"
         )
 
-        # Métricas: el cliente ya decide si loguearlas (según config_wiki + silent/debug).
         try:
             log_wiki_metrics_summary()
         except Exception:
@@ -320,7 +348,6 @@ def analyze_wiki_for_movie_inputs(
         }
 
     finally:
-        # Flush cache + métricas siempre al final (best-effort)
         try:
             flush_wiki_cache()
         except Exception as exc:  # pragma: no cover
@@ -328,17 +355,7 @@ def analyze_wiki_for_movie_inputs(
                 logger.debug_ctx("WIKI", f"flush_wiki_cache failed: {exc!r}")
 
 
-def analyze_wiki_single(
-    *,
-    title: str,
-    year: int | None,
-    imdb_id: str | None,
-) -> None:
-    """
-    Helper simple para CLI/tests: enriquece un único título.
-
-    Nota: usa get_wiki (sin MovieInput), pensado para debugging.
-    """
+def analyze_wiki_single(*, title: str, year: int | None, imdb_id: str | None) -> None:
     reset_wiki_metrics()
     logger.progress("[WIKI] Single lookup: start")
     try:
@@ -357,7 +374,4 @@ def analyze_wiki_single(
         logger.progress("[WIKI] Single lookup: end")
 
 
-__all__ = [
-    "analyze_wiki_for_movie_inputs",
-    "analyze_wiki_single",
-]
+__all__ = ["analyze_wiki_for_movie_inputs", "analyze_wiki_single"]

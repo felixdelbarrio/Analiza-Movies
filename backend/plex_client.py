@@ -597,7 +597,16 @@ def get_imdb_id_from_movie(movie: object) -> str | None:
 # ============================================================
 #        MEJOR TÍTULO PARA BÚSQUEDA (OMDb / Wiki)
 # ============================================================
+def get_original_title(movie: object) -> str | None:
+    """\
+    Devuelve ``movie.originalTitle`` de forma defensiva.
 
+    En plexapi, acceder a ciertos atributos (p.ej. ``originalTitle``) puede disparar
+    un reload HTTP interno si el objeto está lazy. Si Plex corta la conexión,
+    puede lanzarse ConnectionError/ProtocolError. Este helper encapsula el acceso
+    con ``_safe_getattr_str`` para que un fallo puntual no rompa el run.
+    """
+    return _safe_getattr_str(movie, "originalTitle")
 
 def get_best_search_title(movie: object) -> str | None:
     """
@@ -622,6 +631,7 @@ __all__ = [
     "connect_plex",
     "get_libraries_to_analyze",
     "get_movie_file_info",
+    "get_original_title",
     "get_imdb_id_from_movie",
     "get_imdb_id_from_plex_guid",
     "get_best_search_title",

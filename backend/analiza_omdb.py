@@ -8,51 +8,16 @@ Orquestador de enriquecimiento OMDb (sin UI).
 Responsabilidades
 -----------------
 - Invocar el cliente OMDb/cache (backend.omdb_client) de forma robusta (best-effort).
-- Normalizar/extraer campos útiles (ratings/votes/rt) desde el payload OMDb.
+- Normalizar/extraer campos útiles (ratings/votes/rt/metacritic) desde el payload OMDb.
 - Exponer una estructura “digerida” para el resto del pipeline.
 - (Opcional) Persistir "parches" a records cacheados vía patch_cached_omdb_record
   para evitar recalcular/reenriquecer en futuras ejecuciones.
 
-No-responsabilidades (delegadas a omdb_client.py)
-------------------------------------------------
-- HTTP, retries, throttle, semaphore, single-flight, circuit breaker.
-- Cache persistente, compaction, TTL, negative caching.
-- Candidate search (s=) y fallback a i=.
-- Política de deshabilitado (OMDB_DISABLED) y manejo de API key inválida.
-
-Diseño
-------
-- Este módulo NO decide si OMDb está "enabled": lo respeta vía omdb_client (OMDB_DISABLED, API key, etc.).
-- Logs centralizados usando backend/logger.py:
-    - logger.debug_ctx("OMDB", ...) para diagnóstico (gated por DEBUG_MODE).
-    - logger.warning(..., always=True) sólo si fuera estrictamente necesario (aquí normalmente no).
-- Fail-safe: cualquier excepción aquí NO debe romper el run; devolvemos None/valores vacíos.
-
-Ajustes alineados con omdb_client.py (schema v4)
-------------------------------------------------
-1) Empty-ratings awareness:
-   - OMDb puede devolver Response=True pero sin ratings (cache status "empty_ratings").
-   - El pipeline debe distinguir "enrichment válido sin ratings" para evitar reintentos o confusiones.
-   - Se expone:
-       - OmdbEnrichment.has_ratings
-       - metadata["omdb_has_ratings"] (si se aplica)
-
-2) Normalización defensiva de Year:
-   - OMDb puede devolver Year como "2019–2020", "2019-2020", etc.
-   - Canonizamos a los 4 primeros dígitos si existen.
-
-3) Writeback robusto:
-   - Normalizamos imdb_id (lower/strip) antes de patch_cached_omdb_record.
-   - Recomendación de uso: si dispones de OmdbEnrichment, usa enrichment.imdb_id (confirmado).
-
-BONUS) Diagnóstico suave en Response=False:
-   - Si OMDb responde Response=False, devolvemos None (sin enrichment),
-     pero dejamos traza en DEBUG con el "Error" si existe.
-
-Configuración
--------------
-- Este módulo no introduce configs nuevas. Toda la política (TTL, throttling, métricas, etc.)
-  vive en backend/config_omdb.py y backend/omdb_client.py.
+Compat extract_ratings_from_omdb
+-------------------------------
+- Acepta:
+    - versión antigua: (imdb_rating, imdb_votes, rt_score)
+    - versión nueva:   (imdb_rating, imdb_votes, rt_score, metacritic_score)
 
 API pública
 -----------
@@ -61,16 +26,13 @@ API pública
 - writeback_omdb_wiki_block(norm_title, norm_year, imdb_id, wiki_block) -> bool
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 from backend import logger
-from backend.movie_input import normalize_title_for_lookup
-from backend.omdb_client import (
-    extract_ratings_from_omdb,
-    omdb_query_with_cache,
-    patch_cached_omdb_record,
-)
+from backend.title_utils import normalize_title_for_lookup
+from backend.omdb_client import extract_ratings_from_omdb, omdb_query_with_cache, patch_cached_omdb_record
+
 
 # =============================================================================
 # Logging (centralizado)
@@ -78,8 +40,13 @@ from backend.omdb_client import (
 
 
 def _dbg(msg: object) -> None:
-    """Diagnóstico contextual (solo si DEBUG_MODE=True)."""
-    logger.debug_ctx("OMDB", msg)
+    """Diagnóstico contextual (solo si DEBUG_MODE=True). Best-effort."""
+    fn = getattr(logger, "debug_ctx", None)
+    if callable(fn):
+        try:
+            fn("OMDB", msg)
+        except Exception:
+            pass
 
 
 # =============================================================================
@@ -93,8 +60,8 @@ class OmdbEnrichment:
     Resultado “digerido” para el pipeline.
 
     - payload: dict OMDb completo (para consumidores avanzados)
-    - imdb_rating, imdb_votes, rt_score: valores ya parseados (None si no disponibles)
-    - has_ratings: True si existe al menos uno de los 3 (rating/votes/rt)
+    - imdb_rating, imdb_votes, rt_score, metacritic_score: valores parseados (None si no disponibles)
+    - has_ratings: True si existe al menos uno de los 4 (rating/votes/rt/metacritic)
     - imdb_id: imdbID final (si OMDb lo devuelve)
     - norm_title, norm_year: canon de cache/pipeline (normalizados)
     """
@@ -103,10 +70,45 @@ class OmdbEnrichment:
     imdb_rating: float | None
     imdb_votes: int | None
     rt_score: int | None
+    metacritic_score: int | None
     has_ratings: bool
     imdb_id: str | None
     norm_title: str
     norm_year: str
+
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+
+def _extract_ratings_compat(data: Mapping[str, object]) -> tuple[float | None, int | None, int | None, int | None]:
+    """
+    Compatibilidad con extract_ratings_from_omdb:
+      - viejo: (imdb_rating, imdb_votes, rt_score)
+      - nuevo: (imdb_rating, imdb_votes, rt_score, metacritic_score)
+    """
+    try:
+        out_obj: object = extract_ratings_from_omdb(data)
+    except Exception:
+        return None, None, None, None
+
+    imdb_rating: float | None = None
+    imdb_votes: int | None = None
+    rt_score: int | None = None
+    mc_score: int | None = None
+
+    if isinstance(out_obj, tuple):
+        if len(out_obj) >= 1 and (isinstance(out_obj[0], (int, float)) or out_obj[0] is None):
+            imdb_rating = float(out_obj[0]) if isinstance(out_obj[0], (int, float)) else None
+        if len(out_obj) >= 2 and (isinstance(out_obj[1], int) or out_obj[1] is None):
+            imdb_votes = out_obj[1]
+        if len(out_obj) >= 3 and (isinstance(out_obj[2], int) or out_obj[2] is None):
+            rt_score = out_obj[2]
+        if len(out_obj) >= 4 and (isinstance(out_obj[3], int) or out_obj[3] is None):
+            mc_score = out_obj[3]
+
+    return imdb_rating, imdb_votes, rt_score, mc_score
 
 
 # =============================================================================
@@ -129,7 +131,7 @@ def enrich_with_omdb(
     - No lanza excepciones al caller.
 
     Nota:
-    - Response=False => None (sin enrichment), pero en DEBUG loguea el error (BONUS).
+    - Response=False => None (sin enrichment), pero en DEBUG loguea el error.
     - Response=True pero sin ratings => enrichment válido con has_ratings=False.
     """
     try:
@@ -149,15 +151,16 @@ def enrich_with_omdb(
         if not isinstance(data, dict):
             return None
 
-        # Response=False => sin enrichment (pero log suave en DEBUG)
         if data.get("Response") != "True":
             err = data.get("Error")
             if err is not None:
                 _dbg(f"OMDb Response=False: {err!r}")
             return None
 
-        imdb_rating, imdb_votes, rt_score = extract_ratings_from_omdb(data)
-        has_ratings = not (imdb_rating is None and imdb_votes is None and rt_score is None)
+        imdb_rating, imdb_votes, rt_score, metacritic_score = _extract_ratings_compat(data)
+        has_ratings = not (
+            imdb_rating is None and imdb_votes is None and rt_score is None and metacritic_score is None
+        )
 
         imdb_id_final = data.get("imdbID")
         if not isinstance(imdb_id_final, str) or not imdb_id_final.strip():
@@ -165,12 +168,10 @@ def enrich_with_omdb(
         else:
             imdb_id_final = imdb_id_final.strip().lower()
 
-        # title/year canónicos (si OMDb devolvió mejores)
         t = data.get("Title")
         if isinstance(t, str) and t.strip():
             norm_title = normalize_title_for_lookup(t) or norm_title
 
-        # Year defensivo: "2019–2020", "2019-2020", etc. -> "2019"
         y = data.get("Year")
         if isinstance(y, str):
             y4 = y.strip()[:4]
@@ -182,6 +183,7 @@ def enrich_with_omdb(
             imdb_rating=imdb_rating,
             imdb_votes=imdb_votes,
             rt_score=rt_score,
+            metacritic_score=metacritic_score,
             has_ratings=has_ratings,
             imdb_id=imdb_id_final,
             norm_title=norm_title,
@@ -211,8 +213,8 @@ def apply_omdb_enrichment_to_metadata(
     - Si overwrite=False, no pisa valores existentes no vacíos.
 
     Campos aplicados:
-    - omdb_imdb_rating, omdb_imdb_votes, omdb_rt_score
-    - omdb_has_ratings (bool): indica si hay al menos uno de esos campos
+    - omdb_imdb_rating, omdb_imdb_votes, omdb_rt_score, omdb_metacritic_score
+    - omdb_has_ratings (bool)
     - imdbID (opcional): imdb_id confirmado (si existe)
     """
     try:
@@ -229,16 +231,10 @@ def apply_omdb_enrichment_to_metadata(
         put("omdb_imdb_rating", enrichment.imdb_rating)
         put("omdb_imdb_votes", enrichment.imdb_votes)
         put("omdb_rt_score", enrichment.rt_score)
+        put("omdb_metacritic_score", enrichment.metacritic_score)
 
-        # Siempre útil, y no depende de ratings concretos.
         put("omdb_has_ratings", bool(enrichment.has_ratings))
-
-        # opcional: guardar imdb_id “confirmado”
         put("imdbID", enrichment.imdb_id)
-
-        # opcional: guardar payload completo (trazabilidad)
-        # OJO: puede crecer; dejar desactivado por defecto.
-        # put("omdb_payload", enrichment.payload)
 
         return metadata
 
@@ -259,17 +255,7 @@ def writeback_omdb_wiki_block(
     imdb_id: str | None,
     wiki_block: Mapping[str, object] | None,
 ) -> bool:
-    """
-    Escribe en caché OMDb un bloque mínimo de wiki (en __wiki) asociado al record.
-
-    Esto permite que el pipeline “pegue” información de Wikipedia/Wikidata al payload
-    de OMDb sin recalcular en cada run.
-
-    Nota:
-    - Sanitización y merge del __wiki lo hace omdb_client._merge_dict_shallow().
-    - Aquí solo orquestamos el write-back.
-    - Se normaliza imdb_id (lower/strip) para maximizar hit en index_imdb.
-    """
+    """Escribe en caché OMDb un bloque mínimo de wiki (en __wiki) asociado al record."""
     try:
         imdb_norm = imdb_id.strip().lower() if isinstance(imdb_id, str) and imdb_id.strip() else None
 
