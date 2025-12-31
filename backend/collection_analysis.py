@@ -8,7 +8,7 @@ Orquestador “por item” que conecta el pipeline completo para UNA película.
 Este módulo coordina (no decide reglas de negocio):
 - Entrada unificada (MovieInput).
 - Resolución LAZY de OMDb (callback fetch_omdb).
-- Resolución LAZY de Wiki (solo si compensa) con negative caching intra-run.
+- Resolución LAZY de Wiki (solo si compensa) con caché persistente/intra-run.
 - Enriquecimiento final para reporting (poster, imdb_id, wiki minimal...).
 - Sugerencias de metadata (solo Plex).
 
@@ -29,7 +29,7 @@ Este módulo coordina (no decide reglas de negocio):
         c) _should_fetch_wiki_for_reporting(base_row) = True
    - Si falla o es negativo => cachea MISS intra-run para evitar reintentos.
 
-   ✅ NUEVO: fallback opcional sin imdb_id
+   ✅ Fallback opcional sin imdb_id
    - Config: COLLECTION_LAZY_WIKI_ALLOW_TITLE_YEAR_FALLBACK
    - Si no hay imdb_id (ni omdb ni hint) y está habilitado:
         - permite intentar Wiki por (title, year) como último recurso.
@@ -43,18 +43,29 @@ Este módulo coordina (no decide reglas de negocio):
    - Devuelve logs acotados; orquestadores deciden si mostrar según SILENT/DEBUG.
    - Se apoya en backend/logger.py (append_bounded_log, debug_ctx, truncate_line).
 
-   ✅ NUEVO: trazas también a debug_ctx (opcional)
+   ✅ Trazas también a debug_ctx (opcional)
    - Config: COLLECTION_TRACE_ALSO_DEBUG_CTX
    - Si False: las trazas se quedan solo en el buffer `logs` del item.
 
 5) Payload OMDb JSON en report:
-   ✅ NUEVO: COLLECTION_OMDB_JSON_MODE
-   - "auto"   (default): comportamiento previo (solo si not silent o debug)
+   ✅ COLLECTION_OMDB_JSON_MODE
+   - "auto"   (default): solo si not silent o debug
    - "never"  : nunca incluir omdb_json
    - "always" : siempre incluir omdb_json (⚠️ tamaño reports)
 
 ⚠️ Este módulo NO hace flush por item:
 - expone flush_external_caches() para que el orquestador lo llame UNA vez al final.
+
+──────────────────────────────────────────────────────────────────────────────
+CAMBIOS EN ESTA REVISION
+──────────────────────────────────────────────────────────────────────────────
+- Refactor: usa plex_original_title (si existe) como plex_title para el core
+  (mejor comparación OMDb EN vs Plex originalTitle EN aunque librería sea ES).
+- Refactor: normalize_title_for_lookup importado desde backend.title_utils (módulo central).
+- ✅ NUEVO: coalesce_movie_identity para alinear caches + OMDb lookup + Lazy Wiki:
+    - derive (coalesced_title, coalesced_year, coalesced_imdb) usando file_path + extra["source_url"]
+    - se usa para cache keys, lookup_key y llamadas a Wiki.
+- Mantiene compat, estructura y logs.
 """
 
 import json
@@ -77,8 +88,9 @@ from backend.config_collection import (
     COLLECTION_WIKI_LOCAL_CACHE_MAX_ITEMS,
 )
 from backend.metadata_fix import generate_metadata_suggestions_row
-from backend.movie_input import MovieInput, normalize_title_for_lookup
+from backend.movie_input import MovieInput, coalesce_movie_identity
 from backend.omdb_client import omdb_query_with_cache
+from backend.title_utils import normalize_title_for_lookup
 from backend.wiki_client import get_wiki, get_wiki_for_input
 
 # -----------------------------------------------------------------------------
@@ -422,6 +434,44 @@ def _should_include_omdb_json() -> bool:
 
 
 # ============================================================================
+# ✅ Coalesce identidad (alineado con analyze_input_core / analiza_wiki)
+# ============================================================================
+
+
+def _extract_source_url(mi: MovieInput) -> str:
+    extra = getattr(mi, "extra", {}) or {}
+    if isinstance(extra, dict):
+        v = extra.get("source_url")
+        if isinstance(v, str):
+            return v
+    return ""
+
+
+def _coalesce_identity(mi: MovieInput) -> tuple[str, int | None, str | None]:
+    """
+    Devuelve (title2, year2, imdb2) usando file_path + source_url como hints.
+    Best-effort: si falla, vuelve a (mi.title, mi.year, mi.imdb_id_hint).
+    """
+    try:
+        title_raw = str(getattr(mi, "title", "") or "")
+        year_raw = getattr(mi, "year", None)
+        imdb_raw = getattr(mi, "imdb_id_hint", None)
+
+        file_path = str(getattr(mi, "file_path", "") or "")
+        source_url = _extract_source_url(mi)
+
+        title2, year2, imdb2 = coalesce_movie_identity(
+            title=title_raw,
+            year=year_raw,
+            file_path=f"{file_path} {source_url}".strip(),
+            imdb_id_hint=imdb_raw,
+        )
+        return title2, year2, imdb2
+    except Exception:
+        return (mi.title or ""), mi.year, (mi.imdb_id_hint if isinstance(mi.imdb_id_hint, str) else None)
+
+
+# ============================================================================
 # API: flush explícito (para orquestadores)
 # ============================================================================
 
@@ -466,7 +516,20 @@ def analyze_movie(
     else:
         display_year = movie_input.year
 
-    imdb_hint = _norm_imdb_hint(movie_input.imdb_id_hint)
+    # ✅ Coalesce identidad UNA vez para alinear todo (caches, lookup_key, wiki)
+    co_title, co_year, co_imdb = _coalesce_identity(movie_input)
+
+    imdb_hint_raw = _norm_imdb_hint(movie_input.imdb_id_hint)
+    imdb_hint = _norm_imdb_hint(co_imdb) or imdb_hint_raw  # preferimos el coalesced si existe
+
+    # ✅ Nuevo: para el core (misidentified / comparación con OMDb),
+    # preferimos originalTitle (EN) si existe en extra, y si no, el display_title.
+    plex_original_title_raw = movie_input.extra.get("plex_original_title")
+    plex_title_for_core = (
+        plex_original_title_raw
+        if isinstance(plex_original_title_raw, str) and plex_original_title_raw.strip()
+        else display_title
+    )
 
     # 1) Callback fetch_omdb: LRU + negative intra-run + read-through de __wiki
     omdb_data: dict[str, object] | None = None
@@ -546,7 +609,7 @@ def analyze_movie(
         base_row: AnalysisRow = analyze_input_movie(
             movie_input,
             fetch_omdb,
-            plex_title=display_title,
+            plex_title=plex_title_for_core,  # ✅ aquí va originalTitle si existe
             plex_year=display_year,
             plex_rating=plex_rating,
             metacritic_score=None,
@@ -570,9 +633,10 @@ def analyze_movie(
         )
         return None, None, logs
 
-    # 4) Lazy Wiki
+    # 4) Lazy Wiki (alineado con coalesced identity)
     if _cfg_bool(COLLECTION_ENABLE_LAZY_WIKI) and not wiki_meta and _should_fetch_wiki_for_reporting(base_row):
-        key_post = _cache_key(movie_input.title, movie_input.year, imdb_hint)
+        # ✅ usamos (co_title/co_year/imdb_hint) para key/cache
+        key_post = _cache_key(co_title, co_year, imdb_hint)
 
         with _LOCAL_CACHE_LOCK:
             wiki_local = _lru_get(_WIKI_LOCAL_CACHE, key_post)
@@ -584,10 +648,10 @@ def analyze_movie(
         else:
             if omdb_data is None and _cfg_bool(COLLECTION_LAZY_WIKI_FORCE_OMDB_POST_CORE):
                 _dbg_ctx("Lazy Wiki -> forcing OMDb fetch (post-core) due to config.")
-                _ = fetch_omdb(movie_input.title, movie_input.year)
+                _ = fetch_omdb(co_title, co_year)
 
             omdb_dict_for_wiki = omdb_data or {}
-            lookup_key = _build_lookup_key(movie_input.title, movie_input.year, imdb_hint)
+            lookup_key = _build_lookup_key(co_title, co_year, imdb_hint)
 
             imdb_id_from_omdb: str | None = None
             imdb_raw = omdb_dict_for_wiki.get("imdbID")
@@ -603,16 +667,17 @@ def analyze_movie(
             else:
                 wiki_item: Mapping[str, object] | None
                 try:
+                    # ✅ co_title/co_year: alineado con coalesce
                     wiki_item = get_wiki_for_input(
                         movie_input=movie_input,
-                        title=movie_input.title,
-                        year=movie_input.year,
+                        title=co_title,
+                        year=co_year,
                         imdb_id=imdb_used_for_wiki,
                     )
                     if wiki_item is None:
                         wiki_item = get_wiki(
-                            title=movie_input.title,
-                            year=movie_input.year,
+                            title=co_title,
+                            year=co_year,
                             imdb_id=imdb_used_for_wiki,
                         )
                 except Exception as exc:  # pragma: no cover
@@ -645,8 +710,8 @@ def analyze_movie(
                             source_language_from_wiki = sl.strip()
 
                     wiki_lookup = _build_wiki_lookup_info(
-                        title_for_fetch=movie_input.title,
-                        year_for_fetch=movie_input.year,
+                        title_for_fetch=co_title,
+                        year_for_fetch=co_year,
                         imdb_used=imdb_used_for_wiki or imdb_id_from_wiki,
                     )
 
@@ -665,8 +730,8 @@ def analyze_movie(
                         omdb_dict_for_wiki["__wiki"] = minimal_wiki
 
                     _persist_minimal_wiki_into_omdb_cache(
-                        title_for_fetch=movie_input.title,
-                        year_for_fetch=movie_input.year,
+                        title_for_fetch=co_title,
+                        year_for_fetch=co_year,
                         imdb_id_for_cache=imdb_id_from_omdb,
                         imdb_hint=imdb_hint,
                         minimal_wiki=minimal_wiki,
@@ -762,8 +827,11 @@ def analyze_movie(
         wikidata_id_raw.strip() if isinstance(wikidata_id_raw, str) and wikidata_id_raw.strip() else None
     )
     if wikidata_id is None:
+        # compat con typo histórico en algunas caches (__wiki antiguo)
         wikadata_id_raw = wiki_meta.get("wikadata_id")
-        wikidata_id = wikadata_id_raw.strip() if isinstance(wikadata_id_raw, str) and wikadata_id_raw.strip() else None
+        wikidata_id = (
+            wikadata_id_raw.strip() if isinstance(wikadata_id_raw, str) and wikadata_id_raw.strip() else None
+        )
 
     wikipedia_title_raw = wiki_meta.get("wikipedia_title")
     wikipedia_title: str | None = (

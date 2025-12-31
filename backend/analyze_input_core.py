@@ -5,21 +5,30 @@ backend/analyze_input_core.py
 
 Core genérico de análisis para una película (MovieInput), independiente del origen
 (Plex, DLNA, fichero local, etc.).
+
+✅ Soporta extract_ratings_from_omdb con tupla legacy (3) o nueva (4) incluyendo metacritic_score.
+✅ metacritic_score cuenta como señal externa y se propaga a scoring + report.
+✅ Best-effort con config, run_metrics y logger (no rompe si faltan).
+
+REFactor (title identity / lookup):
+- ✅ Usa coalesce_movie_identity (best-effort) para derivar lookup_title + lookup_year
+  apoyándose en file_path + extra["source_url"] cuando existe.
+- ✅ lookup_year SOLO se usa para fetch OMDb (mejor precisión). movie.year se conserva en el row.
 """
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import ModuleType, TracebackType
 from typing import Final, Protocol, TypedDict, cast
+import threading
 
 from backend.decision_logic import detect_misidentified
-from backend.movie_input import MovieInput
+from backend.movie_input import MovieInput, coalesce_movie_identity
 from backend.omdb_client import extract_ratings_from_omdb
 from backend.scoring import compute_scoring
 
 # -----------------------------------------------------------------------------
 # Config (best-effort). Preferimos backend.config (agregador) y caemos a config_core.
-#  FIX mypy: evitar "Name ... already defined" usando nombres temporales.
 # -----------------------------------------------------------------------------
 _cfg: ModuleType | None = None
 try:
@@ -64,10 +73,7 @@ except Exception:  # pragma: no cover
 # Helpers de configuración (NO lanzan)
 # =============================================================================
 def _safe_getattr_obj(mod: ModuleType, name: str) -> object | None:
-    """
-    getattr() tipado estable:
-    - mypy a veces infiere Any; aquí lo “cortamos” a object.
-    """
+    """getattr() tipado estable (corta Any a object)."""
     try:
         return cast(object, getattr(mod, name))
     except Exception:
@@ -75,12 +81,7 @@ def _safe_getattr_obj(mod: ModuleType, name: str) -> object | None:
 
 
 def _cfg_get_attr(name: str) -> object | None:
-    """
-    Busca un atributo en:
-      1) backend.config (si existe)
-      2) backend.config_core (si existe)
-    y devuelve None si no se encuentra.
-    """
+    """Busca un atributo en config/config_core y devuelve None si no se encuentra."""
     if _cfg is not None:
         try:
             if hasattr(_cfg, name):
@@ -99,10 +100,7 @@ def _cfg_get_attr(name: str) -> object | None:
 
 
 def _int_or_none(value: object | None) -> int | None:
-    """
-    Convierte a int solo si el tipo es seguro (int/float/bool/str numérico).
-    Devuelve None si no se puede.
-    """
+    """Convierte a int si el tipo es seguro (int/float/bool/str numérico)."""
     try:
         if value is None:
             return None
@@ -116,7 +114,6 @@ def _int_or_none(value: object | None) -> int | None:
             s = value.strip()
             if not s:
                 return None
-            # permite "12.0"
             return int(float(s))
         return None
     except Exception:
@@ -124,22 +121,11 @@ def _int_or_none(value: object | None) -> int | None:
 
 
 def _to_int(value: object | None, default: int) -> int:
-    """
-    Conversión defensiva y Pyright-friendly a int.
-    Acepta: int/float/bool/str; cualquier otra cosa -> default.
-
-    IMPORTANTE: evita `int(value)` cuando value es `object` desconocido
-    (eso dispara: No overload variant of "int" matches argument type "object").
-    """
     out = _int_or_none(value)
     return out if out is not None else default
 
 
 def _to_float(value: object | None, default: float) -> float:
-    """
-    Conversión defensiva y Pyright-friendly a float.
-    Acepta: int/float/bool/str; cualquier otra cosa -> default.
-    """
     if value is None:
         return default
     try:
@@ -158,13 +144,6 @@ def _to_float(value: object | None, default: float) -> float:
 
 
 def _to_bool(value: object | None, default: bool) -> bool:
-    """
-    Conversión defensiva a bool.
-    - bool -> mismo
-    - int/float -> bool(x)
-    - str -> reconoce true/false comunes
-    - resto -> default
-    """
     if value is None:
         return default
     try:
@@ -239,42 +218,68 @@ class _ObserveSecondsFn(Protocol):
     def __call__(self, name: str, *, seconds: float) -> None: ...
 
 
-_METRICS_BIND_LOCKED: bool = False
+# Bind thread-safe (evita races)
+_METRICS_BIND_ONCE_DONE: bool = False
+_METRICS_BIND_LOCK = threading.Lock()
 _METRICS_INC_FN: _IncFn | None = None
 _METRICS_OBS_FN: _ObserveSecondsFn | None = None
 
 
 def _metrics_bind_once() -> None:
-    global _METRICS_BIND_LOCKED, _METRICS_INC_FN, _METRICS_OBS_FN
-    if _METRICS_BIND_LOCKED:
-        return
-    _METRICS_BIND_LOCKED = True
+    global _METRICS_BIND_ONCE_DONE, _METRICS_INC_FN, _METRICS_OBS_FN
 
-    if _rm is None:
-        _METRICS_INC_FN = None
-        _METRICS_OBS_FN = None
-        return
-
+    acquired = False
     try:
-        inc_obj = getattr(_rm, "inc", None) or getattr(_rm, "counter_inc", None)
-        obs_obj = getattr(_rm, "observe_seconds", None) or getattr(_rm, "timing", None)
-        _METRICS_INC_FN = cast(_IncFn, inc_obj) if callable(inc_obj) else None
-        _METRICS_OBS_FN = cast(_ObserveSecondsFn, obs_obj) if callable(obs_obj) else None
-    except Exception:
-        _METRICS_INC_FN = None
-        _METRICS_OBS_FN = None
+        acquired = _METRICS_BIND_LOCK.acquire()
+
+        if _METRICS_BIND_ONCE_DONE:
+            return
+        _METRICS_BIND_ONCE_DONE = True
+
+        if _rm is None:
+            _METRICS_INC_FN = None
+            _METRICS_OBS_FN = None
+            return
+
+        try:
+            inc_obj = getattr(_rm, "inc", None) or getattr(_rm, "counter_inc", None)
+            obs_obj = getattr(_rm, "observe_seconds", None) or getattr(_rm, "timing", None)
+
+            _METRICS_INC_FN = cast(_IncFn, inc_obj) if callable(inc_obj) else None
+            _METRICS_OBS_FN = cast(_ObserveSecondsFn, obs_obj) if callable(obs_obj) else None
+        except Exception:
+            _METRICS_INC_FN = None
+            _METRICS_OBS_FN = None
+    finally:
+        if acquired:
+            try:
+                _METRICS_BIND_LOCK.release()
+            except Exception:
+                pass
 
 
 def _m(name: str, value: int = 1) -> None:
+    # No emitir métricas con value=0 (evita ruido y edge cases)
+    if value == 0:
+        return
     if not _METRICS_ENABLED or _rm is None:
         return
+
     full = f"{_METRIC_PREFIX}{name}"
+
     try:
+        did_call = False
+
         if _METRICS_LAZY_BIND_ENABLED:
             _metrics_bind_once()
-            if _METRICS_INC_FN is not None:
-                _METRICS_INC_FN(full, value=value)
-                return
+            fn = _METRICS_INC_FN
+            if fn is not None:
+                fn(full, value=value)
+                did_call = True
+
+        if did_call:
+            return
+
         fn_obj = getattr(_rm, "inc", None) or getattr(_rm, "counter_inc", None)
         if callable(fn_obj):
             cast(_IncFn, fn_obj)(full, value=value)
@@ -285,13 +290,22 @@ def _m(name: str, value: int = 1) -> None:
 def _m_obs(name: str, seconds: float) -> None:
     if not _METRICS_ENABLED or _rm is None:
         return
+
     full = f"{_METRIC_PREFIX}{name}"
+
     try:
+        did_call = False
+
         if _METRICS_LAZY_BIND_ENABLED:
             _metrics_bind_once()
-            if _METRICS_OBS_FN is not None:
-                _METRICS_OBS_FN(full, seconds=seconds)
-                return
+            fn = _METRICS_OBS_FN
+            if fn is not None:
+                fn(full, seconds=seconds)
+                did_call = True
+
+        if did_call:
+            return
+
         fn_obj = getattr(_rm, "observe_seconds", None) or getattr(_rm, "timing", None)
         if callable(fn_obj):
             cast(_ObserveSecondsFn, fn_obj)(full, seconds=seconds)
@@ -333,6 +347,7 @@ class AnalysisRow(TypedDict, total=False):
     imdb_rating: float | None
     imdb_bayes: float | None
     rt_score: int | None
+    metacritic_score: int | None
     imdb_votes: int | None
     plex_rating: float | None
 
@@ -422,28 +437,67 @@ def _collapse_spaces(s: str) -> str:
     return " ".join(s.strip().split())
 
 
-def _get_lookup_title(movie: MovieInput, *, trace: Callable[[str], None]) -> str:
+# =============================================================================
+# Lookup identity (NEW) + backwards-compatible lookup_title
+# =============================================================================
+def _get_lookup_identity(movie: MovieInput, *, trace: Callable[[str], None]) -> tuple[str, int | None, str | None]:
+    """
+    Devuelve (lookup_title, lookup_year, imdb_id_hint_coalesced).
+
+    - lookup_title: string normalizado para lookup
+    - lookup_year: año coalesced (puede venir del filename/path), SOLO para OMDb fetch
+    - imdb_id: si coalesce lo detecta (útil para el futuro; no cambia decisión aquí)
+    """
+    # 1) Intento: normalizado “oficial” del MovieInput
     try:
         primary = (movie.normalized_title_for_lookup() or "").strip()
     except Exception:
         primary = ""
 
+    # 2) Coalesce identidad (título/año/imdb) usando hints del path/url (best-effort)
+    try:
+        extra = getattr(movie, "extra", {}) or {}
+        source_url = ""
+        if isinstance(extra, dict):
+            v = extra.get("source_url")
+            if isinstance(v, str):
+                source_url = v
+
+        hint = f"{movie.file_path or ''} {source_url}".strip()
+
+        title2, year2, imdb2 = coalesce_movie_identity(
+            title=movie.title or "",
+            year=movie.year,
+            file_path=hint,
+            imdb_id_hint=movie.imdb_id_hint,
+        )
+    except Exception:
+        title2, year2, imdb2 = (movie.title or ""), movie.year, movie.imdb_id_hint
+
+    # Si el primary existe, lo usamos como lookup_title, pero devolvemos year2/imdb2 igualmente
     if primary:
-        return primary
+        return primary, year2, imdb2
 
     if not _LOOKUP_TITLE_FALLBACK_ENABLED:
-        return ""
+        return "", year2, imdb2
 
-    raw = movie.title or ""
-    fb = _collapse_spaces(raw)
+    fb = _collapse_spaces(title2 or "")
     if not fb:
-        return ""
+        return "", year2, imdb2
 
     if len(fb) > _LOOKUP_TITLE_FALLBACK_MAX_CHARS:
         fb = fb[:_LOOKUP_TITLE_FALLBACK_MAX_CHARS].rstrip()
 
-    trace(f"lookup_title fallback | used movie.title (len={len(fb)})")
-    return fb
+    trace(f"lookup_title fallback | used coalesced title (len={len(fb)})")
+    return fb, year2, imdb2
+
+
+def _get_lookup_title(movie: MovieInput, *, trace: Callable[[str], None]) -> str:
+    """
+    Backwards-compatible: devuelve SOLO el lookup_title (str).
+    """
+    t, _y, _imdb = _get_lookup_identity(movie, trace=trace)
+    return t
 
 
 # =============================================================================
@@ -457,7 +511,7 @@ def _make_tracer(analysis_trace: TraceCallable | None) -> Callable[[str], None]:
             try:
                 analysis_trace(clipped)
             except Exception:
-                return
+                pass
             return
 
         if _log is None:
@@ -512,14 +566,6 @@ def _compute_scoring_safe(
     metacritic_score: int | None,
     trace: Callable[[str], None],
 ) -> tuple[str, str, float | None, Mapping[str, object] | None]:
-    """
-    Wrapper defensivo alrededor de compute_scoring().
-
-    ✅ FIX pyright "unreachable":
-    - compute_scoring suele estar tipado como que devuelve Mapping (o Any estrecho).
-      Pyright puede concluir que `if not isinstance(scoring, Mapping)` es imposible.
-    - Forzamos el resultado a `object` primero y luego validamos con isinstance.
-    """
     try:
         scoring_obj: object = compute_scoring(
             imdb_rating=imdb_rating,
@@ -555,10 +601,6 @@ def _compute_scoring_safe(
         return "UNKNOWN", "compute_scoring failed", None, None
 
 
-# =============================================================================
-# ✅ FIX pyright "unreachable" en el bloque misidentified:
-# - Rompemos el narrowing del retorno de detect_misidentified tipándolo como object.
-# =============================================================================
 def _safe_detect_misidentified(
     *,
     detect_title: str,
@@ -570,11 +612,6 @@ def _safe_detect_misidentified(
     rt_score: int | None,
     trace: Callable[[str], None],
 ) -> str:
-    """
-    Aísla try/except y normaliza el retorno.
-    IMPORTANTE: `detect_misidentified` puede estar tipado como `str` en stubs,
-    así que usamos `object` para evitar "unreachable" en ramas None/non-str.
-    """
     trace("misidentified | running")
     try:
         out_obj: object = detect_misidentified(
@@ -612,16 +649,42 @@ class _PhaseBResult:
     imdb_rating: float | None
     imdb_votes: int | None
     rt_score: int | None
+    metacritic_score: int | None
     decision: str
     reason: str
     imdb_bayes: float | None
     scoring: Mapping[str, object] | None
 
 
+def _coerce_ratings_tuple(out_obj: object) -> tuple[float | None, int | None, int | None, int | None]:
+    imdb_rating: float | None = None
+    imdb_votes: int | None = None
+    rt_score: int | None = None
+    metacritic_score: int | None = None
+
+    if not isinstance(out_obj, tuple):
+        return None, None, None, None
+
+    if len(out_obj) >= 1 and (isinstance(out_obj[0], (int, float)) or out_obj[0] is None):
+        imdb_rating = float(out_obj[0]) if isinstance(out_obj[0], (int, float)) else None
+
+    if len(out_obj) >= 2 and (isinstance(out_obj[1], int) or out_obj[1] is None):
+        imdb_votes = out_obj[1] if isinstance(out_obj[1], int) else None
+
+    if len(out_obj) >= 3 and (isinstance(out_obj[2], int) or out_obj[2] is None):
+        rt_score = out_obj[2] if isinstance(out_obj[2], int) else None
+
+    if len(out_obj) >= 4 and (isinstance(out_obj[3], int) or out_obj[3] is None):
+        metacritic_score = out_obj[3] if isinstance(out_obj[3], int) else None
+
+    return imdb_rating, imdb_votes, rt_score, metacritic_score
+
+
 def _run_phaseB_omdb(
     *,
     movie: MovieInput,
     lookup_title: str,
+    lookup_year: int | None,
     fetch_omdb: FetchOmdbCallable,
     metacritic_score: int | None,
     trace: Callable[[str], None],
@@ -633,6 +696,9 @@ def _run_phaseB_omdb(
     imdb_votes: int | None = None
     rt_score: int | None = None
 
+    metacritic_from_omdb: int | None = None
+    metacritic_used: int | None = metacritic_score
+
     if not lookup_title:
         _m("phaseB.skipped_empty_title", 1)
         trace("phaseB | skipped omdb (empty lookup_title)")
@@ -641,7 +707,7 @@ def _run_phaseB_omdb(
             imdb_votes=None,
             rt_score=None,
             year=movie.year,
-            metacritic_score=metacritic_score,
+            metacritic_score=metacritic_used,
             trace=trace,
         )
         return _PhaseBResult(
@@ -651,6 +717,7 @@ def _run_phaseB_omdb(
             imdb_rating=None,
             imdb_votes=None,
             rt_score=None,
+            metacritic_score=metacritic_used,
             decision=decisionB,
             reason=reasonB,
             imdb_bayes=imdb_bayesB,
@@ -661,7 +728,7 @@ def _run_phaseB_omdb(
     trace("phaseB | fetching omdb (needed)")
 
     try:
-        raw = fetch_omdb(lookup_title, movie.year)
+        raw = fetch_omdb(lookup_title, lookup_year)
         raw_map: Mapping[str, object] = raw if isinstance(raw, Mapping) else {}
         used_omdb = True
 
@@ -686,16 +753,22 @@ def _run_phaseB_omdb(
 
     if omdb_data:
         try:
-            imdb_rating, imdb_votes, rt_score = extract_ratings_from_omdb(omdb_data)
+            out_obj: object = extract_ratings_from_omdb(omdb_data)
+            imdb_rating, imdb_votes, rt_score, metacritic_from_omdb = _coerce_ratings_tuple(out_obj)
+
+            if metacritic_used is None:
+                metacritic_used = metacritic_from_omdb
+
             _m("ratings.extract_ok", 1)
             trace(
                 "ratings ok | "
                 f"imdb_rating={_safe_str(imdb_rating, max_len=32)} "
                 f"votes={_safe_str(imdb_votes, max_len=32)} "
-                f"rt={_safe_str(rt_score, max_len=32)}"
+                f"rt={_safe_str(rt_score, max_len=32)} "
+                f"mc={_safe_str(metacritic_used, max_len=32)}"
             )
         except Exception as exc:
-            imdb_rating, imdb_votes, rt_score = None, None, None
+            imdb_rating, imdb_votes, rt_score, metacritic_from_omdb = None, None, None, None
             _m("ratings.extract_fail", 1)
             trace(f"ratings fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
 
@@ -705,7 +778,7 @@ def _run_phaseB_omdb(
         imdb_votes=imdb_votes,
         rt_score=rt_score,
         year=movie.year,
-        metacritic_score=metacritic_score,
+        metacritic_score=metacritic_used,
         trace=trace,
     )
 
@@ -716,6 +789,7 @@ def _run_phaseB_omdb(
         imdb_rating=imdb_rating,
         imdb_votes=imdb_votes,
         rt_score=rt_score,
+        metacritic_score=metacritic_used,
         decision=decisionB,
         reason=reasonB,
         imdb_bayes=imdb_bayesB,
@@ -744,7 +818,7 @@ def analyze_input_movie(
         lib = movie.library or ""
         title_raw = movie.title or ""
 
-        lookup_title = _get_lookup_title(movie, trace=trace)
+        lookup_title, lookup_year, lookup_imdb = _get_lookup_identity(movie, trace=trace)
 
         trace(
             "start | "
@@ -752,7 +826,8 @@ def analyze_input_movie(
             f"lib={_safe_str(lib, max_len=80)} "
             f"title={_safe_str(title_raw, max_len=120)} "
             f"year={_safe_str(movie.year, max_len=16)} "
-            f"lookup_title={_safe_str(lookup_title, max_len=120)}"
+            f"lookup_title={_safe_str(lookup_title, max_len=120)} "
+            f"lookup_year={_safe_str(lookup_year, max_len=16)}"
         )
 
         _m("phaseA.calls", 1)
@@ -779,6 +854,7 @@ def analyze_input_movie(
         imdb_rating: float | None = None
         imdb_votes: int | None = None
         rt_score: int | None = None
+        metacritic_final: int | None = metacritic_score
 
         if strongA:
             _m("decision_strong_without_omdb", 1)
@@ -786,24 +862,12 @@ def analyze_input_movie(
 
             if _STRONG_POTENTIAL_CONTRADICTION_ENABLED:
                 try:
-                    if (
-                        decisionA == "DELETE"
-                        and isinstance(plex_rating, (int, float))
-                        and float(plex_rating) >= 8.0
-                    ):
+                    if decisionA == "DELETE" and isinstance(plex_rating, (int, float)) and float(plex_rating) >= 8.0:
                         _m("strong_potential_contradiction_without_omdb", 1)
-                        trace(
-                            f"heuristic | strong contradiction (DELETE with high plex_rating={plex_rating})"
-                        )
-                    if (
-                        decisionA == "KEEP"
-                        and isinstance(plex_rating, (int, float))
-                        and float(plex_rating) <= 2.0
-                    ):
+                        trace(f"heuristic | strong contradiction (DELETE with high plex_rating={plex_rating})")
+                    if decisionA == "KEEP" and isinstance(plex_rating, (int, float)) and float(plex_rating) <= 2.0:
                         _m("strong_potential_contradiction_without_omdb", 1)
-                        trace(
-                            f"heuristic | strong contradiction (KEEP with low plex_rating={plex_rating})"
-                        )
+                        trace(f"heuristic | strong contradiction (KEEP with low plex_rating={plex_rating})")
                 except Exception:
                     pass
         else:
@@ -811,6 +875,7 @@ def analyze_input_movie(
             phaseB = _run_phaseB_omdb(
                 movie=movie,
                 lookup_title=lookup_title,
+                lookup_year=lookup_year,
                 fetch_omdb=fetch_omdb,
                 metacritic_score=metacritic_score,
                 trace=trace,
@@ -822,6 +887,7 @@ def analyze_input_movie(
             imdb_rating = phaseB.imdb_rating
             imdb_votes = phaseB.imdb_votes
             rt_score = phaseB.rt_score
+            metacritic_final = phaseB.metacritic_score
 
             decision_final = phaseB.decision
             reason_final = phaseB.reason
@@ -835,24 +901,17 @@ def analyze_input_movie(
             _m(f"decision_changed_after_omdb.to_{decision_phaseB.lower()}", 1)
             trace(f"decision changed | {decision_phaseA} -> {decision_phaseB}")
 
+        # Evitamos emitir métricas con value=0
         _m("used_omdb.true", 1 if used_omdb else 0)
         _m("used_omdb.false", 1 if not used_omdb else 0)
 
-        # ✅ FIX pyright "unreachable" (try inalcanzable por narrowing):
-        # no dependemos de `if omdb_data:` directo; validamos con object intermedio
         misidentified_hint = ""
-        omdb_data_obj: object = omdb_data
-        omdb_data_map: Mapping[str, object] | None = None
-
-        if isinstance(omdb_data_obj, dict) and len(omdb_data_obj) > 0:
-            omdb_data_map = cast(Mapping[str, object], omdb_data_obj)
+        omdb_data_map: Mapping[str, object] | None = omdb_data if omdb_data else None
 
         if omdb_data_map is not None:
             _m("misidentified.ran", 1)
 
-            detect_title = (
-                plex_title if isinstance(plex_title, str) and plex_title.strip() else title_raw
-            )
+            detect_title = plex_title if isinstance(plex_title, str) and plex_title.strip() else title_raw
             detect_year = plex_year if isinstance(plex_year, int) else movie.year
 
             misidentified_hint = _safe_detect_misidentified(
@@ -909,7 +968,7 @@ def analyze_input_movie(
                 f"max_rating={_INCONS_KEEP_MAX_RATING} min_votes={_INCONS_KEEP_MIN_VOTES}"
             )
 
-        has_signals = any(v is not None for v in (imdb_rating, imdb_votes, rt_score))
+        has_signals = any(v is not None for v in (imdb_rating, imdb_votes, rt_score, metacritic_final))
         reason_code = _derive_reason_code(
             scoring=scoring_final,
             decision=decision_phaseB,
@@ -926,6 +985,7 @@ def analyze_input_movie(
             "imdb_rating": imdb_rating,
             "imdb_bayes": imdb_bayes,
             "rt_score": rt_score,
+            "metacritic_score": metacritic_final,
             "imdb_votes": imdb_votes,
             "plex_rating": plex_rating,
             "decision": _normalize_decision(decision_phaseB),
@@ -940,8 +1000,11 @@ def analyze_input_movie(
             "decision_phaseB": _normalize_decision(decision_phaseB),
         }
 
+        # Preferimos imdb_id_hint real del MovieInput; si no existe, usamos el coalesced.
         if isinstance(movie.imdb_id_hint, str) and movie.imdb_id_hint.strip():
             row["imdb_id_hint"] = movie.imdb_id_hint.strip()
+        elif isinstance(lookup_imdb, str) and lookup_imdb.strip():
+            row["imdb_id_hint"] = lookup_imdb.strip()
 
         trace("done")
         return row
