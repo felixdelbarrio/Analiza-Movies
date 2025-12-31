@@ -389,6 +389,70 @@ def _best_filename_stem_from_url(url: str) -> str:
     st = filename_stem(fn)
     return clean_title_candidate(st)
 
+def _title_from_filename(url: str) -> tuple[str, int | None]:
+    """
+    Best-effort: extrae un (title, year) desde el "filename" contenido en una URL/path.
+    En DLNA la resource_url suele incluir el nombre del fichero (o parte del path),
+    aunque no sea una URL "semántica".
+
+    Estrategia:
+      1) Parse + unquote del path
+      2) basename (último segmento) como filename
+      3) filename_stem() para quitar extensión
+      4) clean_title_candidate() para normalizar separadores y quitar ruido conservador
+      5) split_title_and_year_from_text() para separar "Title (1999)" / "Title - 1999" / etc.
+      6) fallback year: extract_year_from_text(url) si no salió del stem limpio
+
+    Devuelve:
+      - title: "" si no se puede inferir nada
+      - year: int o None
+    """
+    u = (url or "").strip()
+    if not u:
+        return "", None
+
+    # 1) intenta parsear como URL estándar (http/file/etc.)
+    # si falla, tratamos el input como un path "crudo"
+    try:
+        parsed = urlparse(u)
+        path = unquote(parsed.path or "") or u
+    except Exception:
+        path = u
+
+    # 2) filename = último segmento del path (si hay /)
+    # nota: si no hay '/', rsplit devuelve el mismo string
+    filename = path.rsplit("/", 1)[-1].strip()
+    if not filename:
+        # fallback: intenta con el input original por si era algo raro
+        filename = u.rsplit("/", 1)[-1].strip()
+
+    # 3) stem sin extensión
+    stem = filename_stem(filename)
+    if not stem:
+        # nada que rascar
+        year_fallback = extract_year_from_text(u)
+        return "", year_fallback
+
+    # 4) limpieza conservadora (separadores, bracket-noise si knob, etc.)
+    cleaned = clean_title_candidate(stem)
+    if not cleaned:
+        year_fallback = extract_year_from_text(u)
+        return "", year_fallback
+
+    # 5) split título/año si viene trailing (o año “en medio” conservador)
+    title_part, year = split_title_and_year_from_text(cleaned)
+    title_part = (title_part or "").strip()
+
+    # 6) fallback year desde URL completa si no salió del stem limpio
+    if year is None:
+        year = extract_year_from_text(u)
+
+    # si el split devolvió vacío (raro), usa cleaned como título
+    if not title_part:
+        title_part = cleaned.strip()
+
+    return title_part, year
+
 
 def _is_generic_title(title: str) -> bool:
     """
@@ -439,8 +503,8 @@ def _derive_best_title_year_imdb(
     title_candidate = clean_title_legacy.strip() or raw_title.strip() or "UNKNOWN"
 
     # 2) filename stem (desde URL) como fuente secundaria (título/año)
-    fn_title = _best_filename_stem_from_url(resource_url)
-    fn_split_title, fn_year = split_title_and_year_from_text(fn_title) if fn_title else ("", None)
+    fn_split_title, fn_year = _title_from_filename(resource_url)
+    fn_title = fn_split_title
 
     # 3) year fallback desde URL/filename/display_file
     # (extract_year_from_text es conservador)
