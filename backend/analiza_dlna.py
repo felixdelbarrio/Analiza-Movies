@@ -4,6 +4,14 @@ from __future__ import annotations
 backend/analiza_dlna.py
 
 Orquestador principal de análisis DLNA/UPnP (streaming).
+
+MEJORAS (objetivo: menos UNKNOWN):
+1) Extraer year también desde resource_url/filename (y/o display_file), no solo desde el título UPnP.
+2) Extraer imdb_id_hint si aparece tt\\d+ en nombre/URL (suele ocurrir en librerías bien nombradas).
+3) Mejorar el “título candidato” usando el filename cuando it.title es genérico
+   (ej. “Aardman Classics”, “Vol.2”, “Scrat Pack”, etc.).
+
+Nota: apoyado en backend/title_utils.py para no duplicar heurísticas.
 """
 
 import re
@@ -12,6 +20,7 @@ from collections.abc import Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias
+from urllib.parse import unquote, urlparse
 
 from backend import logger as logger
 from backend.collection_analysis import analyze_movie, flush_external_caches
@@ -26,6 +35,13 @@ from backend.reporting import (
     open_all_csv_writer,
     open_filtered_csv_writer_only_if_rows,
     open_suggestions_csv_writer,
+)
+from backend.title_utils import (
+    clean_title_candidate,
+    extract_imdb_id_from_text,
+    extract_year_from_text,
+    filename_stem,
+    split_title_and_year_from_text,
 )
 
 from backend.dlna_client import (
@@ -75,11 +91,32 @@ _MAX_WORKERS_CAP: int = 64
 _DEFAULT_MAX_INFLIGHT_FACTOR: int = 4
 
 # ---------------------------------------------------------------------------
-# Parsing de título/año (sufijo "(YYYY)")
+# Parsing legacy: título/año (sufijo "(YYYY)")
 # ---------------------------------------------------------------------------
 _TITLE_YEAR_SUFFIX_RE: re.Pattern[str] = re.compile(
     r"(?P<base>.*?)" r"(?P<sep>\s*\.?\s*)" r"\(\s*(?P<year>\d{4})\s*\)\s*$"
 )
+
+# ---------------------------------------------------------------------------
+# Heurística: títulos “genéricos” (contienen palabras tipo collection/volume/etc.)
+#   Conservador: si duda => NO considerarlo genérico.
+# ---------------------------------------------------------------------------
+_GENERIC_TITLE_RE: re.Pattern[str] = re.compile(
+    r"""
+    \b(
+        collection|collections|classics|anthology|anthologies|pack|
+        volume|vol|vol\.|season|series|saga|
+        disc|disk|cd|dvd|bd|bluray|
+        extras?|specials?|bonus|
+        part|chapter|episode|
+        various|varios|varias|mix|mixed|
+        films?|movies?|videos?
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_GENERIC_SHORT_RE: re.Pattern[str] = re.compile(r"^(?:vol(?:\.|ume)?\s*\d+|disc\s*\d+|cd\s*\d+|part\s*\d+)$", re.IGNORECASE)
 
 # ============================================================================
 # TIPADO (writers)
@@ -101,6 +138,7 @@ _AnalyzeFuture: TypeAlias = Future[_AnalyzeResult]
 # Scan result types (para no mezclar con AnalyzeResult)
 _ScanResult: TypeAlias = tuple[str, list[DlnaVideoItem]]
 _ScanFuture: TypeAlias = Future[_ScanResult]
+
 
 # ============================================================================
 # Dedupe global por run
@@ -279,6 +317,7 @@ def _compute_scan_workers() -> int:
 
 
 def _extract_year_from_title(title: str) -> tuple[str, int | None]:
+    # Legacy: intenta "(YYYY)" al final
     raw = title.strip()
     if not raw:
         return title, None
@@ -315,6 +354,135 @@ def _format_item_progress_line(*, index: int, total: int, title: str, year: int 
     if DEBUG_MODE and file_size_bytes is not None and file_size_bytes >= 0:
         base = f"{base} [{file_size_bytes} bytes]"
     return f"({index}/{total}) {base}"
+
+
+# ============================================================================
+# URL/filename extraction helpers (apoyados en title_utils)
+# ============================================================================
+
+
+def _url_to_filename(url: str) -> str:
+    """
+    Extrae un filename “humano” desde una URL (best-effort), sin tocar disco.
+    """
+    u = (url or "").strip()
+    if not u:
+        return ""
+    try:
+        p = urlparse(u)
+        path = unquote(p.path or "")
+    except Exception:
+        path = u
+    # El último segmento suele ser el filename
+    seg = path.rsplit("/", 1)[-1]
+    return seg.strip()
+
+
+def _best_filename_stem_from_url(url: str) -> str:
+    """
+    Devuelve un stem usable desde la URL:
+      - parse + unquote
+      - filename_stem() para quitar extensión
+      - clean_title_candidate() para quitar ruido conservador (sin lookup-agresivo)
+    """
+    fn = _url_to_filename(url)
+    st = filename_stem(fn)
+    return clean_title_candidate(st)
+
+
+def _is_generic_title(title: str) -> bool:
+    """
+    Heurística local para decidir si el it.title es genérico y conviene reemplazarlo por filename.
+    Conservador: devuelve True solo si hay señales claras.
+    """
+    t = (title or "").strip()
+    if not t:
+        return True
+    low = t.lower().strip()
+
+    # Muy corto y con pinta de “vol2/disc1”
+    if _GENERIC_SHORT_RE.match(low):
+        return True
+
+    # Tiene tokens típicos de colecciones/volúmenes
+    if _GENERIC_TITLE_RE.search(low):
+        # si además es muy corto, más seguro
+        if len(low) <= 20:
+            return True
+
+    # Muchos dígitos y poca letra => sospechoso (ej. "01", "Movie 2")
+    letters = sum(1 for ch in low if ch.isalpha())
+    digits = sum(1 for ch in low if ch.isdigit())
+    if digits >= 2 and letters <= 3:
+        return True
+
+    return False
+
+
+def _derive_best_title_year_imdb(
+    *,
+    raw_title: str,
+    resource_url: str,
+    display_file: str,
+) -> tuple[str, int | None, str | None, dict[str, object]]:
+    """
+    Devuelve (title, year, imdb_hint, extra_patch)
+    - title: preferimos raw_title, salvo que sea genérico -> filename stem.
+    - year: primero desde raw_title (legacy), luego desde filename/url/display_file.
+    - imdb_hint: tt* desde url/filename/raw_title.
+    - extra_patch: campos para MovieInput.extra (debug/observabilidad).
+    """
+    extra_patch: dict[str, object] = {}
+
+    # 1) title/year desde el título UPnP (legacy)
+    clean_title_legacy, year_legacy = _extract_year_from_title(raw_title)
+    title_candidate = clean_title_legacy.strip() or raw_title.strip() or "UNKNOWN"
+
+    # 2) filename stem (desde URL) como fuente secundaria (título/año)
+    fn_title = _best_filename_stem_from_url(resource_url)
+    fn_split_title, fn_year = split_title_and_year_from_text(fn_title) if fn_title else ("", None)
+
+    # 3) year fallback desde URL/filename/display_file
+    # (extract_year_from_text es conservador)
+    url_year = extract_year_from_text(resource_url)
+    file_year = extract_year_from_text(display_file)
+
+    # 4) imdb_id_hint desde cualquier texto (primero URL, luego filename/display/title)
+    imdb_hint = extract_imdb_id_from_text(resource_url)
+    if imdb_hint is None and fn_title:
+        imdb_hint = extract_imdb_id_from_text(fn_title)
+    if imdb_hint is None:
+        imdb_hint = extract_imdb_id_from_text(display_file)
+    if imdb_hint is None:
+        imdb_hint = extract_imdb_id_from_text(raw_title)
+
+    # 5) Decide título final: si it.title es genérico, usar filename split title si es usable
+    used_filename_title = False
+    if _is_generic_title(title_candidate) and fn_split_title.strip():
+        title_candidate = fn_split_title.strip()
+        used_filename_title = True
+
+    # 6) Decide year final
+    year_final = year_legacy
+    if year_final is None:
+        year_final = fn_year
+    if year_final is None:
+        year_final = url_year
+    if year_final is None:
+        year_final = file_year
+
+    # 7) Observabilidad (no afecta lógica)
+    extra_patch["raw_title"] = raw_title
+    extra_patch["filename_title_candidate"] = fn_title
+    extra_patch["filename_title_used"] = used_filename_title
+    extra_patch["year_from_title"] = year_legacy
+    extra_patch["year_from_filename"] = fn_year
+    extra_patch["year_from_url"] = url_year
+    extra_patch["year_from_display_file"] = file_year
+    if imdb_hint:
+        extra_patch["imdb_id_hint_from_text"] = imdb_hint
+
+    return title_candidate, year_final, imdb_hint, extra_patch
 
 
 # ============================================================================
@@ -455,21 +623,33 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
             file_size: int | None,
             library: str,
         ) -> _AnalyzeResult:
-            clean_title, extracted_year = _extract_year_from_title(raw_title)
+            # Construimos un "file_path" lógico + URL para inferencias
             display_file, file_url = _dlna_display_file(client, library, raw_title, resource_url)
+
+            # ✅ NUEVO: title/year/imdb_hint best-effort desde title + filename/url/display_file
+            best_title, best_year, imdb_hint, extra_patch = _derive_best_title_year_imdb(
+                raw_title=raw_title,
+                resource_url=file_url,
+                display_file=display_file,
+            )
 
             movie_input = MovieInput(
                 source="dlna",
                 library=library,
-                title=clean_title,
-                year=extracted_year,
+                title=best_title,
+                year=best_year,
                 file_path=display_file,
                 file_size_bytes=file_size,
-                imdb_id_hint=None,
+                imdb_id_hint=imdb_hint,
                 plex_guid=None,
                 rating_key=None,
                 thumb_url=None,
-                extra={"source_url": file_url},
+                extra={
+                    "source_url": file_url,
+                    "display_title": best_title,
+                    "display_year": best_year,
+                    **extra_patch,
+                },
             )
 
             row, meta_sugg, logs = analyze_movie(movie_input, source_movie=None)
@@ -592,6 +772,8 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                     with ThreadPoolExecutor(max_workers=workers_here) as executor:
                         for item_index, it in enumerate(items, start=1):
                             analyzed_so_far += 1
+
+                            # ✅ progreso: usa year derivable del propio it.title (rápido), sin parsear URL aquí
                             clean_title_preview, extracted_year_preview = _extract_year_from_title(it.title)
                             display_title = it.title if DEBUG_MODE else clean_title_preview
 
@@ -637,7 +819,6 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                 with ThreadPoolExecutor(max_workers=scan_workers) as scan_pool, ThreadPoolExecutor(
                     max_workers=analyze_workers
                 ) as analyze_pool:
-                    # ✅ scan futures tipados (evita mezclas con _AnalyzeFuture)
                     scan_futures: list[_ScanFuture] = []
                     for idx, c in enumerate(selected_containers, start=1):
                         logger.progress(f"[DLNA] Escaneando contenedor ({idx}/{total_containers}): {c.title}")
@@ -669,7 +850,6 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                             analyze_snap_start_container = dict(get_omdb_metrics_snapshot())
                             _log_omdb_metrics(prefix=f"[DLNA][DEBUG] {container_key}: analyze:start:")
 
-                        # ✅ renombrado para evitar [no-redef] con el modo interactivo
                         inflight_silent: set[_AnalyzeFuture] = set()
                         inflight_cap_here = min(max_inflight, max(1, len(items)))
 
