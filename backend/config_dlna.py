@@ -3,6 +3,7 @@ from __future__ import annotations
 from backend.config_base import (
     _cap_float_min,
     _cap_int,
+    _get_env_bool,
     _get_env_float,
     _get_env_int,
     _get_env_str,
@@ -51,3 +52,14 @@ _DLNA_DISCOVERY_ALLOW_HINT_TOKENS_RAW: str = _get_env_str(
     "mediaserver,contentdirectory",
 ) or "mediaserver,contentdirectory"
 DLNA_DISCOVERY_ALLOW_HINT_TOKENS: list[str] = _parse_env_csv_tokens(_DLNA_DISCOVERY_ALLOW_HINT_TOKENS_RAW)
+
+# ============================================================
+# DLNA-only: switches de enriquecimiento (sin afectar Plex/otros)
+# ============================================================
+
+# Si False, el pipeline DLNA no intentará enriquecer con Wiki (solo parseo local + OMDb si aplica).
+DLNA_ENABLE_WIKI_ENRICHMENT: bool = _get_env_bool("DLNA_ENABLE_WIKI_ENRICHMENT", True)
+
+# Si True, el pipeline DLNA puede usar Wiki para "resolver" un imdb_id (vía Wikidata) cuando OMDb no ayuda.
+# (La implementación real ocurre en collection_analysis; aquí solo knob)
+DLNA_ENABLE_WIKI_IMDB_RESOLUTION: bool = _get_env_bool("DLNA_ENABLE_WIKI_IMDB_RESOLUTION", True)

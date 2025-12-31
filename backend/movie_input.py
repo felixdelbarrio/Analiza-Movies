@@ -3,61 +3,22 @@ from __future__ import annotations
 """
 backend/movie_input.py
 
-MovieInput: modelo unificado para representar una película independientemente del origen
-(Plex, DLNA, fichero local, etc.).
+(MovieInput y helpers)
 
-Este tipo se usa como entrada estándar del core de análisis (p.ej. analyze_movie /
-analyze_input_movie) y permite desacoplar:
-- descubrimiento / extracción (Plex/DLNA/local)
-- análisis (OMDb/Wiki/scoring/misidentified)
-- reporting (CSVs)
+Refactor:
+- Mueve utilidades compartidas (normalización, heurísticas básicas y extractores)
+  a backend.title_utils para evitar duplicación con decision_logic.py / metadata_fix.py, etc.
+- Este módulo se centra en:
+  - Modelo MovieInput
+  - Heurísticas de contexto (por idioma) basadas en title + path + library language
+  - Helpers de "coalescing" para mejorar inputs de DLNA/local (title/year/imdb_id_hint)
 
-Principios (alineados con el proyecto)
---------------------------------------
-- Tipado estricto (PEP 484 / PEP 604) y sin Any.
-- Helpers puros y testables para normalización y heurística.
-- Normalización “amigable” para búsquedas externas:
-    * limpia tokens típicos de releases/filenames (resolución, codecs, tags...)
-    * normaliza separadores raros (., _, NBSP, guiones largos)
-    * (configurable) elimina acentos (robustez)
-    * colapsa espacios
-- Heurística de idioma conservadora:
-    * NO pretende ser un detector perfecto; solo ayuda a decisiones (metadata_fix, wiki).
-    * preferimos "unknown" antes que asignar mal.
-- Este módulo NO hace logging: es un modelo/utility “core” y debe ser silencioso.
-
-Centralización de lógica de idioma
-----------------------------------
-Para evitar duplicación (p. ej. en metadata_fix.py o wiki_client.py), este módulo expone:
-
-- LanguageCode (TypeAlias)
-- detect_context_language_code(movie_input)
-- title_has_cjk_script(title)
-- is_probably_english_title(title)
-- should_skip_new_title_suggestion(context_lang, current_title, omdb_title)
-
-Integración con config.py
--------------------------
-Este módulo lee "knobs" definidos en backend/config.py para modular comportamiento
-sin tocar código:
-
-Lookup (normalización para búsquedas):
-- MOVIE_INPUT_LOOKUP_STRIP_ACCENTS
-- MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE
-- MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP
-
-Heurística idioma:
-- MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS
-- MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK
-
-⚠️ Nota importante (Python 3.9):
-- `dataclasses.dataclass(slots=True)` NO existe en Python 3.9 (se añadió en 3.10).
-  Por eso este archivo usa @dataclass SIN slots para ser compatible con tu pyrightconfig.
+Nota:
+- Sin logging.
 """
 
 from dataclasses import dataclass, field
 import re
-import unicodedata
 from typing import Final, Literal
 
 from typing_extensions import TypeAlias
@@ -65,9 +26,17 @@ from typing_extensions import TypeAlias
 from backend.config_plex import (
     MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS,
     MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK,
-    MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE,
-    MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP,
-    MOVIE_INPUT_LOOKUP_STRIP_ACCENTS,
+)
+from backend.title_utils import (
+    cleanup_separators as _cleanup_separators,
+    clean_title_candidate,
+    extract_imdb_id_from_text,
+    extract_year_from_text,
+    filename_stem,
+    is_probably_english_title,
+    normalize_title_for_lookup,
+    split_title_and_year_from_text,
+    title_has_cjk_script,
 )
 
 # ============================================================================
@@ -79,94 +48,8 @@ SourceType = Literal["plex", "dlna", "local", "other"]
 LanguageCode: TypeAlias = Literal["es", "en", "it", "fr", "ja", "ko", "zh", "unknown"]
 
 # ============================================================================
-# Regex/constantes para normalización (lookup)
-# ============================================================================
-
-# Año plausible (para limpiar "Title (1999)" / "[1999]" / etc.)
-_YEAR_IN_TITLE_RE: Final[re.Pattern[str]] = re.compile(
-    r"(?:^|[\s\(\[\-])((?:19|20)\d{2})(?:$|[\s\)\]\-])"
-)
-
-# Para “sanitizar” a tokens comparables (conservando letras/dígitos y algunos acentos
-# para no destrozar demasiado antes de (opcionalmente) quitar diacríticos).
-_NON_ALNUM_RE: Final[re.Pattern[str]] = re.compile(
-    r"[^0-9A-Za-záéíóúÁÉÍÓÚñÑüÜ]+", re.UNICODE
-)
-_MULTI_SPACE_RE: Final[re.Pattern[str]] = re.compile(r"\s{2,}")
-
-# Separadores típicos de releases
-_SEP_REPLACEMENTS: Final[tuple[tuple[str, str], ...]] = (
-    ("_", " "),
-    (".", " "),
-    ("\u00A0", " "),  # NBSP
-    ("–", "-"),
-    ("—", "-"),
-)
-
-# ============================================================================
-# “Noise” tokens: releases/filenames (codec, rip, edition, audio, subs, tags)
-# ----------------------------------------------------------------------------
-# Importante: estos patterns están pensados para ELIMINAR “ruido” en normalización
-# de lookup. Deben ser conservadores para no destruir el título real.
-# ============================================================================
-
-# Tokens típicos “de una palabra” que queremos filtrar (comparando por token)
-_NOISE_SINGLE_TOKEN_RE: Final[re.Pattern[str]] = re.compile(
-    r"""
-    ^(?:
-        # resoluciones / formatos
-        480p|576p|720p|1080p|1440p|2160p|4320p|
-        4k|8k|uhd|hdr|hdr10|dv|
-
-        # codecs
-        x264|x265|h\.?264|h\.?265|hevc|avc|
-
-        # sources / rips
-        bluray|blu-?ray|bdrip|brrip|dvdrip|dvd|web-?dl|webrip|hdrip|
-        cam|ts|tc|scr|dvdscr|r5|
-
-        # editions / tags
-        proper|repack|remux|limited|unrated|extended|cut|
-
-        # idiomas / audio/subs (tokens compactos)
-        multi|dual|vose|vos|
-        castellano|espa[nñ]ol|spanish|latino|
-        eng|english|
-        ita|italian|italiano|
-        fra|fre|french|fran[cç]ais|
-        jpn|jap|japanese|nihongo|
-        kor|korean|
-        chi|zho|chinese|
-
-        # audio
-        ac3|dts|aac|flac|truehd|atmos|
-
-        # subs
-        subs?|subbed|
-
-        # groups/tags
-        yify|rarbg
-    )$
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
-
-# Frases típicas “multi-token” que pueden venir en paréntesis/grupos y queremos detectar
-# como ruido (p.ej. "Dolby Vision", "Director's Cut", "Dual Audio").
-_NOISE_PHRASE_RE: Final[re.Pattern[str]] = re.compile(
-    r"""
-    (?:
-        dolby\s*vision|
-        director'?s\s*cut|
-        dual(?:\s*audio)?|
-        hdr\s*10
-    )
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
-
-# ============================================================================
-# Heurística de idioma (tokens + unicode + function words)
+# Regex/constantes para heurística de idioma (se mantienen aquí)
+# (Porque son “contexto” MovieInput, no “core string utils”)
 # ============================================================================
 
 # ---------- Español ----------
@@ -261,7 +144,7 @@ _ZH_HINT_RE: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
-# Unicode blocks (pistas fuertes por escritura; no equivalen 1:1 a idioma)
+# Unicode blocks (solo para ayudas locales)
 _KANA_RE: Final[re.Pattern[str]] = re.compile(r"[\u3040-\u30FF\u31F0-\u31FF\uFF66-\uFF9F]")
 _HANGUL_RE: Final[re.Pattern[str]] = re.compile(r"[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]")
 _HAN_RE: Final[re.Pattern[str]] = re.compile(r"[\u4E00-\u9FFF]")
@@ -274,183 +157,109 @@ _CJK_ANY_RE: Final[re.Pattern[str]] = re.compile(
 # ============================================================================
 
 
-def _strip_accents(text: str) -> str:
-    """
-    Elimina diacríticos para robustez en búsquedas externas.
-
-    Controlado por MOVIE_INPUT_LOOKUP_STRIP_ACCENTS.
-    """
-    normalized = unicodedata.normalize("NFKD", text)
-    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
-
-
-def _cleanup_separators(text: str) -> str:
-    """Normaliza separadores típicos de filenames y algunos guiones unicode."""
-    out = text
-    for a, b in _SEP_REPLACEMENTS:
-        out = out.replace(a, b)
-    return out
-
-
-def _looks_like_noise_group(text: str) -> bool:
-    """
-    Decide si un bloque entre [](){} parece “ruido” técnico.
-
-    Señales:
-    - contiene tokens single-token de ruido
-    - o contiene frases de ruido
-    - o es básicamente numérico/año
-
-    Nota:
-    - Conservador: ante dudas, preferimos NO eliminar.
-    """
-    t = text.strip()
-    if not t:
-        return True
-
-    if _NOISE_PHRASE_RE.search(t):
-        return True
-
-    toks = _cleanup_separators(t).split()
-    for tok in toks:
-        if _NOISE_SINGLE_TOKEN_RE.match(tok):
-            return True
-
-    if t.isdigit():
-        return True
-    if _YEAR_IN_TITLE_RE.search(t):
-        return True
-
-    return False
-
-
-def _remove_bracketed_noise(text: str) -> str:
-    """
-    Elimina grupos entre [] () {} cuando parecen ruido.
-
-    Controlado por MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE.
-
-    Conservador:
-    - solo elimina el grupo si el contenido “parece ruido” (ver _looks_like_noise_group)
-    - si no, deja el texto intacto.
-    """
-    if not MOVIE_INPUT_LOOKUP_REMOVE_BRACKETED_NOISE:
-        return text
-
-    out = text
-    patterns: tuple[re.Pattern[str], ...] = (
-        re.compile(r"\[[^\]]+\]"),
-        re.compile(r"\([^\)]+\)"),
-        re.compile(r"\{[^\}]+\}"),
-    )
-
-    for pat in patterns:
-        while True:
-            m = pat.search(out)
-            if m is None:
-                break
-            inner = out[m.start() + 1 : m.end() - 1]
-            if _looks_like_noise_group(inner):
-                out = out[: m.start()] + " " + out[m.end() :]
-                continue
-            break
-
-    return out
-
-
-def _remove_trailing_dash_group(text: str) -> str:
-    """
-    Si el título es "Movie - 1080p - x265" y lo de la derecha parece ruido, recortamos.
-
-    Controlado por MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP.
-    """
-    if not MOVIE_INPUT_LOOKUP_REMOVE_TRAILING_DASH_GROUP:
-        return text
-
-    parts = [p.strip() for p in text.split(" - ")]
-    if len(parts) <= 1:
-        return text
-
-    left = parts[0].strip()
-    if not left:
-        return text
-
-    right = " ".join(parts[1:]).strip()
-    if _looks_like_noise_group(right):
-        return left
-
-    return text
-
-
-def _remove_noise_tokens(text: str) -> str:
-    """
-    Elimina tokens que sean ruido típico.
-
-    Nota:
-    - Se compara por token completo.
-    - Se intenta también contra una versión “compacta” sin puntos (h.264 -> h264).
-    """
-    tokens = text.split()
-    kept: list[str] = []
-    for tok in tokens:
-        if _NOISE_SINGLE_TOKEN_RE.match(tok):
-            continue
-        compact = tok.replace(".", "")
-        if compact != tok and _NOISE_SINGLE_TOKEN_RE.match(compact):
-            continue
-        kept.append(tok)
-    return " ".join(kept)
-
-
 def _count_function_word_hits(text: str, pattern: re.Pattern[str]) -> int:
-    """Cuenta hits de function words; el caller decide umbrales."""
     return len(pattern.findall(text))
 
 
 def _lang_hits_ge(text: str, pattern: re.Pattern[str]) -> bool:
-    """
-    Helper común para evaluar function words con umbral configurable.
-
-    MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS:
-    - 0 => “siempre True” (ojo: solo recomendado para debugging)
-    - 1/2/... => umbral conservador
-    """
     threshold = int(MOVIE_INPUT_LANG_FUNCTION_WORD_MIN_HITS)
     if threshold <= 0:
         return True
     return _count_function_word_hits(text, pattern) >= threshold
 
 
-# ============================================================================
-# API pública: normalización / heurísticas
-# ============================================================================
-
-
-def normalize_title_for_lookup(title: str) -> str:
+def _best_effort_imdb_hint(title: str, file_path: str) -> str | None:
     """
-    Normalización fuerte para consultas externas (OMDb/Wikipedia).
+    Intenta extraer tt1234567 desde (title + file_path).
+    Útil en DLNA/local cuando la fuente no trae GUIDs.
     """
-    raw = (title or "").strip()
-    if not raw:
-        return ""
+    hay = f"{title or ''} {file_path or ''}".strip()
+    return extract_imdb_id_from_text(hay) if hay else None
 
-    t = _cleanup_separators(raw)
-    t = _remove_trailing_dash_group(t)
-    t = _remove_bracketed_noise(t)
 
-    if MOVIE_INPUT_LOOKUP_STRIP_ACCENTS:
-        t = _strip_accents(t)
+def _best_effort_year(title: str, file_path: str, year: int | None) -> int | None:
+    """
+    Si year es None, intenta inferirlo de:
+    - filename stem (preferido)
+    - title
+    - ruta completa
+    """
+    if year is not None:
+        return year
 
-    t = _NON_ALNUM_RE.sub(" ", t)
-    t = _remove_noise_tokens(t)
+    stem = filename_stem(file_path)
+    if stem:
+        _t, y = split_title_and_year_from_text(stem)
+        if y is not None:
+            return y
+        y2 = extract_year_from_text(stem)
+        if y2 is not None:
+            return y2
 
-    t = t.lower().strip()
-    t = _MULTI_SPACE_RE.sub(" ", t)
-    return t
+    if title:
+        _t2, y3 = split_title_and_year_from_text(title)
+        if y3 is not None:
+            return y3
+        y4 = extract_year_from_text(title)
+        if y4 is not None:
+            return y4
+
+    if file_path:
+        y5 = extract_year_from_text(file_path)
+        if y5 is not None:
+            return y5
+
+    return None
+
+
+def _best_effort_title(title: str, file_path: str) -> str:
+    """
+    Si title viene vacío/raro, intenta derivarlo del filename stem.
+    Limpia el candidato de forma conservadora.
+    """
+    t = (title or "").strip()
+    if t:
+        return clean_title_candidate(t)
+
+    stem = filename_stem(file_path)
+    if stem:
+        t2, _y = split_title_and_year_from_text(stem)
+        cand = t2.strip() or stem.strip()
+        return clean_title_candidate(cand)
+
+    return ""
+
+
+def coalesce_movie_identity(
+    *,
+    title: str,
+    year: int | None,
+    file_path: str,
+    imdb_id_hint: str | None,
+) -> tuple[str, int | None, str | None]:
+    """
+    Helper público (puro) para mejorar identidad (title/year/imdb_id_hint) en fuentes pobres (DLNA/local).
+
+    Política:
+    1) imdb_id_hint: si ya viene, se respeta; si no, se intenta extraer de title/path.
+    2) title: si viene vacío, se deriva de filename stem.
+    3) year: si None, se infiere de stem/title/path.
+    """
+    title2 = _best_effort_title(title, file_path)
+    imdb2 = (imdb_id_hint or "").strip() or None
+    if imdb2 is None:
+        imdb2 = _best_effort_imdb_hint(title2, file_path)
+
+    year2 = _best_effort_year(title2, file_path, year)
+    return title2, year2, imdb2
+
+
+# ============================================================================
+# API pública: heurísticas de idioma
+# ============================================================================
 
 
 def guess_spanish_from_title_or_path(title: str, file_path: str) -> bool:
-    """Heurística conservadora de “contexto español”."""
     haystack = f"{title} {file_path}".strip()
     if not haystack:
         return False
@@ -463,13 +272,6 @@ def guess_spanish_from_title_or_path(title: str, file_path: str) -> bool:
 
 
 def guess_english_from_title_or_path(title: str, file_path: str) -> bool:
-    """
-    Heurística conservadora de “contexto inglés”.
-
-    Control:
-    - MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK:
-        True  -> si hay CJK/Hangul, devolvemos False (evita falsos positivos).
-    """
     haystack = f"{title} {file_path}".strip()
     if not haystack:
         return False
@@ -485,7 +287,6 @@ def guess_english_from_title_or_path(title: str, file_path: str) -> bool:
 
 
 def guess_italian_from_title_or_path(title: str, file_path: str) -> bool:
-    """Heurística conservadora de “contexto italiano”."""
     haystack = f"{title} {file_path}".strip()
     if not haystack:
         return False
@@ -496,7 +297,6 @@ def guess_italian_from_title_or_path(title: str, file_path: str) -> bool:
 
 
 def guess_french_from_title_or_path(title: str, file_path: str) -> bool:
-    """Heurística conservadora de “contexto francés”."""
     haystack = f"{title} {file_path}".strip()
     if not haystack:
         return False
@@ -507,11 +307,6 @@ def guess_french_from_title_or_path(title: str, file_path: str) -> bool:
 
 
 def guess_japanese_from_title_or_path(title: str, file_path: str) -> bool:
-    """
-    Heurística conservadora de “contexto japonés”:
-    - tokens (日本語/nihongo/jpn/japanese/字幕/吹替)
-    - o presencia de Kana (señal muy fuerte)
-    """
     haystack = f"{title} {file_path}".strip()
     if not haystack:
         return False
@@ -521,11 +316,6 @@ def guess_japanese_from_title_or_path(title: str, file_path: str) -> bool:
 
 
 def guess_korean_from_title_or_path(title: str, file_path: str) -> bool:
-    """
-    Heurística conservadora de “contexto coreano”:
-    - tokens (한국어/kor/korean/자막/더빙)
-    - o presencia de Hangul (señal muy fuerte)
-    """
     haystack = f"{title} {file_path}".strip()
     if not haystack:
         return False
@@ -533,11 +323,6 @@ def guess_korean_from_title_or_path(title: str, file_path: str) -> bool:
 
 
 def guess_chinese_from_title_or_path(title: str, file_path: str) -> bool:
-    """
-    Heurística conservadora de “contexto chino”:
-    - tokens (中文/国语/國語/粤语/粵語/字幕/配音/chi/zho/chinese)
-    - o presencia de Han (ideogramas) sin Kana ni Hangul.
-    """
     haystack = f"{title} {file_path}".strip()
     if not haystack:
         return False
@@ -551,31 +336,7 @@ def guess_chinese_from_title_or_path(title: str, file_path: str) -> bool:
     return False
 
 
-def title_has_cjk_script(title: str) -> bool:
-    """
-    True si el texto contiene escritura CJK/Hangul.
-    """
-    return bool(title and _CJK_ANY_RE.search(title))
-
-
-def is_probably_english_title(title: str) -> bool:
-    """
-    Heurística ligera: True si el título parece inglés.
-    """
-    t = (title or "").strip()
-    if not t:
-        return False
-    if _ES_CHAR_RE.search(t):
-        return False
-    if _CJK_ANY_RE.search(t):
-        return False
-    return bool(_EN_FUNCTION_WORD_RE.search(_cleanup_separators(t.lower())))
-
-
 def detect_context_language_code(movie_input: "MovieInput") -> LanguageCode:
-    """
-    Determina el idioma “de contexto” del ítem.
-    """
     lang = movie_input.plex_library_language()
     if lang:
         l = lang.strip().lower()
@@ -618,9 +379,6 @@ def should_skip_new_title_suggestion(
     current_title: str,
     omdb_title: str,
 ) -> bool:
-    """
-    Decide si debemos BLOQUEAR la sugerencia de new_title por reglas multi-idioma.
-    """
     cur = (current_title or "").strip()
     om = (omdb_title or "").strip()
     if not om:
@@ -652,13 +410,6 @@ def should_skip_new_title_suggestion(
 
 @dataclass
 class MovieInput:
-    """
-    Representación unificada de una película antes del análisis.
-
-    Nota (Python 3.9):
-    - sin slots=True por compatibilidad.
-    """
-
     source: SourceType
     library: str
     title: str
@@ -674,42 +425,31 @@ class MovieInput:
 
     extra: dict[str, object] = field(default_factory=dict)
 
-    # -------------------------
-    # Helpers de uso común
-    # -------------------------
+    # ----------------------------
+    # Helpers básicos
+    # ----------------------------
 
     def has_physical_file(self) -> bool:
-        """True si hay un file_path no vacío (sin verificar existencia)."""
         return bool((self.file_path or "").strip())
 
     def normalized_title(self) -> str:
-        """
-        Normalización ligera local: minúsculas + strip (sin limpiar ruido).
-        """
         return (self.title or "").lower().strip()
 
     def normalized_title_for_lookup(self) -> str:
-        """
-        Normalización fuerte para búsquedas externas (OMDb/Wikipedia).
-        """
         return normalize_title_for_lookup(self.title or "")
 
-    # -------------------------
-    # Idioma (Plex y heurística)
-    # -------------------------
-
     def plex_library_language(self) -> str | None:
-        """
-        Idioma configurado/inferido para la librería Plex (si el pipeline lo inyecta en extra).
-        """
         val = self.extra.get("library_language")
         if isinstance(val, str):
             v = val.strip()
             return v or None
         return None
 
+    # ----------------------------
+    # Context language (best-effort)
+    # ----------------------------
+
     def is_spanish_context(self) -> bool:
-        """True si library_language indica ES o la heurística por título/path lo sugiere."""
         lang = self.plex_library_language()
         if lang:
             l = lang.lower().strip()
@@ -718,7 +458,6 @@ class MovieInput:
         return guess_spanish_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_english_context(self) -> bool:
-        """True si library_language indica EN o heurística sugiere inglés."""
         lang = self.plex_library_language()
         if lang:
             l = lang.lower().strip()
@@ -727,7 +466,6 @@ class MovieInput:
         return guess_english_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_italian_context(self) -> bool:
-        """True si library_language indica IT o heurística sugiere italiano."""
         lang = self.plex_library_language()
         if lang:
             l = lang.lower().strip()
@@ -736,7 +474,6 @@ class MovieInput:
         return guess_italian_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_french_context(self) -> bool:
-        """True si library_language indica FR o heurística sugiere francés."""
         lang = self.plex_library_language()
         if lang:
             l = lang.lower().strip()
@@ -745,7 +482,6 @@ class MovieInput:
         return guess_french_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_japanese_context(self) -> bool:
-        """True si library_language indica JA/JP o heurística sugiere japonés."""
         lang = self.plex_library_language()
         if lang:
             l = lang.lower().strip()
@@ -754,7 +490,6 @@ class MovieInput:
         return guess_japanese_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_korean_context(self) -> bool:
-        """True si library_language indica KO o heurística sugiere coreano."""
         lang = self.plex_library_language()
         if lang:
             l = lang.lower().strip()
@@ -763,7 +498,6 @@ class MovieInput:
         return guess_korean_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_chinese_context(self) -> bool:
-        """True si library_language indica ZH/CHI/ZHO o heurística sugiere chino."""
         lang = self.plex_library_language()
         if lang:
             l = lang.lower().strip()
@@ -771,17 +505,47 @@ class MovieInput:
                 return True
         return guess_chinese_from_title_or_path(self.title or "", self.file_path or "")
 
-    # -------------------------
-    # Utilidad para logs/trazas (sin emitir logs aquí)
-    # -------------------------
+    # ----------------------------
+    # Identity enrichment (DLNA/local)
+    # ----------------------------
+
+    def enriched_identity(self) -> tuple[str, int | None, str | None]:
+        """
+        Devuelve (title, year, imdb_id_hint) con best-effort.
+        No muta el objeto.
+        """
+        return coalesce_movie_identity(
+            title=self.title or "",
+            year=self.year,
+            file_path=self.file_path or "",
+            imdb_id_hint=self.imdb_id_hint,
+        )
+
+    # ----------------------------
+    # Describe
+    # ----------------------------
 
     def describe(self) -> str:
-        """
-        Describe el item de forma corta para logs/trazas en capas superiores.
-        """
         year_str = str(self.year) if self.year is not None else "?"
         base = f"[{self.source}] {self.title} ({year_str}) / {self.library}"
         fp = (self.file_path or "").strip()
         if fp:
             base += f" / {fp}"
         return base
+
+
+__all__ = [
+    "MovieInput",
+    "SourceType",
+    "LanguageCode",
+    "detect_context_language_code",
+    "should_skip_new_title_suggestion",
+    "guess_spanish_from_title_or_path",
+    "guess_english_from_title_or_path",
+    "guess_italian_from_title_or_path",
+    "guess_french_from_title_or_path",
+    "guess_japanese_from_title_or_path",
+    "guess_korean_from_title_or_path",
+    "guess_chinese_from_title_or_path",
+    "coalesce_movie_identity",
+]
