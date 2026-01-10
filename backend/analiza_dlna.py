@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/analiza_dlna.py
 
@@ -13,6 +11,8 @@ MEJORAS (objetivo: menos UNKNOWN):
 
 Nota: apoyado en backend/title_utils.py para no duplicar heurísticas.
 """
+
+from __future__ import annotations
 
 import re
 import time

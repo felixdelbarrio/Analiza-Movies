@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 metadata_tab.py
 
@@ -16,6 +14,8 @@ Diseño:
 - Lectura defensiva del CSV (errores → DataFrame vacío + mensaje).
 - Evitar dependencias del backend.
 """
+
+from __future__ import annotations
 
 import os
 

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 all_movies.py
 
@@ -15,6 +13,8 @@ Principios:
 - Ser tolerante a columnas ausentes.
 - Delegar UI compleja (grid + detalle) a frontend.components.
 """
+
+from __future__ import annotations
 
 from typing import Final
 

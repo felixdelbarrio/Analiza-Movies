@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/logger.py
 
@@ -32,6 +30,8 @@ Notas técnicas importantes
 - Inicialización idempotente.
 - Best-effort: si no se puede abrir/crear el fichero, el pipeline sigue solo con consola.
 """
+
+from __future__ import annotations
 
 import logging
 import os
