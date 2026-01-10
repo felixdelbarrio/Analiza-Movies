@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """
 stats.py
 
 Utilidades estadísticas para el proyecto (umbrales “auto”, percentiles y medias)
 basadas en el cache de OMDb.
 """
+
+from __future__ import annotations
 
 import threading
 from typing import cast

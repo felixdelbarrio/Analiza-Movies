@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/config.py (fachada compat)
 
@@ -11,6 +9,8 @@ Problema resuelto:
 - Evitamos `from ... import *` porque puede “pisar” nombres `Final` (DATA_DIR, REPORTS_DIR_PATH, etc.)
   y Pylance lo interpreta como reasignación.
 """
+
+from __future__ import annotations
 
 from types import ModuleType
 

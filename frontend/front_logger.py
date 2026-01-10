@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 frontend/front_logger.py
 
@@ -8,6 +6,8 @@ Logger ultra simple para frontend:
 - En Streamlit, lo más fiable suele ser no spamear stdout.
 - Si FRONT_DEBUG=True, permite warnings en consola.
 """
+
+from __future__ import annotations
 
 from frontend.config_front_base import FRONT_DEBUG
 

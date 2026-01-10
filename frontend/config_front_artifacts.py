@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 frontend/config_front_artifacts.py
 
@@ -12,6 +10,8 @@ Contrato de artefactos que el front consume.
 
 Puedes sobreescribir nombres desde .env.front si en el futuro cambian.
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Final

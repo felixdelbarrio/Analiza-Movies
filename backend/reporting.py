@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/reporting.py
 
@@ -23,6 +21,8 @@ Mejoras aplicadas en esta revisión:
 - Diagnóstico ligero: aviso (debug) si llegan keys extra no contempladas en fieldnames,
   SIN romper compatibilidad (extrasaction="ignore" se mantiene).
 """
+
+from __future__ import annotations
 
 import csv
 import os
