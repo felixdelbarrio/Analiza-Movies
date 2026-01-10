@@ -1,4 +1,6 @@
 import json
+import os
+import time
 
 import pandas as pd
 from pandas.api.types import is_string_dtype
@@ -29,6 +31,8 @@ def test_file_cache_load_json_refreshes_on_change(tmp_path):
     assert first == {"a": 1}
 
     path.write_text(json.dumps({"a": 2}), encoding="utf-8")
+    bump = time.time() + 1.0
+    os.utime(path, (bump, bump))
     second = cache.load_json(path)
     assert second == {"a": 2}
 
