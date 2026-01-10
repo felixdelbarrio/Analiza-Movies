@@ -30,11 +30,32 @@ from typing import Any, Callable, Protocol, cast
 
 import pandas as pd
 import streamlit as st
-from st_aggrid import GridOptionsBuilder
+from st_aggrid import GridOptionsBuilder, JsCode
 
 Row = Mapping[str, Any]
 Rows = Sequence[Row]
 DeleteFilesFromRowsFn = Callable[[pd.DataFrame, bool], tuple[int, int, Sequence[str]]]
+
+HIDDEN_COLUMNS: set[str] = {"plex_ta"}
+_DECISION_ROW_STYLE = JsCode(
+    """
+function(params) {
+  if (!params || !params.data) {
+    return {};
+  }
+  const raw = params.data.decision;
+  if (!raw) {
+    return {};
+  }
+  const d = String(raw).toUpperCase();
+  if (d === "DELETE") return { color: "#e53935" };
+  if (d === "KEEP") return { color: "#43a047" };
+  if (d === "MAYBE") return { color: "#fbc02d" };
+  if (d === "UNKNOWN") return { color: "#9e9e9e" };
+  return {};
+}
+"""
+)
 
 
 class AgGridCallable(Protocol):
@@ -46,6 +67,7 @@ class AgGridCallable(Protocol):
         update_on: Sequence[str],
         enable_enterprise_modules: bool,
         height: int,
+        allow_unsafe_jscode: bool | None = None,
         key: str,
     ) -> Mapping[str, Any]: ...
 
@@ -303,17 +325,25 @@ def render(
 
     gb = GridOptionsBuilder.from_dataframe(df_view)
     gb.configure_selection(selection_mode="multiple", use_checkbox=True)
-    gb.configure_grid_options(domLayout="normal")
+    if bool(st.session_state.get("grid_colorize_rows", True)):
+        gb.configure_grid_options(domLayout="normal", getRowStyle=_DECISION_ROW_STYLE)
+    else:
+        gb.configure_grid_options(domLayout="normal")
+    for col in HIDDEN_COLUMNS:
+        if col in df_view.columns:
+            gb.configure_column(col, hide=True)
     grid_options = gb.build()
     grid_options["autoSizeStrategy"] = {"type": "fitGridWidth"}
 
+    colorize_rows = bool(st.session_state.get("grid_colorize_rows", True))
     grid_response = aggrid_fn(
-        df_view,
+        df_view.copy(),
         gridOptions=grid_options,
         update_on=["selectionChanged"],
         enable_enterprise_modules=False,
         height=500,
-        key="aggrid_delete",
+        allow_unsafe_jscode=True,
+        key=f"aggrid_delete_{int(colorize_rows)}",
     )
 
     selected_rows = _normalize_selected_rows(grid_response.get("selected_rows"))
