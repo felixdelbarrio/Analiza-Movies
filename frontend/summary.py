@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 frontend/summary.py
 
@@ -18,6 +16,8 @@ Convenciones:
 - FILE_SIZE_COL = "file_size_gb" (derivada en frontend.data_utils.add_derived_columns)
 - DECISION_COL  = "decision" (generada por scoring/analysis)
 """
+
+from __future__ import annotations
 
 from typing import Final, TypedDict
 

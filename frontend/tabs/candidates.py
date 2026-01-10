@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 candidates.py
 
@@ -17,6 +15,8 @@ Principios:
 - Tolerancia a columnas ausentes (decision, imdb_rating, etc.).
 - UI delegada a frontend.components.
 """
+
+from __future__ import annotations
 
 from typing import Final
 

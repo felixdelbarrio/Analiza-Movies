@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/analiza_omdb.py
 
@@ -25,6 +23,8 @@ API pública
 - apply_omdb_enrichment_to_metadata(metadata, enrichment, overwrite=False) -> dict (in-place shallow)
 - writeback_omdb_wiki_block(norm_title, norm_year, imdb_id, wiki_block) -> bool
 """
+
+from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass

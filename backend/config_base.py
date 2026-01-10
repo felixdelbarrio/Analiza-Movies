@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/config_base.py
 
@@ -12,6 +10,8 @@ backend/config_base.py
 
 Este módulo NO debe importar config_*.py para evitar ciclos.
 """
+
+from __future__ import annotations
 
 import json
 import os

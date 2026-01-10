@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 charts.py
 
@@ -19,6 +17,8 @@ Notas de implementación:
 Dependencias:
 - frontend.data_utils: helpers de parsing y agregación (géneros, word counts, color).
 """
+
+from __future__ import annotations
 
 from typing import Final, Iterable
 

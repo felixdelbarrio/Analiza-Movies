@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/analiza_plex.py
 
@@ -48,6 +46,8 @@ Nota sobre Pylance / sintaxis
 - Python NO permite `nonlocal (a, b, c)`. Debe declararse uno a uno.
   Este fichero ya está corregido para evitar esos errores.
 """
+
+from __future__ import annotations
 
 import time
 from collections.abc import Iterable, Mapping
