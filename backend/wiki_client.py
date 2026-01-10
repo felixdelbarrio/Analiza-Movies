@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/wiki_client.py (schema v6) - refactor (client-only) - OPTIMIZED
 
@@ -53,6 +51,8 @@ NOTA:
 FIX (typing / Pyright):
   - Evita kwargs en dict-subclasses y reconstruye dicts con cast + loops.
 """
+
+from __future__ import annotations
 
 import atexit
 import json
@@ -368,8 +368,8 @@ def _safe_int(value: object) -> int | None:
 
 
 def _normalize_lang_code(lang: str) -> str:
-    l = lang.strip().lower().replace("_", "-")
-    if not l:
+    norm = lang.strip().lower().replace("_", "-")
+    if not norm:
         return ""
     iso_map: dict[str, str] = {
         "spa": "es",
@@ -383,7 +383,7 @@ def _normalize_lang_code(lang: str) -> str:
         "zho": "zh",
         "chi": "zh",
     }
-    base = l.split("-", 1)[0]
+    base = norm.split("-", 1)[0]
     return iso_map.get(base, base)
 
 
@@ -1379,10 +1379,10 @@ def _detect_language_chain_from_input(movie_input: MovieInputLangProto | None) -
 
     out: list[str] = []
     seen: set[str] = set()
-    for l in chain:
-        if l and l not in seen:
-            seen.add(l)
-            out.append(l)
+    for lang_code in chain:
+        if lang_code and lang_code not in seen:
+            seen.add(lang_code)
+            out.append(lang_code)
     return out
 
 
@@ -1391,9 +1391,9 @@ def _best_wikipedia_languages_for_item(movie_input: MovieInputLangProto | None) 
     primary = chain[0] if chain else (_normalize_lang_code(WIKI_LANGUAGE) or "en")
 
     fallback = ""
-    for l in chain[1:]:
-        if l != primary:
-            fallback = l
+    for lang_code in chain[1:]:
+        if lang_code != primary:
+            fallback = lang_code
             break
 
     if not fallback:

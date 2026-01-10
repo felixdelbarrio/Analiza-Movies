@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/dlna_client.py
 
@@ -16,6 +14,8 @@ por narrowing/agresividad con tipos internos (tag/iter()). Para eliminar falsos 
 este fichero evita `continue` en los bloques conflictivos (servicios/containers/items)
 y usa guards con `if/elif/else`.
 """
+
+from __future__ import annotations
 
 import importlib
 import random

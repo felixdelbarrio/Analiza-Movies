@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 frontend/front_stats.py
 
@@ -8,6 +6,8 @@ Stats del frontend (desacoplado del backend).
 - compute_global_imdb_mean_from_df: para DataFrame cargado desde report_all.csv
 - compute_global_imdb_mean_from_report_all: helper que lee REPORT_ALL_PATH
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 

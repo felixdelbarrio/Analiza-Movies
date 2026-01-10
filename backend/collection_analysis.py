@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/collection_analysis.py
 
@@ -67,6 +65,8 @@ CAMBIOS EN ESTA REVISION
     - se usa para cache keys, lookup_key y llamadas a Wiki.
 - Mantiene compat, estructura y logs.
 """
+
+from __future__ import annotations
 
 import json
 import threading

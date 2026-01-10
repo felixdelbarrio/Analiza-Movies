@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/decision_logic.py
 
@@ -7,6 +5,8 @@ Actualización (multi-idioma):
 - Usa backend.title_utils para normalización de títulos.
 - Evita comparar título Plex localizado (ES/FR/IT) vs OMDb (a menudo EN) -> reduce falsos positivos.
 """
+
+from __future__ import annotations
 
 import difflib
 import re

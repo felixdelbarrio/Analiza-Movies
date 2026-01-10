@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import annotations
-
 """
 delete_tab.py
 
@@ -24,6 +22,8 @@ Nota importante (Pyright/Pylance)
     * No usamos pd.isna() directo (wrapper _pd_isna).
     * Evitamos ramas/returns que Pyright infiere como inalcanzables.
 """
+
+from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from typing import Any, Callable, Protocol, cast
@@ -352,5 +352,5 @@ def render(
         else:
             st.success(f"Borrado completado. OK={ok}, errores={err}")
 
-        logs_show = _truncate_logs([str(l) for l in logs])
+        logs_show = _truncate_logs([str(log_line) for log_line in logs])
         st.text_area("Log de borrado", value="\n".join(logs_show), height=260)

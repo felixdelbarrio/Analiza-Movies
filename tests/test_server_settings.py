@@ -1,5 +1,3 @@
-import os
-
 from server.api.settings import Settings
 
 

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 advanced.py
 
@@ -16,6 +14,8 @@ Principios:
 - Mantener este módulo centrado en UI/filtrado; la lógica de render se delega a
   frontend.components (grid + detalle).
 """
+
+from __future__ import annotations
 
 from typing import Any, Sequence
 
