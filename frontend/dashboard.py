@@ -152,6 +152,13 @@ def _debug_banner(*, df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> 
     )
 
 
+def _bool_switch(label: str, *, key: str, value: bool, help: str | None = None) -> bool:
+    toggle_fn = getattr(st, "toggle", None)
+    if callable(toggle_fn):
+        return bool(toggle_fn(label, value=value, key=key, help=help))
+    return bool(st.checkbox(label, value=value, key=key, help=help))
+
+
 def _hide_streamlit_chrome() -> None:
     """
     Oculta elementos de “chrome” de Streamlit (cabecera, toolbar) y ajusta paddings.
@@ -330,6 +337,13 @@ if imdb_mean_df is not None and not pd.isna(imdb_mean_df):
     col5.metric("IMDb medio (analizado)", f"{imdb_mean_df:.2f}")
 else:
     col5.metric("IMDb medio (analizado)", "N/A")
+
+_bool_switch(
+    "Señalética de color en tablas",
+    key="grid_colorize_rows",
+    value=bool(st.session_state.get("grid_colorize_rows", True)),
+    help="Activa colores por decisión (DELETE/KEEP/MAYBE/UNKNOWN) en el texto de cada fila.",
+)
 
 st.markdown("---")
 
