@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/movie_input.py
 
@@ -16,6 +14,8 @@ Refactor:
 Nota:
 - Sin logging.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
@@ -339,20 +339,20 @@ def guess_chinese_from_title_or_path(title: str, file_path: str) -> bool:
 def detect_context_language_code(movie_input: "MovieInput") -> LanguageCode:
     lang = movie_input.plex_library_language()
     if lang:
-        l = lang.strip().lower()
-        if l.startswith(("es", "spa")):
+        lang_code = lang.strip().lower()
+        if lang_code.startswith(("es", "spa")):
             return "es"
-        if l.startswith(("en", "eng")):
+        if lang_code.startswith(("en", "eng")):
             return "en"
-        if l.startswith(("it", "ita")):
+        if lang_code.startswith(("it", "ita")):
             return "it"
-        if l.startswith(("fr", "fra", "fre")):
+        if lang_code.startswith(("fr", "fra", "fre")):
             return "fr"
-        if l.startswith(("ja", "jp", "jpn")):
+        if lang_code.startswith(("ja", "jp", "jpn")):
             return "ja"
-        if l.startswith(("ko", "kor")):
+        if lang_code.startswith(("ko", "kor")):
             return "ko"
-        if l.startswith(("zh", "chi", "zho")):
+        if lang_code.startswith(("zh", "chi", "zho")):
             return "zh"
 
     if movie_input.is_japanese_context():
@@ -452,56 +452,56 @@ class MovieInput:
     def is_spanish_context(self) -> bool:
         lang = self.plex_library_language()
         if lang:
-            l = lang.lower().strip()
-            if l.startswith(("es", "spa")):
+            lang_code = lang.lower().strip()
+            if lang_code.startswith(("es", "spa")):
                 return True
         return guess_spanish_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_english_context(self) -> bool:
         lang = self.plex_library_language()
         if lang:
-            l = lang.lower().strip()
-            if l.startswith(("en", "eng")):
+            lang_code = lang.lower().strip()
+            if lang_code.startswith(("en", "eng")):
                 return True
         return guess_english_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_italian_context(self) -> bool:
         lang = self.plex_library_language()
         if lang:
-            l = lang.lower().strip()
-            if l.startswith(("it", "ita")):
+            lang_code = lang.lower().strip()
+            if lang_code.startswith(("it", "ita")):
                 return True
         return guess_italian_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_french_context(self) -> bool:
         lang = self.plex_library_language()
         if lang:
-            l = lang.lower().strip()
-            if l.startswith(("fr", "fra", "fre")):
+            lang_code = lang.lower().strip()
+            if lang_code.startswith(("fr", "fra", "fre")):
                 return True
         return guess_french_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_japanese_context(self) -> bool:
         lang = self.plex_library_language()
         if lang:
-            l = lang.lower().strip()
-            if l.startswith(("ja", "jp", "jpn")):
+            lang_code = lang.lower().strip()
+            if lang_code.startswith(("ja", "jp", "jpn")):
                 return True
         return guess_japanese_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_korean_context(self) -> bool:
         lang = self.plex_library_language()
         if lang:
-            l = lang.lower().strip()
-            if l.startswith(("ko", "kor")):
+            lang_code = lang.lower().strip()
+            if lang_code.startswith(("ko", "kor")):
                 return True
         return guess_korean_from_title_or_path(self.title or "", self.file_path or "")
 
     def is_chinese_context(self) -> bool:
         lang = self.plex_library_language()
         if lang:
-            l = lang.lower().strip()
-            if l.startswith(("zh", "chi", "zho")):
+            lang_code = lang.lower().strip()
+            if lang_code.startswith(("zh", "chi", "zho")):
                 return True
         return guess_chinese_from_title_or_path(self.title or "", self.file_path or "")
 

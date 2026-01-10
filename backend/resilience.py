@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/resilience.py
 
@@ -16,6 +14,8 @@ Principios:
 
 No impone logging: devuelve estados para que el caller use backend/logger.py.
 """
+
+from __future__ import annotations
 
 import random
 import threading

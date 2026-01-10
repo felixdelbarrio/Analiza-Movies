@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/title_utils.py
 
@@ -17,6 +15,8 @@ Objetivo:
 Nota:
 - Este módulo usa knobs definidos en backend.config_plex para modular comportamiento.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 import os

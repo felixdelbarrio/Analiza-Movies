@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/metadata_fix.py
 
@@ -69,6 +67,8 @@ CAMBIOS / MEJORAS EN ESTA REVISION
     - Usa coalesce_movie_identity(...) para derivar plex_imdb_id más fiable
       (apoyándose en file_path + extra["source_url"]).
 """
+
+from __future__ import annotations
 
 import json
 import re

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/analyze_input_core.py
 
@@ -15,6 +13,8 @@ REFactor (title identity / lookup):
   apoyándose en file_path + extra["source_url"] cuando existe.
 - ✅ lookup_year SOLO se usa para fetch OMDb (mejor precisión). movie.year se conserva en el row.
 """
+
+from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 server/api/middleware/request_id.py
 
@@ -7,6 +5,8 @@ Middleware:
 - Inyecta/propaga X-Request-ID
 - Registra métricas y log por request (duración + status)
 """
+
+from __future__ import annotations
 
 import time
 import uuid

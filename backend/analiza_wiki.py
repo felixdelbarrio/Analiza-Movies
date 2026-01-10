@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """
 backend/analiza_wiki.py
 
 Orquestador de enriquecimiento Wikipedia/Wikidata (cache warmup / batch).
 """
+
+from __future__ import annotations
 
 import time
 from collections.abc import Iterable, Iterator
