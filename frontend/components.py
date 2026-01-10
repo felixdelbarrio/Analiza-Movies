@@ -34,11 +34,31 @@ from typing import Any, Optional, Protocol, cast
 
 import pandas as pd
 import streamlit as st
-from st_aggrid import GridOptionsBuilder
+from st_aggrid import GridOptionsBuilder, JsCode
 
 from frontend.data_utils import safe_json_loads_single
 
 RowDict = dict[str, Any]
+
+_DECISION_ROW_STYLE = JsCode(
+    """
+function(params) {
+  if (!params || !params.data) {
+    return {};
+  }
+  const raw = params.data.decision;
+  if (!raw) {
+    return {};
+  }
+  const d = String(raw).toUpperCase();
+  if (d === "DELETE") return { color: "#e53935" };
+  if (d === "KEEP") return { color: "#43a047" };
+  if (d === "MAYBE") return { color: "#fbc02d" };
+  if (d === "UNKNOWN") return { color: "#9e9e9e" };
+  return {};
+}
+"""
+)
 
 
 class AgGridCallable(Protocol):
@@ -50,6 +70,7 @@ class AgGridCallable(Protocol):
         update_on: Sequence[str],
         enable_enterprise_modules: bool,
         height: int,
+        allow_unsafe_jscode: bool | None = None,
         key: str,
     ) -> Mapping[str, Any]: ...
 
@@ -239,7 +260,13 @@ def _normalize_row_to_dict(row: Any) -> Optional[RowDict]:
 # ============================================================================
 
 
-def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[dict[str, Any]]:
+def aggrid_with_row_click(
+    df: pd.DataFrame,
+    key_suffix: str,
+    *,
+    visible_order: Sequence[str] | None = None,
+    auto_select_first: bool = False,
+) -> Optional[dict[str, Any]]:
     """
     Muestra un AgGrid con selección de una sola fila.
     """
@@ -247,7 +274,7 @@ def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[dict[st
         st.info("No hay datos para mostrar.")
         return None
 
-    desired_order = [
+    default_order = [
         "title",
         "year",
         "library",
@@ -258,6 +285,7 @@ def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[dict[st
         "decision",
         "reason",
     ]
+    desired_order = list(visible_order) if visible_order else default_order
     visible_cols = [c for c in desired_order if c in df.columns]
     ordered_cols = visible_cols + [c for c in df.columns if c not in visible_cols]
     df = df[ordered_cols]
@@ -265,6 +293,33 @@ def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[dict[st
     gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_selection(selection_mode="single", use_checkbox=False)
     gb.configure_grid_options(domLayout="normal")
+
+    if bool(st.session_state.get("grid_colorize_rows", True)):
+        gb.configure_grid_options(getRowStyle=_DECISION_ROW_STYLE)
+
+    if auto_select_first:
+        gb.configure_grid_options(
+            onFirstDataRendered=JsCode(
+                """
+function(params) {
+  if (!params || !params.api) {
+    return;
+  }
+  params.api.forEachNode(function(node, index) {
+    if (index === 0) {
+      node.setSelected(true);
+    }
+  });
+}
+"""
+            )
+        )
+
+    if "file_size_gb" in df.columns:
+        gb.configure_column(
+            "file_size_gb",
+            valueFormatter="value != null ? value.toFixed(2) + ' GB' : ''",
+        )
 
     for col in df.columns:
         if col not in visible_cols:
@@ -277,13 +332,15 @@ def aggrid_with_row_click(df: pd.DataFrame, key_suffix: str) -> Optional[dict[st
 
     aggrid_fn = cast(AgGridCallable, getattr(st_aggrid_mod, "AgGrid"))
 
+    colorize_rows = bool(st.session_state.get("grid_colorize_rows", True))
     grid_response = aggrid_fn(
-        df,
+        df.copy(),
         gridOptions=grid_options,
         update_on=["selectionChanged"],
         enable_enterprise_modules=False,
         height=520,
-        key=f"aggrid_{key_suffix}",
+        allow_unsafe_jscode=True,
+        key=f"aggrid_{key_suffix}_{int(colorize_rows)}",
     )
 
     selected_raw = grid_response.get("selected_rows")
