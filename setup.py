@@ -68,8 +68,13 @@ setup(
             "xarray>=2024.1",
             "sqlalchemy>=2.0",
         ],
+        "viz": [
+            "rich>=13.7",
+            "plotly>=5.18",
+            "sympy>=1.12",
+            "graphviz>=0.20",
+        ],
         # Si quieres mantener opcionales runtime como "extras" en vez de requirements.txt:
-        # "viz": ["plotly>=5.18", "graphviz>=0.20"],
     },
     entry_points={
         "console_scripts": [
