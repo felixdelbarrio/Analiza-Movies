@@ -1,15 +1,2 @@
-# Development / typing dependencies (mypy / pyright + stubs)
-# ----------------------------------------------------------
-
-mypy>=1.8
-pyright>=1.1.390
-
-# Type stubs that reduce noise
-pandas-stubs>=2.1
-types-requests>=2.31
-types-python-dateutil>=2.8
-
-# Some pandas-stubs expect these to be importable
-matplotlib>=3.8
-xarray>=2024.1
-sqlalchemy>=2.0
+# Dev install (editable) with tooling/test deps from setup.py:extras_require[dev]
+-e .[dev]
