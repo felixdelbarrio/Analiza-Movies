@@ -20,7 +20,7 @@ API_PORT   ?= 8000
 .DEFAULT_GOAL := help
 
 .PHONY: help venv install dev reinstall backend frontend server server-uvicorn doctor \
-        typecheck lint format clean clean-venv reset
+        typecheck lint format test test-cov clean clean-venv reset
 
 help:
 	@echo ""
@@ -37,6 +37,8 @@ help:
 	@echo "make typecheck       Ejecuta mypy y pyright (requiere make dev)"
 	@echo "make lint            Ejecuta ruff (requiere make dev)"
 	@echo "make format          Ejecuta black + ruff format (requiere make dev)"
+	@echo "make test            Ejecuta pytest (requiere make dev)"
+	@echo "make test-cov        Ejecuta pytest con cobertura (requiere make dev)"
 	@echo ""
 	@echo "make doctor          Diagnóstico del entorno"
 	@echo "make reset           Borra venv y reinstala todo (dev)"
@@ -94,6 +96,12 @@ lint: dev
 format: dev
 	@$(PY) -m black .
 	@$(PY) -m ruff format .
+
+test: dev
+	@$(PY) -m pytest
+
+test-cov: dev
+	@$(PY) -m pytest --cov=. --cov-branch
 
 # -------------------------------------------------
 # Diagnóstico
