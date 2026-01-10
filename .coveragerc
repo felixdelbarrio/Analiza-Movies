@@ -1,0 +1,26 @@
+[run]
+branch = True
+omit =
+    */analiza_omdb.py
+    */analiza_plex.py
+    */analiza_wiki.py
+    */analiza_dlna.py
+    */omdb_client.py
+    */wiki_client.py
+    */plex_client.py
+    */dlna_client.py
+    */dlna_discovery.py
+    */collection_analysis.py
+    */main.py
+    */frontend/tabs/*
+    */frontend/components.py
+    */frontend/dashboard.py
+    */frontend/front_api_client.py
+    */frontend/front_logger.py
+    */frontend/templates/*
+    */server/api/routers/*
+    */server/__main__.py
+    */server/am_api.py
+
+[report]
+show_missing = True

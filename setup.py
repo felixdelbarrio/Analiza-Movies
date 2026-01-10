@@ -20,7 +20,7 @@ setup(
     ),
     long_description=long_description,
     long_description_content_type="text/markdown",
-    license="MIT",
+    license="GNU",
     packages=find_packages(exclude=("tests",)),
     include_package_data=True,
     install_requires=[
@@ -52,6 +52,7 @@ setup(
             "black>=24.0",
             "ruff>=0.6",
             "pytest>=8.0",
+            "pytest-cov>=4.1",
 
             # Typing / static analysis
             "mypy>=1.8",
