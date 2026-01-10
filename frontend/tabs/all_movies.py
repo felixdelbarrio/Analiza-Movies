@@ -29,35 +29,15 @@ TITLE_TEXT: Final[str] = "### Todas las películas"
 
 def _sort_all_movies_view(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Ordena el DataFrame de forma estable y útil si existen columnas candidatas.
-
-    Orden propuesto:
-    - decision (asc): para agrupar por acción sugerida (DELETE/MAYBE primero).
-    - imdb_rating (desc): mejor rating arriba dentro del grupo.
-    - imdb_votes (desc): más votos arriba.
-    - year (desc): más reciente arriba.
-
-    Nota:
-    - El orden real de 'decision' dependerá de cómo compare strings; esto es suficiente
-      para una ordenación básica. Si quieres un orden semántico estricto
-      (DELETE, MAYBE, KEEP, UNKNOWN) podemos mapear a un ordinal.
+    Ordena el DataFrame por título (asc) si existe la columna.
     """
     df_view = df.copy()
 
-    sort_candidates = ["decision", "imdb_rating", "imdb_votes", "year"]
-    sort_cols = [c for c in sort_candidates if c in df_view.columns]
-
-    if not sort_cols:
+    if "title" not in df_view.columns:
         return df_view
 
-    ascending = [True] + [False] * (len(sort_cols) - 1)
-
     try:
-        return df_view.sort_values(
-            by=sort_cols,
-            ascending=ascending,
-            ignore_index=True,
-        )
+        return df_view.sort_values(by=["title"], ascending=[True], na_position="last", ignore_index=True)
     except Exception:
         # Degradación segura: si algún dtype raro rompe sort_values, devolvemos sin ordenar.
         return df_view
@@ -81,7 +61,21 @@ def render(df_all: pd.DataFrame) -> None:
     col_grid, col_detail = st.columns([2, 1])
 
     with col_grid:
-        selected_row = aggrid_with_row_click(df_view, "all")
+        selected_row = aggrid_with_row_click(
+            df_view,
+            "all",
+            visible_order=[
+                "title",
+                "year",
+                "library",
+                "file_size_gb",
+                "metacritic_score",
+                "imdb_rating",
+                "imdb_votes",
+                "rt_score",
+            ],
+            auto_select_first=True,
+        )
 
     with col_detail:
         render_detail_card(selected_row, button_key_prefix="all")
