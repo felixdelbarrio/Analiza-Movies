@@ -32,7 +32,7 @@ help:
 	@echo "make server-uvicorn  Ejecuta la API FastAPI (via uvicorn: $(API_MODULE))"
 	@echo ""
 	@echo "make install         Crea venv e instala runtime (editable)"
-	@echo "make dev             Instala runtime + extras dev (mypy/pyright + stubs + tooling)"
+	@echo "make dev             Instala runtime + tooling/dev deps"
 	@echo "make reinstall       Reinstala el proyecto editable (runtime)"
 	@echo "make typecheck       Ejecuta mypy y pyright (requiere make dev)"
 	@echo "make lint            Ejecuta ruff (requiere make dev)"
@@ -55,14 +55,13 @@ venv:
 # Runtime install: setup.py / install_requires es la fuente de verdad
 install: venv
 	@$(PIP) install -q -r requirements.txt
-	@$(PIP) install -q -e .[dev]
 
 # Dev install: incluye extras dev (mypy/pyright/stubs/black/ruff/pytest)
 dev: venv
-	@$(PIP) install -q -e ".[dev]"
+	@$(PIP) install -q -r requirements-dev.txt
 
 reinstall: venv
-	@$(PIP) install -q -e .[dev]
+	@$(PIP) install -q -r requirements-dev.txt
 
 # -------------------------------------------------
 # Targets principales
