@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/dlna_discovery.py
 
@@ -7,6 +5,8 @@ Descubrimiento de dispositivos DLNA/UPnP por SSDP (M-SEARCH).
 
 (…docstring igual que el tuyo…)
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 import socket

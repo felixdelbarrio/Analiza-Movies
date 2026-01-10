@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 frontend/config_front_base.py
 
@@ -14,6 +12,8 @@ Notas:
 - No importa nada de backend.
 - No reimplementa logging del backend: usa print minimal o el logger del front (si existiera).
 """
+
+from __future__ import annotations
 
 import os
 from pathlib import Path

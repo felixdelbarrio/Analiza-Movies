@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/scoring.py
 
@@ -33,6 +31,8 @@ Este módulo debe:
 - devolver rápidamente UNKNOWN/MAYBE con explicación,
 - sin depender de OMDb.
 """
+
+from __future__ import annotations
 
 from typing import Final, TypeAlias
 

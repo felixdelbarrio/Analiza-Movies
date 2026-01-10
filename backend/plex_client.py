@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/plex_client.py
 
@@ -39,6 +37,8 @@ Este archivo usa directamente variables del config:
 - PLEX_METRICS_LOG_ON_SILENT_DEBUG: bool
 - PLEX_METRICS_LOG_EVEN_IF_ZERO: bool
 """
+
+from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence

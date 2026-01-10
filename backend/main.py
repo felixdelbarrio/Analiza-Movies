@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/main.py
 
@@ -26,6 +24,8 @@ Reglas de consola (alineado con backend/logger.py)
 - Debug contextual: logger.debug_ctx("ANALYZE", "...") (respeta DEBUG/SILENT)
 - Salidas por cancelación/CTRL+C: limpias, sin stacktrace.
 """
+
+from __future__ import annotations
 
 import argparse
 import subprocess

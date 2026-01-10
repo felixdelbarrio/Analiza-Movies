@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/report_loader.py
 
@@ -27,6 +25,8 @@ Typing (Pylance/Pyright)
 - Algunos stubs que usa Pylance no modelan ese overload y dan error en `dtype=...`.
   El ignore se aplica SOLO a la línea del argumento `dtype=...`.
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Final, TYPE_CHECKING

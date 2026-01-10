@@ -40,12 +40,12 @@ if str(_PROJECT_ROOT) not in sys.path:
 # 2) Imports FRONT-ONLY (sin backend)
 # =============================================================================
 
-from frontend.config_front_artifacts import (
+from frontend.config_front_artifacts import (  # noqa: E402
     METADATA_FIX_PATH,
     REPORT_ALL_PATH,
     REPORT_FILTERED_PATH,
 )
-from frontend.config_front_base import (
+from frontend.config_front_base import (  # noqa: E402
     DELETE_DRY_RUN,
     DELETE_REQUIRE_CONFIRM,
     FRONT_API_BASE_URL,
@@ -54,15 +54,16 @@ from frontend.config_front_base import (
     FRONT_DEBUG,
     FRONT_MODE,
 )
-from frontend.data_utils import add_derived_columns, format_count_size
-from frontend.front_api_client import (
+from frontend.data_utils import add_derived_columns, format_count_size  # noqa: E402
+from frontend.front_api_client import (  # noqa: E402
     ApiClientError,
     fetch_metadata_fix_df,
     fetch_report_all_df,
     fetch_report_filtered_df,
 )
-from frontend.front_stats import compute_global_imdb_mean_from_df
-from frontend.summary import compute_summary
+from frontend.front_stats import compute_global_imdb_mean_from_df  # noqa: E402
+from frontend.summary import compute_summary  # noqa: E402
+from frontend.components import render_modal  # noqa: E402
 
 # =============================================================================
 # 3) Opciones globales
@@ -250,8 +251,6 @@ if not st.session_state.get("modal_open"):
 # =============================================================================
 # 6) Modal (front-only)
 # =============================================================================
-
-from frontend.components import render_modal
 
 render_modal()
 if st.session_state.get("modal_open"):

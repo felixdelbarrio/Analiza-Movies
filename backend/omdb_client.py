@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/omdb_client.py (schema v4)
 
@@ -31,6 +29,8 @@ CAMBIOS APLICADOS EN ESTA REVISION
 5) HOT CACHE: evitar compartir dict mutable del cache persistente:
    - al devolver item desde disco/mem-cache, se guarda una copia superficial en hot-cache ✅
 """
+
+from __future__ import annotations
 
 import atexit
 import json

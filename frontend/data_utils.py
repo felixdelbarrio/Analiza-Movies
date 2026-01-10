@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 data_utils.py
 
@@ -18,6 +16,8 @@ Principios
 - Ser tolerante a NaN/None y tipos inesperados.
 - Mantener esta capa “frontend” sin dependencias del backend.
 """
+
+from __future__ import annotations
 
 from collections import Counter
 import json

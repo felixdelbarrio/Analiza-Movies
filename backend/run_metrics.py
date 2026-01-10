@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 backend/run_metrics.py
 
@@ -20,6 +18,8 @@ Uso:
 
     summary = METRICS.snapshot()
 """
+
+from __future__ import annotations
 
 import threading
 import time

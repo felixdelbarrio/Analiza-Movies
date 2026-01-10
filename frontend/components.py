@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 components.py
 
@@ -27,6 +25,8 @@ Nota importante (Pyright/Pylance)
     tipado como list[dict[...]]: no metemos un `else` “imposible”).
   - Llamamos a pd.isna mediante wrapper con Any para romper propagación de stubs raros.
 """
+
+from __future__ import annotations
 
 import os
 from collections.abc import Hashable, Iterable, Mapping, MutableMapping, Sequence
