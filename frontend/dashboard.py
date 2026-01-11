@@ -347,6 +347,31 @@ _bool_switch(
 
 st.markdown("---")
 
+# Consistencia visual: tags de multiselect con fondo neutro (evita rojo fijo).
+st.markdown(
+    """
+<style>
+div[data-testid="stMultiSelect"] [data-baseweb="tag"] {
+  background-color: #2b2f36 !important;
+  border: 1px solid #3a404a !important;
+}
+div[data-testid="stMultiSelect"] [data-baseweb="tag"] span {
+  color: #e5e7eb !important;
+}
+.ag-theme-alpine .ag-cell,
+.ag-theme-alpine-dark .ag-cell {
+  display: flex;
+  align-items: center;
+}
+.ag-theme-alpine .ag-checkbox-input-wrapper,
+.ag-theme-alpine-dark .ag-checkbox-input-wrapper {
+  margin: 0 auto;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 # =============================================================================
 # 9) Pestañas (tabs)
 # =============================================================================
@@ -354,10 +379,10 @@ st.markdown("---")
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     [
         "📚 Todas",
-        "⚠️ Candidatas",
-        "🔎 Búsqueda avanzada",
-        "🧹 Borrado",
         "📊 Gráficos",
+        "🔎 Búsqueda avanzada",
+        "⚠️ Candidatas",
+        "🔁 Duplicadas",
         "🧠 Metadata",
     ]
 )
@@ -371,11 +396,12 @@ with tab1:
         render_fn(df_all)
 
 with tab2:
-    candidates_mod = _import_tabs_module("candidates")
-    if candidates_mod is None:
-        _ui_error("No existe el módulo frontend.tabs.candidates")
+    charts_mod = _import_tabs_module("charts")
+    render_fn = getattr(charts_mod, "render", None) if charts_mod is not None else None
+    if not callable(render_fn):
+        _ui_error("No existe frontend.tabs.charts.render(df_all)")
     else:
-        _call_candidates_render(candidates_mod, df_all=df_all, df_filtered=df_filtered)
+        render_fn(df_all)
 
 with tab3:
     advanced_mod = _import_tabs_module("advanced")
@@ -394,12 +420,11 @@ with tab4:
         render_fn(df_filtered, DELETE_DRY_RUN, DELETE_REQUIRE_CONFIRM)
 
 with tab5:
-    charts_mod = _import_tabs_module("charts")
-    render_fn = getattr(charts_mod, "render", None) if charts_mod is not None else None
-    if not callable(render_fn):
-        _ui_error("No existe frontend.tabs.charts.render(df_all)")
+    candidates_mod = _import_tabs_module("candidates")
+    if candidates_mod is None:
+        _ui_error("No existe el módulo frontend.tabs.candidates")
     else:
-        render_fn(df_all)
+        _call_candidates_render(candidates_mod, df_all=df_all, df_filtered=df_filtered)
 
 with tab6:
     metadata_mod = _import_tabs_module("metadata")
