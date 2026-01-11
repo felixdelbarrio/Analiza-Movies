@@ -39,6 +39,7 @@ import streamlit as st
 from st_aggrid import GridOptionsBuilder, JsCode
 
 from frontend.config_front_artifacts import OMDB_CACHE_PATH, WIKI_CACHE_PATH
+from frontend.config_front_base import PLEX_BASEURL, PLEX_PORT
 from frontend.data_utils import safe_json_loads_single
 
 RowDict = dict[str, Any]
@@ -532,12 +533,30 @@ def _is_nonempty_str(value: Any) -> bool:
 
 
 def _build_plex_url(rating_key: Any) -> str | None:
-    plex_base = os.getenv("PLEX_WEB_BASEURL") or os.getenv("PLEX_BASEURL") or os.getenv("BASEURL") or ""
-    if not plex_base:
-        return None
     if rating_key in (None, ""):
         return None
-    return f"{plex_base}/web/index.html#!/server/library/metadata/{rating_key}"
+
+    plex_base = PLEX_BASEURL or ""
+    plex_port: int | None = int(PLEX_PORT) if PLEX_PORT else None
+    if not plex_base:
+        plex_base = os.getenv("PLEX_WEB_BASEURL") or os.getenv("PLEX_BASEURL") or os.getenv("BASEURL") or ""
+
+    if not plex_base:
+        return None
+
+    base = plex_base.rstrip("/")
+    if "://" not in base:
+        base = f"http://{base}"
+
+    if plex_port:
+        try:
+            host_part = base.split("://", 1)[1]
+            if ":" not in host_part:
+                base = f"{base}:{plex_port}"
+        except Exception:
+            pass
+
+    return f"{base}/web/index.html#!/server/library/metadata/{rating_key}"
 
 
 def _build_imdb_url(imdb_id: Any) -> str | None:
