@@ -123,7 +123,11 @@ def render(df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
     col_grid, col_detail = st.columns([2, 1])
 
     with col_grid:
-        selected_row = aggrid_with_row_click(df_view, "filtered")
+        selected_row = aggrid_with_row_click(
+            df_view,
+            "filtered",
+            visible_order=["title", "year", "library", "file_size_gb", "file"],
+        )
 
     with col_detail:
         # prefix distinto para evitar colisiones con pestañas (all/advanced/etc.)
