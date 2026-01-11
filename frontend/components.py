@@ -101,9 +101,9 @@ def _rerun() -> None:
 
 def _columns_with_gap(spec: Sequence[int], *, gap: Literal["small", "medium", "large"]) -> Sequence[Any]:
     try:
-        return st.columns(spec, gap=gap)
+        return cast(Sequence[Any], st.columns(spec, gap=gap))
     except TypeError:
-        return st.columns(spec)
+        return cast(Sequence[Any], st.columns(spec))
 
 
 # ============================================================================

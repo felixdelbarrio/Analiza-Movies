@@ -186,8 +186,8 @@ METACRITIC_DELETE_MAX_SCORE: int = _cap_int(
 # Percentiles automáticos
 # ============================================================
 
-AUTO_KEEP_RATING_PERCENTILE: float = _get_env_float("AUTO_KEEP_RATING_PERCENTILE", 0.90)
-AUTO_DELETE_RATING_PERCENTILE: float = _get_env_float("AUTO_DELETE_RATING_PERCENTILE", 0.10)
+AUTO_KEEP_RATING_PERCENTILE: float = _get_env_float("AUTO_KEEP_RATING_PERCENTILE", 0.70)
+AUTO_DELETE_RATING_PERCENTILE: float = _get_env_float("AUTO_DELETE_RATING_PERCENTILE", 0.30)
 
 # ============================================================
 # Metadata fix
