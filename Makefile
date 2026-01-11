@@ -35,6 +35,7 @@ help:
 	@echo "make dev             Instala runtime + tooling/dev deps"
 	@echo "make reinstall       Reinstala el proyecto editable (runtime)"
 	@echo "make typecheck       Ejecuta mypy y pyright (requiere make dev)"
+	@echo "make mypy            Ejecuta solo mypy (requiere make dev)"
 	@echo "make lint            Ejecuta ruff (requiere make dev)"
 	@echo "make format          Ejecuta black + ruff format (requiere make dev)"
 	@echo "make test            Ejecuta pytest (requiere make dev)"
@@ -86,6 +87,9 @@ server-uvicorn: install
 # -------------------------------------------------
 
 typecheck: dev
+	@$(PY) -m mypy .
+
+mypy: dev
 	@$(PY) -m mypy .
 	@$(PY) -m pyright .
 

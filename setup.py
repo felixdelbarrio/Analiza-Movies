@@ -56,7 +56,7 @@ setup(
 
             # Typing / static analysis
             "mypy>=1.8",
-            "pyright>=1.1.390",
+            "pyright>=1.1.408",
 
             # Stubs
             "pandas-stubs>=2.1",
