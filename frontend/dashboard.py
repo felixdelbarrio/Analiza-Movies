@@ -23,7 +23,7 @@ import inspect
 import sys
 import warnings
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import Any, Callable, Final, TypeVar, cast
 
 import pandas as pd
 import streamlit as st
@@ -49,6 +49,7 @@ from frontend.config_front_base import (  # noqa: E402
     DELETE_DRY_RUN,
     DELETE_REQUIRE_CONFIRM,
     FRONT_API_BASE_URL,
+    FRONT_API_CACHE_TTL_S,
     FRONT_API_PAGE_SIZE,
     FRONT_API_TIMEOUT_S,
     FRONT_DEBUG,
@@ -81,13 +82,20 @@ TEXT_COLUMNS: Final[tuple[str, ...]] = (
 )
 
 
-class _CsvCacheEntry:
-    def __init__(self, *, mtime_ns: int, data: pd.DataFrame) -> None:
-        self.mtime_ns = mtime_ns
-        self.data = data
+_F = TypeVar("_F", bound=Callable[..., Any])
 
 
-_csv_cache: dict[str, _CsvCacheEntry] = {}
+def _cache_data_decorator(*, ttl_s: int | None = None) -> Callable[[_F], _F]:
+    cache_fn = getattr(st, "cache_data", None)
+    if callable(cache_fn):
+        kwargs: dict[str, Any] = {"show_spinner": False}
+        if ttl_s is not None:
+            kwargs["ttl"] = ttl_s
+        return cast(Callable[[_F], _F], cache_fn(**kwargs))
+    cache_fn = getattr(st, "cache", None)
+    if callable(cache_fn):
+        return cast(Callable[[_F], _F], cache_fn)
+    return cast(Callable[[_F], _F], lambda f: f)
 
 
 def _mtime_ns(path: Path) -> int:
@@ -97,6 +105,24 @@ def _mtime_ns(path: Path) -> int:
         return 0
 
 
+@_cache_data_decorator()
+def _read_report_all_cached(path_str: str, mtime_ns: int) -> pd.DataFrame:
+    df = pd.read_csv(path_str, dtype="string", encoding="utf-8")
+    for col in TEXT_COLUMNS:
+        if col in df.columns:
+            df[col] = df[col].astype("string")
+    return add_derived_columns(df)
+
+
+@_cache_data_decorator()
+def _read_report_filtered_cached(path_str: str, mtime_ns: int) -> pd.DataFrame:
+    df = pd.read_csv(path_str, dtype="string", encoding="utf-8")
+    for col in TEXT_COLUMNS:
+        if col in df.columns:
+            df[col] = df[col].astype("string")
+    return df
+
+
 def _read_csv_or_raise(path: Path, *, label: str) -> pd.DataFrame:
     """
     Lee un CSV obligatorio (si no existe, error).
@@ -104,25 +130,13 @@ def _read_csv_or_raise(path: Path, *, label: str) -> pd.DataFrame:
 
     En modo DISK, si falla, se debe ver en UI y parar el flujo.
     """
-    key = f"{label}:{path}"
     if not path.exists():
         raise FileNotFoundError(str(path))
 
     mtime = _mtime_ns(path)
-    cached = _csv_cache.get(key)
-    if cached is not None and cached.mtime_ns == mtime:
-        return cached.data
-
-    # Nota: en runtime pandas acepta dtype=dict por columna, pero los stubs que tienes
-    # no lo permiten. Como todas las columnas objetivo son "string", usamos dtype global.
-    df = pd.read_csv(path, dtype="string", encoding="utf-8")
-
-    for col in TEXT_COLUMNS:
-        if col in df.columns:
-            df[col] = df[col].astype("string")
-
-    _csv_cache[key] = _CsvCacheEntry(mtime_ns=mtime, data=df)
-    return df
+    if label == "report_all.csv":
+        return cast(pd.DataFrame, _read_report_all_cached(str(path), mtime))
+    return cast(pd.DataFrame, _read_report_filtered_cached(str(path), mtime))
 
 
 def _read_csv_or_none(path: Path) -> pd.DataFrame | None:
@@ -135,6 +149,40 @@ def _read_csv_or_none(path: Path) -> pd.DataFrame | None:
         return _read_csv_or_raise(path, label=path.name)
     except Exception:
         return None
+
+
+_API_CACHE_TTL_S: int | None = FRONT_API_CACHE_TTL_S if FRONT_API_CACHE_TTL_S > 0 else None
+
+
+@_cache_data_decorator(ttl_s=_API_CACHE_TTL_S)
+def _fetch_report_all_cached(
+    base_url: str,
+    timeout_s: float,
+    page_size: int,
+    query: str | None = None,
+) -> pd.DataFrame:
+    df = fetch_report_all_df(
+        base_url=base_url,
+        timeout_s=timeout_s,
+        page_size=page_size,
+        query=query,
+    )
+    return add_derived_columns(df)
+
+
+@_cache_data_decorator(ttl_s=_API_CACHE_TTL_S)
+def _fetch_report_filtered_cached(
+    base_url: str,
+    timeout_s: float,
+    page_size: int,
+    query: str | None = None,
+) -> pd.DataFrame | None:
+    return fetch_report_filtered_df(
+        base_url=base_url,
+        timeout_s=timeout_s,
+        page_size=page_size,
+        query=query,
+    )
 
 
 def _debug_banner(*, df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
@@ -272,7 +320,7 @@ df_filtered: pd.DataFrame | None = None
 
 if FRONT_MODE == "api":
     try:
-        df_all = fetch_report_all_df(
+        df_all = _fetch_report_all_cached(
             base_url=FRONT_API_BASE_URL,
             timeout_s=FRONT_API_TIMEOUT_S,
             page_size=FRONT_API_PAGE_SIZE,
@@ -280,7 +328,7 @@ if FRONT_MODE == "api":
         if df_all is None or df_all.empty:
             raise ApiClientError("API devolvió report_all vacío.")
 
-        df_filtered = fetch_report_filtered_df(
+        df_filtered = _fetch_report_filtered_cached(
             base_url=FRONT_API_BASE_URL,
             timeout_s=FRONT_API_TIMEOUT_S,
             page_size=FRONT_API_PAGE_SIZE,
@@ -313,8 +361,6 @@ if df_all_any is None:
     _ui_error("No se pudo cargar report_all (df_all=None).")
     raise RuntimeError("df_all is None")
 df_all = cast(pd.DataFrame, df_all_any)
-
-df_all = add_derived_columns(df_all)
 
 _debug_banner(df_all=df_all, df_filtered=df_filtered)
 
