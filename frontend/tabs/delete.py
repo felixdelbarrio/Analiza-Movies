@@ -456,7 +456,7 @@ def render(
             col_def["cellStyle"] = {"justifyContent": "flex-start", "textAlign": "left"}
         if col_def:
             gb.configure_column(col, **col_def)
-    resize_js = JsCode(
+    auto_size_js = JsCode(
         """
 function(params) {
   if (!params || !params.api || !params.columnApi) {
@@ -470,7 +470,19 @@ function(params) {
 }
 """
     )
-    gb.configure_grid_options(onGridReady=resize_js, onGridSizeChanged=resize_js)
+    fit_js = JsCode(
+        """
+function(params) {
+  if (!params || !params.api) {
+    return;
+  }
+  setTimeout(function() {
+    params.api.sizeColumnsToFit();
+  }, 0);
+}
+"""
+    )
+    gb.configure_grid_options(onFirstDataRendered=auto_size_js, onGridSizeChanged=fit_js)
     gb.configure_grid_options(enableCellTextSelection=True, ensureDomOrder=True)
     for col in df_view.columns:
         if col not in visible_cols:

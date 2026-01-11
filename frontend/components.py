@@ -32,7 +32,7 @@ import json
 import os
 import re
 from collections.abc import Hashable, Iterable, Mapping, MutableMapping, Sequence
-from typing import Any, Literal, Optional, Protocol, cast
+from typing import Any, Callable, Literal, Optional, Protocol, TypeVar, cast
 
 import pandas as pd
 import streamlit as st
@@ -320,39 +320,44 @@ def aggrid_with_row_click(
     if bool(st.session_state.get("grid_colorize_rows", True)):
         gb.configure_grid_options(getRowStyle=_DECISION_ROW_STYLE)
 
-    resize_js = JsCode(
+    select_first_js = ""
+    if auto_select_first:
+        select_first_js = """
+    params.api.forEachNode(function(node, index) {
+      if (index === 0) {
+        node.setSelected(true);
+      }
+    });
+"""
+
+    auto_size_js = JsCode(
+        f"""
+function(params) {{
+  if (!params || !params.api || !params.columnApi) {{
+    return;
+  }}
+  const cols = ['year','library','file_size_gb','imdb_rating','imdb_votes','rt_score'];
+  setTimeout(function() {{
+    params.columnApi.autoSizeColumns(cols, true);
+    params.api.sizeColumnsToFit();
+{select_first_js}
+  }}, 0);
+}}
+"""
+    )
+    fit_js = JsCode(
         """
 function(params) {
-  if (!params || !params.api || !params.columnApi) {
+  if (!params || !params.api) {
     return;
   }
-  const cols = ['year','library','file_size_gb','imdb_rating','imdb_votes','rt_score'];
   setTimeout(function() {
-    params.columnApi.autoSizeColumns(cols, true);
     params.api.sizeColumnsToFit();
   }, 0);
 }
 """
     )
-    gb.configure_grid_options(onGridReady=resize_js, onGridSizeChanged=resize_js)
-
-    if auto_select_first:
-        gb.configure_grid_options(
-            onFirstDataRendered=JsCode(
-                """
-function(params) {
-  if (!params || !params.api) {
-    return;
-  }
-  params.api.forEachNode(function(node, index) {
-    if (index === 0) {
-      node.setSelected(true);
-    }
-  });
-}
-"""
-            )
-        )
+    gb.configure_grid_options(onFirstDataRendered=auto_size_js, onGridSizeChanged=fit_js)
 
     header_names: dict[str, str] = {
         "title": "Title",
@@ -541,14 +546,17 @@ def _build_imdb_url(imdb_id: Any) -> str | None:
     return f"https://www.imdb.com/title/{imdb_id}"
 
 
-def _cache_data_decorator() -> Any:
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _cache_data_decorator() -> Callable[[_F], _F]:
     cache_fn = getattr(st, "cache_data", None)
     if callable(cache_fn):
-        return cache_fn(show_spinner=False)
+        return cast(Callable[[_F], _F], cache_fn(show_spinner=False))
     cache_fn = getattr(st, "cache", None)
     if callable(cache_fn):
-        return cache_fn
-    return lambda f: f
+        return cast(Callable[[_F], _F], cache_fn)
+    return cast(Callable[[_F], _F], lambda f: f)
 
 
 @_cache_data_decorator()
