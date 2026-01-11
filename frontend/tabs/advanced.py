@@ -24,6 +24,13 @@ import streamlit as st
 
 from frontend.components import aggrid_with_row_click, render_detail_card
 
+_DECISION_LABELS: dict[str, str] = {
+    "DELETE": "🟥 DELETE",
+    "MAYBE": "🟨 MAYBE",
+    "KEEP": "🟩 KEEP",
+    "UNKNOWN": "⬜ UNKNOWN",
+}
+
 
 # ============================================================================
 # Helpers
@@ -104,6 +111,7 @@ def render(df_all: pd.DataFrame) -> None:
             "Decisión",
             decisions,
             default=decisions,
+            format_func=lambda v: _DECISION_LABELS.get(v, v),
             key="dec_filter_advanced",
         )
 
@@ -133,7 +141,21 @@ def render(df_all: pd.DataFrame) -> None:
     col_grid, col_detail = st.columns([2, 1])
 
     with col_grid:
-        selected_row = aggrid_with_row_click(df_view, "advanced")
+        selected_row = aggrid_with_row_click(
+            df_view,
+            "advanced",
+            visible_order=[
+                "title",
+                "year",
+                "library",
+                "file_size_gb",
+                "metacritic_score",
+                "imdb_rating",
+                "imdb_votes",
+                "rt_score",
+            ],
+            auto_select_first=True,
+        )
 
     with col_detail:
         render_detail_card(selected_row, button_key_prefix="advanced")

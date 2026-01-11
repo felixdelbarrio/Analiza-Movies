@@ -28,14 +28,17 @@ Nota importante (Pyright/Pylance)
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from collections.abc import Hashable, Iterable, Mapping, MutableMapping, Sequence
-from typing import Any, Optional, Protocol, cast
+from typing import Any, Literal, Optional, Protocol, cast
 
 import pandas as pd
 import streamlit as st
 from st_aggrid import GridOptionsBuilder, JsCode
 
+from frontend.config_front_artifacts import OMDB_CACHE_PATH, WIKI_CACHE_PATH
 from frontend.data_utils import safe_json_loads_single
 
 RowDict = dict[str, Any]
@@ -94,6 +97,13 @@ def _rerun() -> None:
     exp_rerun_fn = getattr(st, "experimental_rerun", None)
     if callable(exp_rerun_fn):
         exp_rerun_fn()
+
+
+def _columns_with_gap(spec: Sequence[int], *, gap: Literal["small", "medium", "large"]) -> Sequence[Any]:
+    try:
+        return st.columns(spec, gap=gap)
+    except TypeError:
+        return st.columns(spec)
 
 
 # ============================================================================
@@ -292,10 +302,39 @@ def aggrid_with_row_click(
 
     gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_selection(selection_mode="single", use_checkbox=False)
-    gb.configure_grid_options(domLayout="normal")
+    gb.configure_grid_options(
+        domLayout="normal",
+        suppressRowTransform=True,
+        wrapHeaderText=True,
+        autoHeaderHeight=True,
+        defaultColDef={
+            "cellStyle": {
+                "display": "flex",
+                "alignItems": "center",
+                "justifyContent": "center",
+                "textAlign": "center",
+            }
+        },
+    )
 
     if bool(st.session_state.get("grid_colorize_rows", True)):
         gb.configure_grid_options(getRowStyle=_DECISION_ROW_STYLE)
+
+    resize_js = JsCode(
+        """
+function(params) {
+  if (!params || !params.api || !params.columnApi) {
+    return;
+  }
+  const cols = ['year','library','file_size_gb','imdb_rating','imdb_votes','rt_score'];
+  setTimeout(function() {
+    params.columnApi.autoSizeColumns(cols, true);
+    params.api.sizeColumnsToFit();
+  }, 0);
+}
+"""
+    )
+    gb.configure_grid_options(onGridReady=resize_js, onGridSizeChanged=resize_js)
 
     if auto_select_first:
         gb.configure_grid_options(
@@ -315,18 +354,66 @@ function(params) {
             )
         )
 
-    if "file_size_gb" in df.columns:
-        gb.configure_column(
-            "file_size_gb",
-            valueFormatter="value != null ? value.toFixed(2) + ' GB' : ''",
-        )
+    header_names: dict[str, str] = {
+        "title": "Title",
+        "year": "Year",
+        "library": "Library",
+        "file_size_gb": "Size",
+        "imdb_rating": "IMDb",
+        "imdb_votes": "Votes",
+        "metacritic_score": "Metacritic",
+        "rt_score": "RT",
+        "reason": "Reason",
+        "file": "File",
+    }
+    auto_size_cols = {"year", "library", "file_size_gb", "imdb_rating", "imdb_votes", "rt_score"}
+    wrap_cols = {"title", "reason", "file"}
+
+    for col in df.columns:
+        col_def: dict[str, Any] = {}
+        header = header_names.get(col)
+        if header:
+            col_def["headerName"] = header
+        if col == "file_size_gb":
+            col_def["valueFormatter"] = "value != null ? value.toFixed(2) + ' GB' : ''"
+        if col == "imdb_votes":
+            col_def["valueFormatter"] = "value != null ? Math.round(Number(value)).toLocaleString() : ''"
+        if col in auto_size_cols:
+            col_def.update({"minWidth": 70, "suppressSizeToFit": True})
+        if col == "year":
+            col_def.update({"minWidth": 60, "maxWidth": 70, "suppressSizeToFit": True})
+        if col in {"file_size_gb", "imdb_rating", "imdb_votes", "rt_score"}:
+            col_def.update({"minWidth": 60, "maxWidth": 80, "suppressSizeToFit": True})
+        if col == "metacritic_score":
+            col_def.update({"minWidth": 70, "maxWidth": 90, "suppressSizeToFit": True})
+        if col == "library":
+            col_def.update({"minWidth": 120, "maxWidth": 240, "suppressSizeToFit": True})
+        if col in wrap_cols:
+            flex = 2 if col == "title" else 3
+            col_def.update(
+                {
+                    "wrapText": True,
+                    "autoHeight": True,
+                    "cellStyle": {
+                        "whiteSpace": "normal",
+                        "lineHeight": "1.2",
+                        "display": "flex",
+                        "alignItems": "center",
+                        "justifyContent": "center",
+                        "textAlign": "center",
+                    },
+                    "minWidth": 220,
+                    "flex": flex,
+                }
+            )
+        if col_def:
+            gb.configure_column(col, **col_def)
 
     for col in df.columns:
         if col not in visible_cols:
             gb.configure_column(col, hide=True)
 
     grid_options = gb.build()
-    grid_options["autoSizeStrategy"] = {"type": "fitGridWidth"}
 
     import st_aggrid as st_aggrid_mod
 
@@ -391,6 +478,22 @@ def _safe_votes(v: Any) -> str:
         return "N/A"
 
 
+def _safe_metacritic(v: Any) -> str:
+    try:
+        if v is None or (isinstance(v, float) and _pd_isna(v)):
+            return "N/A"
+        if isinstance(v, str):
+            s = v.strip()
+            if not s or s.upper() == "N/A":
+                return "N/A"
+            if "/" in s:
+                s = s.split("/", 1)[0].strip()
+            return str(int(float(s)))
+        return str(int(float(v)))
+    except Exception:
+        return "N/A"
+
+
 def _is_nonempty_str(value: Any) -> bool:
     """True si value es string “usable” (no '', 'nan', 'none')."""
     if value is None:
@@ -415,6 +518,220 @@ def _build_imdb_url(imdb_id: Any) -> str | None:
     if imdb_id in (None, ""):
         return None
     return f"https://www.imdb.com/title/{imdb_id}"
+
+
+def _cache_data_decorator() -> Any:
+    cache_fn = getattr(st, "cache_data", None)
+    if callable(cache_fn):
+        return cache_fn(show_spinner=False)
+    cache_fn = getattr(st, "cache", None)
+    if callable(cache_fn):
+        return cache_fn
+    return lambda f: f
+
+
+@_cache_data_decorator()
+def _load_wiki_cache_json(path: str, mtime: float) -> dict[str, Any] | None:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+        return raw if isinstance(raw, dict) else None
+    except Exception:
+        return None
+
+
+@_cache_data_decorator()
+def _load_omdb_cache_json(path: str, mtime: float) -> dict[str, Any] | None:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+        return raw if isinstance(raw, dict) else None
+    except Exception:
+        return None
+
+
+def _get_wiki_cache() -> Mapping[str, Any] | None:
+    try:
+        if not WIKI_CACHE_PATH.exists():
+            return None
+        mtime = WIKI_CACHE_PATH.stat().st_mtime
+    except Exception:
+        return None
+    return cast(Mapping[str, Any] | None, _load_wiki_cache_json(str(WIKI_CACHE_PATH), mtime))
+
+
+def _get_omdb_cache() -> Mapping[str, Any] | None:
+    try:
+        if not OMDB_CACHE_PATH.exists():
+            return None
+        mtime = OMDB_CACHE_PATH.stat().st_mtime
+    except Exception:
+        return None
+    return cast(Mapping[str, Any] | None, _load_omdb_cache_json(str(OMDB_CACHE_PATH), mtime))
+
+
+_WIKI_TITLE_CLEAN_RE = re.compile(r"[^0-9A-Za-záéíóúÁÉÍÓÚñÑüÜ]+")
+_OMDB_TITLE_CLEAN_RE = re.compile(r"[^0-9A-Za-záéíóúÁÉÍÓÚñÑüÜ]+")
+
+
+def _normalize_wiki_title(value: Any) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip().lower()
+    if not s:
+        return None
+    s = _WIKI_TITLE_CLEAN_RE.sub(" ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s or None
+
+
+def _normalize_omdb_title(value: Any) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip().lower()
+    if not s:
+        return None
+    s = _OMDB_TITLE_CLEAN_RE.sub(" ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s or None
+
+
+def _normalize_wiki_year(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not _pd_isna(value):
+        return str(int(value))
+    s = str(value).strip()
+    if not s:
+        return None
+    if s.isdigit() and len(s) == 4:
+        return s
+    return None
+
+
+def _normalize_wiki_imdb(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    return v or None
+
+
+def _normalize_omdb_imdb(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    return v or None
+
+
+def _is_spanish_lang(lang: Any) -> bool:
+    if not isinstance(lang, str):
+        return False
+    return lang.strip().lower().startswith("es")
+
+
+def _get_wiki_summary(
+    *,
+    imdb_id: Any,
+    title: Any,
+    year: Any,
+) -> tuple[str | None, str | None]:
+    cache = _get_wiki_cache()
+    if not isinstance(cache, Mapping):
+        return None, None
+
+    records = cache.get("records")
+    idx_imdb = cache.get("index_imdb")
+    idx_ty = cache.get("index_ty")
+
+    if not isinstance(records, Mapping):
+        return None, None
+
+    def _item_from_rid(rid: object) -> Mapping[str, Any] | None:
+        if not isinstance(rid, str):
+            return None
+        raw = records.get(rid)
+        return raw if isinstance(raw, Mapping) else None
+
+    imdb_norm = _normalize_wiki_imdb(imdb_id)
+    if imdb_norm and isinstance(idx_imdb, Mapping):
+        item = _item_from_rid(idx_imdb.get(imdb_norm))
+        if item:
+            return _extract_summary_from_item(item)
+
+    title_norm = _normalize_wiki_title(title)
+    year_norm = _normalize_wiki_year(year)
+    if title_norm and year_norm and isinstance(idx_ty, Mapping):
+        key = f"{title_norm}|{year_norm}"
+        item = _item_from_rid(idx_ty.get(key))
+        if item:
+            return _extract_summary_from_item(item)
+
+    return None, None
+
+
+def _get_omdb_record(
+    *,
+    imdb_id: Any,
+    title: Any,
+    year: Any,
+) -> Mapping[str, Any] | None:
+    cache = _get_omdb_cache()
+    if not isinstance(cache, Mapping):
+        return None
+
+    records = cache.get("records")
+    idx_imdb = cache.get("index_imdb")
+    idx_ty = cache.get("index_ty")
+
+    if not isinstance(records, Mapping):
+        return None
+
+    def _item_from_rid(rid: object) -> Mapping[str, Any] | None:
+        if not isinstance(rid, str):
+            return None
+        raw = records.get(rid)
+        return raw if isinstance(raw, Mapping) else None
+
+    imdb_norm = _normalize_omdb_imdb(imdb_id)
+    if imdb_norm and isinstance(idx_imdb, Mapping):
+        item = _item_from_rid(idx_imdb.get(imdb_norm))
+        if item:
+            return _extract_omdb_payload(item)
+
+    title_norm = _normalize_omdb_title(title)
+    year_norm = _normalize_wiki_year(year)
+    if title_norm and year_norm and isinstance(idx_ty, Mapping):
+        key = f"{title_norm}|{year_norm}"
+        item = _item_from_rid(idx_ty.get(key))
+        if item:
+            return _extract_omdb_payload(item)
+
+    return None
+
+
+def _extract_omdb_payload(item: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    status = item.get("status")
+    if status not in (None, "ok"):
+        return None
+    payload = item.get("omdb")
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _extract_summary_from_item(item: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    status = item.get("status")
+    if status not in (None, "ok"):
+        return None, None
+
+    wiki_block = item.get("wiki")
+    if not isinstance(wiki_block, Mapping):
+        return None, None
+
+    summary = wiki_block.get("summary")
+    if not _is_nonempty_str(summary):
+        return None, None
+
+    lang = wiki_block.get("source_language") or wiki_block.get("language")
+    return str(summary), str(lang) if isinstance(lang, str) and lang.strip() else None
 
 
 def render_detail_card(
@@ -458,6 +775,10 @@ def render_detail_card(
     rating_key = row_dict.get("rating_key")
     imdb_id = row_dict.get("imdb_id")
 
+    if omdb_dict is None:
+        omdb_dict = _get_omdb_record(imdb_id=imdb_id, title=title, year=year)
+    omdb_imdb_id = omdb_dict.get("imdbID") if isinstance(omdb_dict, Mapping) else None
+
     rated = _get_from_omdb_or_row(row_dict, omdb_dict, "Rated")
     released = _get_from_omdb_or_row(row_dict, omdb_dict, "Released")
     runtime = _get_from_omdb_or_row(row_dict, omdb_dict, "Runtime")
@@ -469,12 +790,37 @@ def render_detail_card(
     country = _get_from_omdb_or_row(row_dict, omdb_dict, "Country")
     awards = _get_from_omdb_or_row(row_dict, omdb_dict, "Awards")
     plot = _get_from_omdb_or_row(row_dict, omdb_dict, "Plot")
+    metacritic = row_dict.get("metacritic_score")
+    if metacritic is None and isinstance(omdb_dict, Mapping):
+        metacritic = omdb_dict.get("Metascore")
 
-    col_left, col_right = st.columns([1, 2])
+    wiki_summary, wiki_lang = _get_wiki_summary(
+        imdb_id=imdb_id or omdb_imdb_id,
+        title=title,
+        year=year,
+    )
+    summary_text: str | None = None
+    summary_label = "Resumen"
+    if wiki_summary and _is_spanish_lang(wiki_lang):
+        summary_text = wiki_summary
+        summary_label = "Resumen (Wiki ES)"
+    elif _is_nonempty_str(plot):
+        summary_text = str(plot)
+        summary_label = "Resumen (OMDb)"
+    elif wiki_summary:
+        summary_text = wiki_summary
+        summary_label = f"Resumen (Wiki {wiki_lang})" if wiki_lang else "Resumen (Wiki)"
+
+    if show_modal_button:
+        col_left, col_right = _columns_with_gap([1, 2], gap="small")
+        poster_width = 260
+    else:
+        col_left, col_right = _columns_with_gap([1, 4], gap="small")
+        poster_width = 240
 
     with col_left:
         if _is_nonempty_str(poster_url):
-            st.image(str(poster_url), width=280)
+            st.image(str(poster_url), width=poster_width)
         else:
             st.write("📷 Sin póster")
 
@@ -500,84 +846,97 @@ def render_detail_card(
         st.markdown(f"### {header}")
         if library:
             st.write(f"**Biblioteca:** {library}")
-
-        st.write(f"**Decisión:** `{decision}` — {reason}")
+        if year:
+            st.write(f"**Año:** {year}")
+        if actors:
+            st.write(f"**Actores:** {actors}")
 
         m1, m2, m3 = st.columns(3)
         m1.metric("IMDb", _safe_number_to_str(imdb_rating))
+        if not show_modal_button:
+            m1.caption(f"Votos IMDb: {_safe_votes(imdb_votes)}")
 
         rt_str = _safe_number_to_str(rt_score)
         m2.metric("RT", f"{rt_str}%" if rt_str != "N/A" else "N/A")
 
-        m3.metric("Votos", _safe_votes(imdb_votes))
+        m3.metric("Metacritic", _safe_metacritic(metacritic))
 
-        st.markdown("---")
-        st.write("#### Información OMDb")
-
-        cols_basic = st.columns(4)
-        with cols_basic[0]:
-            if rated:
-                st.write(f"**Rated:** {rated}")
-        with cols_basic[1]:
-            if released:
-                st.write(f"**Estreno:** {released}")
-        with cols_basic[2]:
-            if runtime:
-                st.write(f"**Duración:** {runtime}")
-        with cols_basic[3]:
-            if genre:
-                st.write(f"**Género:** {genre}")
-
-        st.write("")
-        cols_credits = st.columns(3)
-        with cols_credits[0]:
-            if director:
-                st.write(f"**Director:** {director}")
-        with cols_credits[1]:
-            if writer:
-                st.write(f"**Guion:** {writer}")
-        with cols_credits[2]:
-            if actors:
-                st.write(f"**Reparto:** {actors}")
-
-        st.write("")
-        cols_prod = st.columns(3)
-        with cols_prod[0]:
-            if language:
-                st.write(f"**Idioma(s):** {language}")
-        with cols_prod[1]:
-            if country:
-                st.write(f"**País:** {country}")
-        with cols_prod[2]:
-            if awards:
-                st.write(f"**Premios:** {awards}")
-
-        if _is_nonempty_str(plot):
+        if _is_nonempty_str(summary_text):
             st.markdown("---")
-            st.write("#### Sinopsis")
-            st.write(str(plot))
+            st.write(f"#### {summary_label}")
+            st.write(str(summary_text))
 
-        st.markdown("---")
-        st.write("#### Archivo")
-        if file_path:
-            st.code(str(file_path), language="bash")
+        if not show_modal_button:
+            st.markdown("---")
+            st.write("#### Información OMDb")
 
-        if file_size is not None and not (isinstance(file_size, float) and _pd_isna(file_size)):
-            try:
-                gb = float(file_size) / (1024**3)
-                st.write(f"**Tamaño:** {gb:.2f} GB")
-            except Exception:
-                st.write(f"**Tamaño:** {file_size}")
+            cols_basic = st.columns(4)
+            with cols_basic[0]:
+                if rated:
+                    st.write(f"**Rated:** {rated}")
+            with cols_basic[1]:
+                if released:
+                    st.write(f"**Estreno:** {released}")
+            with cols_basic[2]:
+                if runtime:
+                    st.write(f"**Duración:** {runtime}")
+            with cols_basic[3]:
+                if genre:
+                    st.write(f"**Género:** {genre}")
 
-        if _is_nonempty_str(trailer_url):
-            st.markdown("#### 🎞 Tráiler")
-            st.video(str(trailer_url))
+            st.write("")
+            cols_credits = st.columns(3)
+            with cols_credits[0]:
+                if director:
+                    st.write(f"**Director:** {director}")
+            with cols_credits[1]:
+                if writer:
+                    st.write(f"**Guion:** {writer}")
+            with cols_credits[2]:
+                if actors:
+                    st.write(f"**Reparto:** {actors}")
 
-    with st.expander("Ver JSON completo"):
-        full_row: MutableMapping[str, Any] = dict(row_dict)
-        if omdb_dict is not None:
-            full_row["_omdb_parsed"] = dict(omdb_dict)
-        st.json(full_row)
+            st.write("")
+            cols_prod = st.columns(3)
+            with cols_prod[0]:
+                if language:
+                    st.write(f"**Idioma(s):** {language}")
+            with cols_prod[1]:
+                if country:
+                    st.write(f"**País:** {country}")
+            with cols_prod[2]:
+                if awards:
+                    st.write(f"**Premios:** {awards}")
+
+            if _is_nonempty_str(plot) and not _is_nonempty_str(summary_text):
+                st.markdown("---")
+                st.write("#### Sinopsis")
+                st.write(str(plot))
+
+            st.markdown("---")
+            st.write("#### Archivo")
+            if file_path:
+                st.code(str(file_path), language="bash")
+
+            if file_size is not None and not (isinstance(file_size, float) and _pd_isna(file_size)):
+                try:
+                    gb = float(file_size) / (1024**3)
+                    st.write(f"**Tamaño:** {gb:.2f} GB")
+                except Exception:
+                    st.write(f"**Tamaño:** {file_size}")
+
+            if decision:
+                st.write(f"**Decisión:** `{decision}` — {reason}")
+
+            if _is_nonempty_str(trailer_url):
+                st.markdown("#### 🎞 Tráiler")
+                st.video(str(trailer_url))
+
+            with st.expander("Ver JSON completo"):
+                full_row: MutableMapping[str, Any] = dict(row_dict)
+                if omdb_dict is not None:
+                    full_row["_omdb_parsed"] = dict(omdb_dict)
+                st.json(full_row)
 
 
 # ============================================================================
@@ -596,7 +955,7 @@ def render_modal() -> None:
     if row is None:
         return
 
-    c1, c2 = st.columns([10, 1])
+    c1, c2 = _columns_with_gap([10, 1], gap="small")
     with c1:
         st.markdown("### 🔍 Detalle ampliado")
     with c2:

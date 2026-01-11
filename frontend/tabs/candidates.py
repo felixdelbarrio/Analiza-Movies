@@ -1,18 +1,17 @@
 """
 candidates.py
 
-Pestaña “Candidatas a borrar (DELETE / MAYBE)” (Streamlit).
+Pestaña “Duplicadas por IMDb ID” (Streamlit).
 
 Responsabilidad:
-- Mostrar el CSV/DF filtrado (df_filtered) con las candidatas a borrar.
-- Re-validar que solo contiene decisiones DELETE/MAYBE por robustez.
-- Ordenar de forma útil (peores primero) si hay columnas disponibles.
-- Mostrar un resumen corto del conteo de DELETE/MAYBE.
+- Detectar películas duplicadas por imdb_id (mismo ID en una o varias bibliotecas).
+- Mostrar una vista filtrada con los duplicados.
+- Ordenar y resumir el resultado.
 - Renderizar tabla (AgGrid) + panel de detalle.
 
 Principios:
-- No mutar df_filtered: trabajar con copias.
-- Tolerancia a columnas ausentes (decision, imdb_rating, etc.).
+- No mutar df_all: trabajar con copias.
+- Tolerancia a columnas ausentes (imdb_id, library, year, etc.).
 - UI delegada a frontend.components.
 """
 
@@ -25,46 +24,59 @@ import streamlit as st
 
 from frontend.components import aggrid_with_row_click, render_detail_card
 
-TITLE_TEXT: Final[str] = "### Candidatas a borrar (DELETE / MAYBE)"
+TITLE_TEXT: Final[str] = "### Duplicadas por IMDb ID"
 
 
-def _filter_candidates(df: pd.DataFrame) -> pd.DataFrame:
+def _normalize_imdb_id(value: object) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip().lower()
+    if not s or s in {"nan", "none"}:
+        return None
+    return s
+
+
+def _filter_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Asegura que el DataFrame contenga solo filas con decision DELETE/MAYBE si existe la columna.
-
-    Si no existe la columna 'decision', se devuelve el DF tal cual.
+    Devuelve solo filas con imdb_id duplicado (mismo ID repetido).
     """
+    if "imdb_id" not in df.columns:
+        return df.iloc[0:0].copy()
+
     df_view = df.copy()
-    if "decision" in df_view.columns:
-        df_view = df_view[df_view["decision"].isin(["DELETE", "MAYBE"])].copy()
+    imdb_norm = df_view["imdb_id"].apply(_normalize_imdb_id)
+    df_view["_imdb_norm"] = imdb_norm
+    df_view = df_view[df_view["_imdb_norm"].notna()].copy()
+
+    if df_view.empty:
+        return df_view
+
+    counts = df_view["_imdb_norm"].value_counts()
+    dup_ids = counts[counts > 1]
+    if dup_ids.empty:
+        return df_view.iloc[0:0].copy()
+
+    df_view = df_view[df_view["_imdb_norm"].isin(dup_ids.index)].copy()
+    df_view["dup_count"] = df_view["_imdb_norm"].map(dup_ids).fillna(0).astype(int)
+    df_view = df_view.drop(columns=["_imdb_norm"])
     return df_view
 
 
-def _sort_candidates_view(df: pd.DataFrame) -> pd.DataFrame:
+def _sort_duplicates_view(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Ordena el DataFrame por columnas típicamente relevantes, si existen:
-
-    - decision (asc): DELETE antes que MAYBE (orden alfabético funciona: DELETE < MAYBE).
-    - imdb_rating (desc)
-    - imdb_votes (desc)
-    - year (desc)
-    - file_size (desc)
-
-    Nota:
-    - Mantengo el esquema original del fichero que me pasaste (decision asc, resto desc).
-      Si prefieres “más borrable arriba” (rating asc), lo ajusto.
+    Ordena por duplicados primero y luego por campos útiles si existen.
     """
     df_view = df.copy()
 
     sort_cols: list[str] = []
-    for col in ("decision", "imdb_rating", "imdb_votes", "year", "file_size"):
+    for col in ("dup_count", "imdb_id", "library", "title", "year"):
         if col in df_view.columns:
             sort_cols.append(col)
 
     if not sort_cols:
         return df_view
 
-    ascending = [True] + [False] * (len(sort_cols) - 1)
+    ascending = [False] + [True] * (len(sort_cols) - 1)
 
     try:
         return df_view.sort_values(by=sort_cols, ascending=ascending, ignore_index=True)
@@ -74,46 +86,37 @@ def _sort_candidates_view(df: pd.DataFrame) -> pd.DataFrame:
 
 def _render_quick_caption(df: pd.DataFrame) -> None:
     """
-    Muestra un resumen corto: total, DELETE, MAYBE.
-
-    Si falta 'decision', muestra solo total.
+    Muestra un resumen corto: duplicados (filas) y grupos (imdb_id).
     """
     total = int(len(df))
-    if "decision" not in df.columns:
-        st.caption(f"{total} candidata(s)")
+    if "imdb_id" not in df.columns:
+        st.caption(f"{total} duplicada(s)")
         return
-
-    delete_count = int((df["decision"] == "DELETE").sum())
-    maybe_count = int((df["decision"] == "MAYBE").sum())
-    st.caption(f"{total} candidata(s): DELETE={delete_count}, MAYBE={maybe_count}")
+    unique_ids = df["imdb_id"].dropna().nunique()
+    st.caption(f"{total} duplicada(s) en {unique_ids} título(s) por IMDb ID")
 
 
 def render(df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
     """
-    Renderiza la pestaña 2: Candidatas a borrar (DELETE/MAYBE).
+    Renderiza la pestaña 2: Duplicadas por IMDb ID.
 
     Args:
-        df_all: DataFrame completo (no se usa aquí, pero se mantiene por compatibilidad de firma).
-        df_filtered: DataFrame filtrado (puede ser None o vacío).
+        df_all: DataFrame completo (fuente principal).
+        df_filtered: DataFrame filtrado (ignorado; se mantiene por compatibilidad de firma).
     """
     st.write(TITLE_TEXT)
 
-    # Pyright-friendly: separar el narrowing en dos pasos.
-    if df_filtered is None:
-        st.info("No hay CSV filtrado o está vacío.")
+    if "imdb_id" not in df_all.columns:
+        st.info("No hay columna imdb_id para detectar duplicados.")
         return
 
-    if df_filtered.empty:
-        st.info("No hay CSV filtrado o está vacío.")
-        return
-
-    df_view = _filter_candidates(df_filtered)
+    df_view = _filter_duplicates(df_all)
 
     if df_view.empty:
-        st.info("No hay películas marcadas como DELETE o MAYBE.")
+        st.info("No hay duplicados por IMDb ID.")
         return
 
-    df_view = _sort_candidates_view(df_view)
+    df_view = _sort_duplicates_view(df_view)
 
     _render_quick_caption(df_view)
 
