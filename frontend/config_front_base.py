@@ -136,6 +136,13 @@ FRONT_API_PAGE_SIZE: int = _get_env_int("FRONT_API_PAGE_SIZE", 2000)
 FRONT_API_CACHE_TTL_S: int = _get_env_int("FRONT_API_CACHE_TTL_S", 60)
 
 # ---------------------------------------------------------------------
+# PLEX (front-only)
+# ---------------------------------------------------------------------
+
+PLEX_BASEURL: str | None = _get_env_str("PLEX_BASEURL", None)
+PLEX_PORT: int = _get_env_int("PLEX_PORT", 32400)
+
+# ---------------------------------------------------------------------
 # Paths: data/ y reports/ (defaults alineados con tu estructura actual)
 # ---------------------------------------------------------------------
 
