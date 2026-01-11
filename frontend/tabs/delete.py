@@ -437,6 +437,23 @@ def render(
                     "flex": flex,
                 }
             )
+        if col == "title":
+            col_def["cellStyle"] = {
+                "whiteSpace": "normal",
+                "lineHeight": "1.2",
+                "display": "flex",
+                "alignItems": "center",
+                "justifyContent": "flex-start",
+                "textAlign": "left",
+            }
+        if col == "library":
+            col_def["cellStyle"] = {"justifyContent": "flex-start", "textAlign": "left"}
+        if col == "file":
+            col_def["cellStyle"] = {"justifyContent": "flex-start", "textAlign": "left"}
+        if col in {"year", "file_size", "imdb_rating", "imdb_votes", "rt_score"}:
+            col_def["cellStyle"] = {"justifyContent": "flex-end", "textAlign": "right"}
+        if col == "reason":
+            col_def["cellStyle"] = {"justifyContent": "flex-start", "textAlign": "left"}
         if col_def:
             gb.configure_column(col, **col_def)
     resize_js = JsCode(

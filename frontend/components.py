@@ -406,6 +406,27 @@ function(params) {
                     "flex": flex,
                 }
             )
+        if col == "title":
+            col_def["cellStyle"] = {
+                "whiteSpace": "normal",
+                "lineHeight": "1.2",
+                "display": "flex",
+                "alignItems": "center",
+                "justifyContent": "flex-start",
+                "textAlign": "left",
+            }
+        if col == "year":
+            col_def["cellStyle"] = {"justifyContent": "flex-end", "textAlign": "right"}
+        if col == "library":
+            col_def["cellStyle"] = {"justifyContent": "flex-start", "textAlign": "left"}
+        if col == "file_size_gb":
+            col_def["cellStyle"] = {"justifyContent": "flex-end", "textAlign": "right"}
+        if col == "imdb_rating":
+            col_def["cellStyle"] = {"justifyContent": "flex-end", "textAlign": "right"}
+        if col == "imdb_votes":
+            col_def["cellStyle"] = {"justifyContent": "flex-end", "textAlign": "right"}
+        if col == "rt_score":
+            col_def["cellStyle"] = {"justifyContent": "flex-end", "textAlign": "right"}
         if col_def:
             gb.configure_column(col, **col_def)
 
