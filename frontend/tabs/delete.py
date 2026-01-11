@@ -32,11 +32,18 @@ import pandas as pd
 import streamlit as st
 from st_aggrid import GridOptionsBuilder, JsCode
 
+from frontend.data_utils import add_derived_columns
 Row = Mapping[str, Any]
 Rows = Sequence[Row]
 DeleteFilesFromRowsFn = Callable[[pd.DataFrame, bool], tuple[int, int, Sequence[str]]]
 
 HIDDEN_COLUMNS: set[str] = {"plex_ta"}
+_DECISION_LABELS: dict[str, str] = {
+    "DELETE": "🟥 DELETE",
+    "MAYBE": "🟨 MAYBE",
+    "KEEP": "🟩 KEEP",
+    "UNKNOWN": "⬜ UNKNOWN",
+}
 _DECISION_ROW_STYLE = JsCode(
     """
 function(params) {
@@ -267,7 +274,7 @@ def render(
 
     aggrid_fn = cast(AgGridCallable, getattr(st_aggrid_mod, "AgGrid"))
 
-    st.write("### Borrado controlado de archivos")
+    st.write("### Candidatas (borrado controlado)")
 
     if df_filtered is None or df_filtered.empty:
         st.info("No hay CSV filtrado. Ejecuta primero el analisis.")
@@ -309,6 +316,7 @@ def render(
                 "Decision",
                 ["DELETE", "MAYBE"],
                 default=["DELETE", "MAYBE"],
+                format_func=lambda v: _DECISION_LABELS.get(v, v),
                 key="dec_filter_delete",
             )
         else:
@@ -323,17 +331,166 @@ def render(
         st.info("No hay filas que coincidan con los filtros actuales.")
         return
 
+    df_view = add_derived_columns(df_view)
+
+    desired_order = [
+        "title",
+        "year",
+        "library",
+        "file_size",
+        "imdb_rating",
+        "metacritic_score",
+        "rt_score",
+        "reason",
+        "file",
+    ]
+    visible_cols = [c for c in desired_order if c in df_view.columns]
+    ordered_cols = visible_cols + [c for c in df_view.columns if c not in visible_cols]
+    df_view = df_view[ordered_cols]
+
     gb = GridOptionsBuilder.from_dataframe(df_view)
     gb.configure_selection(selection_mode="multiple", use_checkbox=True)
     if bool(st.session_state.get("grid_colorize_rows", True)):
-        gb.configure_grid_options(domLayout="normal", getRowStyle=_DECISION_ROW_STYLE)
+        gb.configure_grid_options(
+            domLayout="normal",
+            getRowStyle=_DECISION_ROW_STYLE,
+            suppressRowTransform=True,
+            wrapHeaderText=True,
+            autoHeaderHeight=True,
+            defaultColDef={
+                "cellStyle": {
+                    "display": "flex",
+                    "alignItems": "center",
+                    "justifyContent": "center",
+                    "textAlign": "center",
+                }
+            },
+        )
     else:
-        gb.configure_grid_options(domLayout="normal")
+        gb.configure_grid_options(
+            domLayout="normal",
+            suppressRowTransform=True,
+            wrapHeaderText=True,
+            autoHeaderHeight=True,
+            defaultColDef={
+                "cellStyle": {
+                    "display": "flex",
+                    "alignItems": "center",
+                    "justifyContent": "center",
+                    "textAlign": "center",
+                }
+            },
+        )
+
+    header_names: dict[str, str] = {
+        "title": "Title",
+        "year": "Year",
+        "library": "Library",
+        "file_size": "Size",
+        "imdb_rating": "IMDb",
+        "imdb_votes": "Votes",
+        "metacritic_score": "Metacritic",
+        "rt_score": "RT",
+        "reason": "Reason",
+        "file": "File",
+    }
+    auto_size_cols = {"year", "library", "file_size", "imdb_rating", "imdb_votes", "rt_score"}
+    wrap_cols = {"title", "reason", "file"}
+
+    for col in df_view.columns:
+        col_def: dict[str, Any] = {}
+        header = header_names.get(col)
+        if header:
+            col_def["headerName"] = header
+        if col == "file_size":
+            col_def["valueFormatter"] = (
+                "value != null && value !== '' ? "
+                "(Number(value) / (1024*1024*1024)).toFixed(2) + ' GB' : ''"
+            )
+        if col == "imdb_votes":
+            col_def["valueFormatter"] = "value != null ? Math.round(Number(value)).toLocaleString() : ''"
+        if col in auto_size_cols:
+            col_def.update({"minWidth": 70, "suppressSizeToFit": True})
+        if col == "year":
+            col_def.update({"minWidth": 60, "maxWidth": 70, "suppressSizeToFit": True})
+        if col in {"file_size", "imdb_rating", "imdb_votes", "rt_score"}:
+            col_def.update({"minWidth": 60, "maxWidth": 80, "suppressSizeToFit": True})
+        if col == "metacritic_score":
+            col_def.update({"minWidth": 70, "maxWidth": 90, "suppressSizeToFit": True})
+        if col == "library":
+            col_def.update({"minWidth": 120, "maxWidth": 240, "suppressSizeToFit": True})
+        if col in wrap_cols:
+            flex = 2 if col == "title" else 3
+            col_def.update(
+                {
+                    "wrapText": True,
+                    "autoHeight": True,
+                    "cellStyle": {
+                        "whiteSpace": "normal",
+                        "lineHeight": "1.2",
+                        "display": "flex",
+                        "alignItems": "center",
+                        "justifyContent": "center",
+                        "textAlign": "center",
+                    },
+                    "minWidth": 220,
+                    "flex": flex,
+                }
+            )
+        if col == "title":
+            col_def["cellStyle"] = {
+                "whiteSpace": "normal",
+                "lineHeight": "1.2",
+                "display": "flex",
+                "alignItems": "center",
+                "justifyContent": "flex-start",
+                "textAlign": "left",
+            }
+        if col == "library":
+            col_def["cellStyle"] = {"justifyContent": "flex-start", "textAlign": "left"}
+        if col == "file":
+            col_def["cellStyle"] = {"justifyContent": "flex-start", "textAlign": "left"}
+        if col in {"year", "file_size", "imdb_rating", "imdb_votes", "rt_score"}:
+            col_def["cellStyle"] = {"justifyContent": "flex-end", "textAlign": "right"}
+        if col == "reason":
+            col_def["cellStyle"] = {"justifyContent": "flex-start", "textAlign": "left"}
+        if col_def:
+            gb.configure_column(col, **col_def)
+    auto_size_js = JsCode(
+        """
+function(params) {
+  if (!params || !params.api || !params.columnApi) {
+    return;
+  }
+  const cols = ['year','file_size','imdb_rating','imdb_votes','rt_score'];
+  setTimeout(function() {
+    params.columnApi.autoSizeColumns(cols, true);
+    params.api.sizeColumnsToFit();
+  }, 0);
+}
+"""
+    )
+    fit_js = JsCode(
+        """
+function(params) {
+  if (!params || !params.api) {
+    return;
+  }
+  setTimeout(function() {
+    params.api.sizeColumnsToFit();
+  }, 0);
+}
+"""
+    )
+    gb.configure_grid_options(onFirstDataRendered=auto_size_js, onGridSizeChanged=fit_js)
+    gb.configure_grid_options(enableCellTextSelection=True, ensureDomOrder=True)
+    for col in df_view.columns:
+        if col not in visible_cols:
+            gb.configure_column(col, hide=True)
     for col in HIDDEN_COLUMNS:
         if col in df_view.columns:
             gb.configure_column(col, hide=True)
     grid_options = gb.build()
-    grid_options["autoSizeStrategy"] = {"type": "fitGridWidth"}
 
     colorize_rows = bool(st.session_state.get("grid_colorize_rows", True))
     grid_response = aggrid_fn(

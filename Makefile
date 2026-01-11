@@ -35,6 +35,8 @@ help:
 	@echo "make dev             Instala runtime + tooling/dev deps"
 	@echo "make reinstall       Reinstala el proyecto editable (runtime)"
 	@echo "make typecheck       Ejecuta mypy y pyright (requiere make dev)"
+	@echo "make mypy            Ejecuta solo mypy (requiere make dev)"
+	@echo "make clean-streamlit Limpia caches de componentes de Streamlit"
 	@echo "make lint            Ejecuta ruff (requiere make dev)"
 	@echo "make format          Ejecuta black + ruff format (requiere make dev)"
 	@echo "make test            Ejecuta pytest (requiere make dev)"
@@ -87,6 +89,9 @@ server-uvicorn: install
 
 typecheck: dev
 	@$(PY) -m mypy .
+
+mypy: dev
+	@$(PY) -m mypy .
 	@$(PY) -m pyright .
 
 lint: dev
@@ -124,6 +129,9 @@ clean:
 	@rm -rf *.egg-info
 	@find . -type d -name "__pycache__" -prune -exec rm -rf {} +
 	@find . -type f -name ".DS_Store" -delete
+
+clean-streamlit:
+	@rm -rf ~/.streamlit/components
 
 clean-venv:
 	@rm -rf $(VENV)
