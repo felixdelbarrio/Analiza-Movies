@@ -1,9 +1,13 @@
 # Ignorar variables de entorno
 .env
 .env.front
+.env.*.local
 
 # Ignorar entorno virtual
 venv/
+.venv/
+# python -m venv
+.python-version
 # Ignorar visual studio code
 .vscode/
 
@@ -12,6 +16,13 @@ omdb_cache.json
 wiki_cache.json
 __pycache__/
 *.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+.hypothesis/
 
 #Ignorar los reportes 
 report_*.csv
