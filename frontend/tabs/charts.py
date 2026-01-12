@@ -1,3 +1,23 @@
+"""
+charts.py
+
+Pestaña “Gráficos” (Streamlit + Altair).
+
+Responsabilidad:
+- Ofrecer distintas vistas de gráficos sobre el DataFrame completo (df_all).
+- Validar la presencia de columnas requeridas por cada vista.
+- Mantener la UI resiliente: si faltan columnas o no hay datos, mostrar mensajes
+  informativos en lugar de lanzar excepciones.
+
+Notas de implementación:
+- Se usa st.altair_chart(chart, width="stretch") para evitar use_container_width (deprecado).
+- Los gráficos intentan ser “auto-explicativos” con tooltips.
+- Para datos derivados (géneros/directores) se parsea omdb_json de forma segura.
+
+Dependencias:
+- frontend.data_utils: helpers de parsing y agregación (géneros, word counts, color).
+"""
+
 from __future__ import annotations
 
 from typing import Final, Iterable
@@ -7,9 +27,9 @@ import pandas as pd
 import streamlit as st
 
 from frontend.data_utils import (
-    explode_genres_from_omdb_json,
     build_word_counts,
     decision_color,
+    explode_genres_from_omdb_json,
     safe_json_loads_single,
 )
 
@@ -17,6 +37,7 @@ VIEW_OPTIONS: Final[list[str]] = [
     "Distribución por decisión",
     "Rating IMDb por decisión",
     "Ratings IMDb vs RT",
+    "Ratings IMDb vs Metacritic",
     "Distribución por década",
     "Distribución por biblioteca",
     "Distribución por género (OMDb)",
@@ -32,7 +53,7 @@ def _requires_columns(df: pd.DataFrame, cols: Iterable[str]) -> bool:
     """
     Comprueba que `df` contiene todas las columnas indicadas.
 
-    Devuelve:
+    Returns:
       - True  si todas las columnas están presentes.
       - False si falta alguna (y muestra un mensaje informativo en Streamlit).
     """
@@ -43,25 +64,33 @@ def _requires_columns(df: pd.DataFrame, cols: Iterable[str]) -> bool:
     return True
 
 
-def _chart(
-    chart: alt.Chart | alt.LayerChart | alt.HConcatChart | alt.VConcatChart,
-) -> None:
-    """Wrapper para mostrar gráficos siempre a ancho completo."""
-    # Reemplaza use_container_width=True (deprecado) por width="stretch"
+def _chart(chart: alt.Chart | alt.LayerChart | alt.HConcatChart | alt.VConcatChart) -> None:
+    """
+    Wrapper para mostrar gráficos siempre a ancho completo.
+    """
     st.altair_chart(chart, width="stretch")
 
 
 def render(df_all: pd.DataFrame) -> None:
-    """Pestaña 5: Gráficos."""
+    """
+    Renderiza la pestaña 5: Gráficos.
+
+    Args:
+        df_all: DataFrame completo (puede venir vacío).
+    """
     st.write("### Gráficos")
 
-    if df_all.empty:
+    if not isinstance(df_all, pd.DataFrame) or df_all.empty:
         st.info("No hay datos para mostrar gráficos.")
         return
 
     df_g = df_all.copy()
 
-    view = st.selectbox("Vista", VIEW_OPTIONS)
+    # Default: "Ratings IMDb vs RT"
+    default_view = "Ratings IMDb vs RT"
+    default_index = VIEW_OPTIONS.index(default_view)
+
+    view = st.selectbox("Vista", VIEW_OPTIONS, index=default_index)
 
     # 1) Distribución por decisión
     if view == "Distribución por decisión":
@@ -143,6 +172,36 @@ def render(df_all: pd.DataFrame) -> None:
         )
         _chart(chart)
 
+    # 3b) Ratings IMDb vs Metacritic
+    elif view == "Ratings IMDb vs Metacritic":
+        if not _requires_columns(df_g, ["imdb_rating", "metacritic_score", "decision"]):
+            return
+
+        data = df_g.dropna(subset=["imdb_rating", "metacritic_score"])
+        if data.empty:
+            st.info("No hay suficientes datos de IMDb y Metacritic para mostrar.")
+            return
+
+        chart = (
+            alt.Chart(data)
+            .mark_circle(size=60, opacity=0.7)
+            .encode(
+                x=alt.X("imdb_rating:Q", title="IMDb rating"),
+                y=alt.Y("metacritic_score:Q", title="Metacritic score"),
+                color=decision_color("decision"),
+                tooltip=[
+                    "title",
+                    "year",
+                    "library",
+                    "imdb_rating",
+                    "metacritic_score",
+                    "imdb_votes",
+                    "decision",
+                ],
+            )
+        )
+        _chart(chart)
+
     # 4) Distribución por década
     elif view == "Distribución por década":
         if not _requires_columns(df_g, ["decade_label", "decision", "title"]):
@@ -193,11 +252,7 @@ def render(df_all: pd.DataFrame) -> None:
             .mark_bar()
             .encode(
                 x=alt.X("library:N", title="Biblioteca"),
-                y=alt.Y(
-                    "count:Q",
-                    title="Número de películas",
-                    stack="normalize",
-                ),
+                y=alt.Y("count:Q", title="Número de películas", stack="normalize"),
                 color=decision_color("decision"),
                 tooltip=["library", "decision", "count"],
             )
@@ -238,11 +293,7 @@ def render(df_all: pd.DataFrame) -> None:
             .mark_bar()
             .encode(
                 x=alt.X("genre:N", title="Género"),
-                y=alt.Y(
-                    "count:Q",
-                    title="Número de películas",
-                    stack="normalize",
-                ),
+                y=alt.Y("count:Q", title="Número de películas", stack="normalize"),
                 color=decision_color("decision"),
                 tooltip=["genre", "decision", "count"],
             )
@@ -269,11 +320,7 @@ def render(df_all: pd.DataFrame) -> None:
             .mark_bar()
             .encode(
                 x=alt.X("library:N", title="Biblioteca"),
-                y=alt.Y(
-                    "file_size_gb:Q",
-                    title="Tamaño (GB)",
-                    stack="normalize",
-                ),
+                y=alt.Y("file_size_gb:Q", title="Tamaño (GB)", stack="normalize"),
                 color=decision_color("decision"),
                 tooltip=[
                     "library",
@@ -284,9 +331,9 @@ def render(df_all: pd.DataFrame) -> None:
         )
         _chart(chart_space)
 
-        total_space = agg["file_size_gb"].sum()
-        space_delete = agg.loc[agg["decision"] == "DELETE", "file_size_gb"].sum()
-        space_maybe = agg.loc[agg["decision"] == "MAYBE", "file_size_gb"].sum()
+        total_space = float(agg["file_size_gb"].sum())
+        space_delete = float(agg.loc[agg["decision"] == "DELETE", "file_size_gb"].sum())
+        space_maybe = float(agg.loc[agg["decision"] == "MAYBE", "file_size_gb"].sum())
 
         st.markdown(
             f"- Espacio total: **{total_space:.2f} GB**\n"
@@ -323,7 +370,7 @@ def render(df_all: pd.DataFrame) -> None:
 
         df_dir = df_g.copy()
 
-        def extract_directors(raw):
+        def extract_directors(raw: object) -> list[str]:
             d = safe_json_loads_single(raw)
             if not isinstance(d, dict):
                 return []
@@ -334,9 +381,7 @@ def render(df_all: pd.DataFrame) -> None:
 
         df_dir["director_list"] = df_dir["omdb_json"].apply(extract_directors)
         df_dir = df_dir.explode("director_list")
-        df_dir = df_dir[
-            df_dir["director_list"].notna() & (df_dir["director_list"] != "")
-        ]
+        df_dir = df_dir[df_dir["director_list"].notna() & (df_dir["director_list"] != "")]
 
         if df_dir.empty:
             st.info("No se encontraron directores en omdb_json.")
@@ -352,9 +397,7 @@ def render(df_all: pd.DataFrame) -> None:
             )
             .reset_index()
         )
-        agg = agg[agg["count"] >= min_movies].sort_values(
-            "imdb_mean", ascending=False
-        )
+        agg = agg[agg["count"] >= min_movies].sort_values("imdb_mean", ascending=False)
 
         if agg.empty:
             st.info("No hay directores que cumplan el mínimo de películas.")

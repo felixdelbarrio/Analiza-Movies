@@ -1,8 +1,11 @@
 # Ignorar variables de entorno
 .env
+.env.front
 
 # Ignorar entorno virtual
 venv/
+# Ignorar visual studio code
+.vscode/
 
 # Ignorar caches
 omdb_cache.json
@@ -13,7 +16,9 @@ __pycache__/
 #Ignorar los reportes 
 report_*.csv
 report_*.html
-metadata_*.*
+tmp*
+metadata_*.csv
+run_*.log
 
 # metadatos de empaquetado
 *.egg-info/

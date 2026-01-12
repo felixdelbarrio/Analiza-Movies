@@ -1,22 +1,43 @@
+"""
+backend/reporting.py
+
+Responsabilidades:
+- Escritura de CSVs de forma ATÓMICA.
+- Soporte STREAMING (fila a fila) para grandes catálogos.
+- Mantener compatibilidad con APIs legacy (write_all_csv, etc.).
+- Evitar explosiones de memoria en SILENT_MODE.
+
+Filosofía:
+- Nunca dejar CSVs corruptos.
+- Nunca perder datos por interrupciones.
+- Logs mínimos y claros.
+
+Mejoras aplicadas en esta revisión:
+- Opción A: alinear _STANDARD_SUGGESTION_FIELDS con metadata_fix.py (campos nuevos)
+  y mantener imdb_rating/imdb_votes.
+- FIX: añadir columna "action" al CSV de sugerencias (metadata_fix.py la emite).
+- Robustez: abortar commit si ocurre una excepción dentro del context manager
+  (no reemplaza el CSV final; deja el anterior intacto).
+- Diagnóstico ligero: aviso (debug) si llegan keys extra no contempladas en fieldnames,
+  SIN romper compatibilidad (extrasaction="ignore" se mantiene).
+"""
+
 from __future__ import annotations
 
 import csv
-import json
 import os
 import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Final
+from typing import Final, Optional, TextIO
 
 from backend import logger as _logger
 
 
-# ============================================================
-#          FIELDNAMES ESTÁNDAR PARA REPORTS (ALL/FILTERED)
-# ============================================================
+# ============================================================================
+# FIELDNAMES ESTÁNDAR
+# ============================================================================
 
-# Orden fijo para que el CSV sea idéntico entre fuentes (Plex/DLNA/...)
-# y estable en el tiempo aunque se añadan keys extra en el futuro.
 _STANDARD_REPORT_FIELDS: Final[list[str]] = [
     "library",
     "title",
@@ -42,229 +63,294 @@ _STANDARD_REPORT_FIELDS: Final[list[str]] = [
     "wikipedia_title",
 ]
 
-
-# ============================================================
-#                   UTILIDADES INTERNAS CSV
-# ============================================================
-
-
-def _collect_fieldnames(rows: Iterable[Mapping[str, object]]) -> list[str]:
-    """
-    Devuelve la unión de todas las claves presentes en todas las filas.
-
-    Esto evita inconsistencias si algunas filas tienen keys extra
-    o si faltan keys en la primera fila.
-    """
-    fieldset: set[str] = set()
-    for r in rows:
-        fieldset.update(str(k) for k in r.keys())
-    return sorted(fieldset)
-
-
-def _write_dict_rows_csv(
-    path: str,
-    rows: Iterable[Mapping[str, object]],
-    *,
-    fixed_fieldnames: list[str] | None = None,
-    default_fieldnames: list[str] | None = None,
-    empty_message: str | None = None,
-    kind_label: str = "CSV",
-) -> None:
-    """
-    Escritura atómica de CSV desde un iterable de dict/Mapping.
-
-    - Si fixed_fieldnames está definido → se usa SIEMPRE (orden fijo).
-      Keys extra en filas se ignoran (extrasaction="ignore") para estabilidad.
-    - Si hay filas y no fixed_fieldnames → usa unión de claves (modo legacy).
-    - Si no hay filas → usa default_fieldnames, o no escribe nada.
-    """
-    pathp = Path(path)
-    dirpath = pathp.parent
-    dirpath.mkdir(parents=True, exist_ok=True)
-
-    rows_list = list(rows)  # para poder iterar varias veces
-
-    if fixed_fieldnames is not None:
-        fieldnames = list(fixed_fieldnames)
-    elif rows_list:
-        fieldnames = _collect_fieldnames(rows_list)
-    else:
-        if default_fieldnames is None:
-            if empty_message:
-                _logger.info(empty_message)
-            else:
-                _logger.info(f"No hay filas para escribir en {kind_label}.")
-            return
-        fieldnames = list(default_fieldnames)
-
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            delete=False,
-            dir=str(dirpath),
-            newline="",
-        ) as tf:
-            writer = csv.DictWriter(
-                tf,
-                fieldnames=fieldnames,
-                extrasaction="ignore",
-            )
-            writer.writeheader()
-            if rows_list:
-                writer.writerows(rows_list)
-            temp_name = tf.name
-
-        os.replace(temp_name, str(pathp))
-        _logger.info(f"{kind_label} escrito en {path}")
-    except Exception as exc:
-        _logger.error(f"Error escribiendo {kind_label} en {path}: {exc}")
-
-
-# ============================================================
-#                    FUNCIONES PÚBLICAS CSV
-# ============================================================
-
-
-def write_all_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
-    """Escribe el CSV completo con todas las películas analizadas (cabecera fija)."""
-    _write_dict_rows_csv(
-        path,
-        rows,
-        fixed_fieldnames=_STANDARD_REPORT_FIELDS,
-        empty_message="No hay filas para escribir en report_all.csv",
-        kind_label="CSV completo",
-    )
-
-
-def write_filtered_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
-    """Escribe el CSV filtrado con DELETE/MAYBE (cabecera fija)."""
-    _write_dict_rows_csv(
-        path,
-        rows,
-        fixed_fieldnames=_STANDARD_REPORT_FIELDS,
-        empty_message="No hay filas filtradas para escribir en report_filtered.csv",
-        kind_label="CSV filtrado",
-    )
-
-
+# ✅ Opción A: sugerencias alineadas con metadata_fix.py “nuevo”
+# ✅ FIX: incluir "action" (metadata_fix.py la emite)
 _STANDARD_SUGGESTION_FIELDS: Final[list[str]] = [
     "plex_guid",
     "library",
+    "context_lang",
+    "plex_original_title",
+    "plex_imdb_id",
+    "omdb_imdb_id",
     "plex_title",
     "plex_year",
     "omdb_title",
     "omdb_year",
     "imdb_rating",
     "imdb_votes",
+    "action",
     "suggestions_json",
 ]
 
 
-def write_suggestions_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
-    """Escribe el CSV con sugerencias de metadata, incluso vacío."""
-    rows_list = list(rows)
+# ============================================================================
+# CSV ATÓMICO EN STREAMING
+# ============================================================================
 
-    if not rows_list:
-        _logger.info(
-            "No hay sugerencias de metadata para escribir. "
-            "Se crea un CSV vacío con solo cabeceras."
+class CSVAtomicWriter:
+    """
+    Writer incremental con commit atómico.
+
+    - Escribe en fichero temporal.
+    - write_row() permite streaming.
+    - close() hace os.replace() (atómico).
+
+    commit_if_empty:
+      - True  → crea CSV aunque solo tenga cabecera
+      - False → si no hay filas, NO genera fichero
+
+    Comportamiento ante excepción (en context manager):
+      - Si hay excepción dentro del `with`, NO se comitea el CSV final
+        (se borra el tmp). Así evitamos “CSV truncado pero válido”.
+    """
+
+    def __init__(
+        self,
+        path: str,
+        *,
+        fieldnames: list[str],
+        kind_label: str = "CSV",
+        commit_if_empty: bool = True,
+        warn_on_extras: bool = True,
+    ) -> None:
+        self._path: str = str(path)
+        self._pathp: Path = Path(path)
+        self._dir: Path = self._pathp.parent
+        self._fieldnames: list[str] = list(fieldnames)
+        self._fieldnames_set: set[str] = set(fieldnames)
+        self._kind_label: str = str(kind_label)
+        self._commit_if_empty: bool = bool(commit_if_empty)
+        self._warn_on_extras: bool = bool(warn_on_extras)
+
+        self._tmp_name: str | None = None
+        # Tipamos como TextIO real usando mkstemp + os.fdopen.
+        self._fh: Optional[TextIO] = None
+        self._writer: csv.DictWriter | None = None
+
+        self._rows_written: int = 0
+        self._is_open: bool = False
+
+        # Avisos de claves extra (evita spam)
+        self._warned_extra_keys: set[str] = set()
+
+    def __enter__(self) -> "CSVAtomicWriter":
+        self.open()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        # Si hubo excepción, abortamos el commit (no reemplazamos el CSV final)
+        if exc_type is not None:
+            self.abort()
+            return
+        self.close()
+
+    @property
+    def rows_written(self) -> int:
+        return self._rows_written
+
+    # --------------------------------------------------------
+
+    def open(self) -> None:
+        if self._is_open:
+            return
+
+        self._dir.mkdir(parents=True, exist_ok=True)
+
+        fd, tmp_name = tempfile.mkstemp(prefix=".tmp_", suffix=".csv", dir=str(self._dir), text=True)
+        self._tmp_name = tmp_name
+
+        try:
+            fh = os.fdopen(fd, "w", encoding="utf-8", newline="")
+        except Exception:
+            # si falla, cerramos el fd y limpiamos el fichero
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            try:
+                os.remove(tmp_name)
+            except Exception:
+                pass
+            self._tmp_name = None
+            raise
+
+        self._fh = fh
+        self._writer = csv.DictWriter(
+            fh,
+            fieldnames=self._fieldnames,
+            extrasaction="ignore",  # compat + forward fields
         )
+        self._writer.writeheader()
+        self._is_open = True
 
-    _write_dict_rows_csv(
+    # --------------------------------------------------------
+
+    def _maybe_warn_extras(self, row: Mapping[str, object]) -> None:
+        if not self._warn_on_extras:
+            return
+        try:
+            keys = row.keys()
+        except Exception:
+            return
+
+        for k in keys:
+            if k not in self._fieldnames_set and k not in self._warned_extra_keys:
+                self._warned_extra_keys.add(k)
+                _logger.debug(
+                    f"{self._kind_label}: clave extra ignorada en CSV (no está en fieldnames): {k!r}"
+                )
+
+    def write_row(self, row: Mapping[str, object]) -> None:
+        if not self._is_open:
+            self.open()
+
+        writer = self._writer
+        if writer is None:
+            _logger.error(f"{self._kind_label}: writer no inicializado", always=True)
+            return
+
+        self._maybe_warn_extras(row)
+
+        try:
+            writer.writerow(dict(row))
+            self._rows_written += 1
+        except Exception as exc:
+            _logger.error(f"Error escribiendo fila en {self._kind_label}: {exc!r}", always=True)
+
+    # --------------------------------------------------------
+
+    def abort(self) -> None:
+        """
+        Aborta el commit final: cierra el file handle y borra el temporal.
+        Mantiene el CSV final anterior intacto.
+        """
+        if not self._is_open:
+            return
+
+        tmp_name = self._tmp_name
+        fh = self._fh
+
+        self._is_open = False
+        self._tmp_name = None
+        self._fh = None
+        self._writer = None
+
+        try:
+            if fh is not None:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+            if tmp_name and os.path.exists(tmp_name):
+                try:
+                    os.remove(tmp_name)
+                except Exception:
+                    pass
+        finally:
+            _logger.info(f"{self._kind_label} abortado: no se comitea fichero ({self._path})")
+
+    def close(self) -> None:
+        if not self._is_open:
+            return
+
+        tmp_name = self._tmp_name
+        fh = self._fh
+        rows_written = self._rows_written
+        commit_if_empty = self._commit_if_empty
+
+        self._is_open = False
+        self._tmp_name = None
+        self._fh = None
+        self._writer = None
+
+        try:
+            if fh is not None:
+                try:
+                    fh.flush()
+                    try:
+                        os.fsync(fh.fileno())
+                    except Exception:
+                        pass
+                finally:
+                    try:
+                        fh.close()
+                    except Exception:
+                        pass
+
+            if not tmp_name:
+                return
+
+            if rows_written == 0 and not commit_if_empty:
+                try:
+                    os.remove(tmp_name)
+                except Exception:
+                    pass
+                _logger.info(f"{self._kind_label} vacío: no se genera fichero ({self._path})")
+                return
+
+            os.replace(tmp_name, str(self._pathp))
+            _logger.info(f"{self._kind_label} escrito en {self._path}")
+
+        except Exception as exc:
+            _logger.error(f"Error cerrando {self._kind_label} en {self._path}: {exc!r}", always=True)
+            if tmp_name and os.path.exists(tmp_name):
+                try:
+                    os.remove(tmp_name)
+                except Exception:
+                    pass
+
+
+# ============================================================================
+# FACTORIES (STREAMING)
+# ============================================================================
+
+def open_all_csv_writer(path: str) -> CSVAtomicWriter:
+    return CSVAtomicWriter(
         path,
-        rows_list,
-        default_fieldnames=_STANDARD_SUGGESTION_FIELDS,
+        fieldnames=_STANDARD_REPORT_FIELDS,
+        kind_label="CSV completo",
+        commit_if_empty=True,
+        warn_on_extras=True,
+    )
+
+
+def open_filtered_csv_writer_only_if_rows(path: str) -> CSVAtomicWriter:
+    return CSVAtomicWriter(
+        path,
+        fieldnames=_STANDARD_REPORT_FIELDS,
+        kind_label="CSV filtrado",
+        commit_if_empty=False,
+        warn_on_extras=True,
+    )
+
+
+def open_suggestions_csv_writer(path: str) -> CSVAtomicWriter:
+    return CSVAtomicWriter(
+        path,
+        fieldnames=_STANDARD_SUGGESTION_FIELDS,
         kind_label="CSV de sugerencias",
+        commit_if_empty=True,
+        warn_on_extras=True,
     )
 
 
-# ============================================================
-#                INFORME HTML INTERACTIVO
-# ============================================================
+# ============================================================================
+# API LEGACY (compatibilidad)
+# ============================================================================
 
-# reporting.py está en backend/, así que el root del proyecto es parent de ese dir.
-_PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
-TEMPLATE_PATH: Final[Path] = (
-    _PROJECT_ROOT / "frontend" / "templates" / "filtered_report.html"
-)
+def write_all_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
+    with open_all_csv_writer(path) as w:
+        for r in rows:
+            w.write_row(r)
 
 
-def write_interactive_html(
-    path: str,
-    rows: Iterable[Mapping[str, object]],
-    *,
-    title: str = "Plex Movies Cleaner — Informe interactivo",
-    subtitle: str = "Vista rápida de las películas marcadas como DELETE / MAYBE.",
-) -> None:
-    """
-    Genera un HTML usando una plantilla externa en
-    `frontend/templates/filtered_report.html`.
+def write_filtered_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
+    with open_filtered_csv_writer_only_if_rows(path) as w:
+        for r in rows:
+            w.write_row(r)
 
-    La plantilla debe contener los placeholders:
-      - __TITLE__
-      - __SUBTITLE__
-      - __ROWS_JSON__
-    """
-    rows_list = list(rows)
 
-    processed_rows: list[dict[str, object]] = [
-        {
-            "poster_url": r.get("poster_url"),
-            "library": r.get("library"),
-            "title": r.get("title"),
-            "year": r.get("year"),
-            "imdb_rating": r.get("imdb_rating"),
-            "rt_score": r.get("rt_score"),
-            "imdb_votes": r.get("imdb_votes"),
-            "decision": r.get("decision"),
-            "reason": r.get("reason"),
-            "misidentified_hint": r.get("misidentified_hint"),
-            "file": r.get("file"),
-        }
-        for r in rows_list
-    ]
-
-    rows_json = json.dumps(processed_rows, ensure_ascii=False)
-    # Escape defensivo para evitar que una cadena contenga </script
-    rows_json_safe = rows_json.replace("</script", "<\\/script")
-
-    if not TEMPLATE_PATH.exists():
-        raise FileNotFoundError(
-            f"Plantilla HTML no encontrada en {TEMPLATE_PATH}. "
-            "Asegúrate de crear frontend/templates/filtered_report.html"
-        )
-
-    try:
-        html_template = TEMPLATE_PATH.read_text(encoding="utf-8")
-    except Exception as exc:
-        _logger.error(f"No se pudo leer la plantilla HTML {TEMPLATE_PATH}: {exc}")
-        raise
-
-    html = (
-        html_template
-        .replace("__TITLE__", title)
-        .replace("__SUBTITLE__", subtitle)
-        .replace("__ROWS_JSON__", rows_json_safe)
-    )
-
-    # Escritura atómica del HTML
-    pathp = Path(path)
-    dirpath = pathp.parent
-    dirpath.mkdir(parents=True, exist_ok=True)
-
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            delete=False,
-            dir=str(dirpath),
-            newline="",
-        ) as tf:
-            tf.write(html)
-            temp_name = tf.name
-
-        os.replace(temp_name, str(pathp))
-        _logger.info(f"Informe HTML interactivo escrito en {path}")
-    except Exception as exc:
-        _logger.error(f"Error escribiendo informe HTML en {path}: {exc}")
+def write_suggestions_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
+    with open_suggestions_csv_writer(path) as w:
+        for r in rows:
+            w.write_row(r)

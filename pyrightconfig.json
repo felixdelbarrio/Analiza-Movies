@@ -1,0 +1,43 @@
+{
+  "include": ["backend", "frontend", "server"],
+
+  "exclude": [
+    "**/.git/**",
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "dist",
+    "build",
+    "*.egg-info",
+    ".venv",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "reports",
+    "tests"
+  ],
+
+  "typeCheckingMode": "standard",
+
+  "pythonVersion": "3.14",
+  "pythonPlatform": "All",
+
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": ["."]
+    }
+  ],
+
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": "none",
+  "reportMissingModuleSource": "none",
+
+  "reportUnknownMemberType": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownArgumentType": "none",
+
+  "reportUnusedImport": "warning",
+  "reportUnusedVariable": "warning",
+
+  "useLibraryCodeForTypes": true
+}

@@ -1,610 +1,323 @@
+"""
+backend/analiza_dlna.py
+
+Orquestador principal de análisis DLNA/UPnP (streaming).
+
+MEJORAS (objetivo: menos UNKNOWN):
+1) Extraer year también desde resource_url/filename (y/o display_file), no solo desde el título UPnP.
+2) Extraer imdb_id_hint si aparece tt\\d+ en nombre/URL (suele ocurrir en librerías bien nombradas).
+3) Mejorar el “título candidato” usando el filename cuando it.title es genérico
+   (ej. “Aardman Classics”, “Vol.2”, “Scrat Pack”, etc.).
+
+Nota: apoyado en backend/title_utils.py para no duplicar heurísticas.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
-from urllib.parse import unquote, urljoin, urlparse
-from urllib.request import Request, urlopen
-import xml.etree.ElementTree as ET
+import time
+from collections.abc import Mapping
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
+from dataclasses import dataclass
+from typing import Protocol, TypeAlias
+from urllib.parse import unquote, urlparse
 
-from backend import logger as _logger
-from backend.collection_analysis import analyze_movie
-from backend.config import (
-    EXCLUDE_DLNA_LIBRARIES,
-    METADATA_FIX_PATH,
-    REPORT_ALL_PATH,
-    REPORT_FILTERED_PATH,
-)
+from backend import logger as logger
+from backend.collection_analysis import analyze_movie, flush_external_caches
+from backend.config_base import DEBUG_MODE, SILENT_MODE
+from backend.config_omdb import OMDB_HTTP_MAX_CONCURRENCY, OMDB_HTTP_MIN_INTERVAL_SECONDS
+from backend.config_plex import PLEX_ANALYZE_WORKERS
+from backend.config_reports import METADATA_FIX_PATH, REPORT_ALL_PATH, REPORT_FILTERED_PATH
 from backend.decision_logic import sort_filtered_rows
-from backend.dlna_discovery import DLNADevice, discover_dlna_devices
 from backend.movie_input import MovieInput
-from backend.reporting import write_all_csv, write_filtered_csv, write_suggestions_csv
-
-
-@dataclass(frozen=True, slots=True)
-class _DlnaContainer:
-    object_id: str
-    title: str
-
-
-@dataclass(frozen=True, slots=True)
-class _DlnaVideoItem:
-    title: str
-    resource_url: str
-    size_bytes: int | None
-
-
-_TITLE_YEAR_SUFFIX_RE: re.Pattern[str] = re.compile(
-    r"(?P<base>.*?)"
-    r"(?P<sep>\s*\.?\s*)"
-    r"\(\s*(?P<year>\d{4})\s*\)\s*$"
+from backend.omdb_client import get_omdb_metrics_snapshot, reset_omdb_metrics
+from backend.reporting import (
+    open_all_csv_writer,
+    open_filtered_csv_writer_only_if_rows,
+    open_suggestions_csv_writer,
+)
+from backend.title_utils import (
+    clean_title_candidate,
+    extract_imdb_id_from_text,
+    extract_year_from_text,
+    filename_stem,
+    split_title_and_year_from_text,
 )
 
+from backend.dlna_client import (
+    DLNAClient,
+    DLNADevice,
+    DlnaContainer,
+    DlnaVideoItem,
+    TraversalLimits,
+    build_traversal_limits,
+)
 
-def _is_plex_server(device: DLNADevice) -> bool:
-    return "plex media server" in device.friendly_name.lower()
+# ---------------------------------------------------------------------------
+# Opcional: métricas agregadas (si existe)
+# ---------------------------------------------------------------------------
+try:
+    from backend.run_metrics import METRICS  # type: ignore
+except Exception:  # pragma: no cover
 
+    class _NoopMetrics:
+        def incr(self, key: str, n: int = 1) -> None:
+            return
 
-def _xml_text(elem: ET.Element | None) -> str | None:
-    if elem is None or elem.text is None:
-        return None
-    val = elem.text.strip()
-    return val or None
+        def observe_ms(self, key: str, ms: float) -> None:
+            return
 
+        def add_error(self, subsystem: str, action: str, *, endpoint: str | None, detail: str) -> None:
+            return
 
-def _fetch_xml_root(url: str, timeout_s: float = 5.0) -> ET.Element | None:
-    try:
-        with urlopen(url, timeout=timeout_s) as resp:
-            data = resp.read()
-    except Exception as exc:  # pragma: no cover
-        _logger.warning(f"[DLNA] No se pudo descargar XML {url}: {exc}")
-        return None
+        def snapshot(self) -> dict[str, object]:
+            return {"counters": {}, "derived": {}, "timings_ms": {}, "errors": []}
 
-    try:
-        return ET.fromstring(data)
-    except Exception as exc:  # pragma: no cover
-        _logger.warning(f"[DLNA] No se pudo parsear XML {url}: {exc}")
-        return None
+    METRICS = _NoopMetrics()  # type: ignore[assignment]
 
+# ---------------------------------------------------------------------------
+# Config best-effort para scan workers
+# ---------------------------------------------------------------------------
+try:
+    from backend.config import DLNA_SCAN_WORKERS  # type: ignore
+except Exception:  # pragma: no cover
+    DLNA_SCAN_WORKERS = 2  # type: ignore
 
-def _find_content_directory_endpoints(device_location: str) -> tuple[str, str] | None:
-    root = _fetch_xml_root(device_location)
-    if root is None:
-        return None
+# ---------------------------------------------------------------------------
+# Concurrency knobs locales
+# ---------------------------------------------------------------------------
+_PROGRESS_EVERY_N_ITEMS: int = 100
+_MAX_WORKERS_CAP: int = 64
+_DEFAULT_MAX_INFLIGHT_FACTOR: int = 4
 
-    for service in root.iter():
-        if not (isinstance(service.tag, str) and service.tag.endswith("service")):
-            continue
+# ---------------------------------------------------------------------------
+# Parsing legacy: título/año (sufijo "(YYYY)")
+# ---------------------------------------------------------------------------
+_TITLE_YEAR_SUFFIX_RE: re.Pattern[str] = re.compile(
+    r"(?P<base>.*?)" r"(?P<sep>\s*\.?\s*)" r"\(\s*(?P<year>\d{4})\s*\)\s*$"
+)
 
-        service_type: str | None = None
-        control_url: str | None = None
+# ---------------------------------------------------------------------------
+# Heurística: títulos “genéricos” (contienen palabras tipo collection/volume/etc.)
+#   Conservador: si duda => NO considerarlo genérico.
+# ---------------------------------------------------------------------------
+_GENERIC_TITLE_RE: re.Pattern[str] = re.compile(
+    r"""
+    \b(
+        collection|collections|classics|anthology|anthologies|pack|
+        volume|vol|vol\.|season|series|saga|
+        disc|disk|cd|dvd|bd|bluray|
+        extras?|specials?|bonus|
+        part|chapter|episode|
+        various|varios|varias|mix|mixed|
+        films?|movies?|videos?
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
-        for child in list(service):
-            if not isinstance(child.tag, str):
-                continue
-            if child.tag.endswith("serviceType"):
-                service_type = _xml_text(child)
-            elif child.tag.endswith("controlURL"):
-                control_url = _xml_text(child)
+_GENERIC_SHORT_RE: re.Pattern[str] = re.compile(r"^(?:vol(?:\.|ume)?\s*\d+|disc\s*\d+|cd\s*\d+|part\s*\d+)$", re.IGNORECASE)
 
-        if not service_type or not control_url:
-            continue
-        if "ContentDirectory" not in service_type:
-            continue
+# ============================================================================
+# TIPADO (writers)
+# ============================================================================
 
-        return urljoin(device_location, control_url), service_type
-
-    return None
-
-
-def _soap_browse_direct_children(
-    control_url: str,
-    service_type: str,
-    object_id: str,
-    starting_index: int,
-    requested_count: int,
-) -> tuple[list[ET.Element], int] | None:
-    body = (
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
-        "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">"
-        "<s:Body>"
-        f"<u:Browse xmlns:u=\"{service_type}\">"
-        f"<ObjectID>{object_id}</ObjectID>"
-        "<BrowseFlag>BrowseDirectChildren</BrowseFlag>"
-        "<Filter>*</Filter>"
-        f"<StartingIndex>{starting_index}</StartingIndex>"
-        f"<RequestedCount>{requested_count}</RequestedCount>"
-        "<SortCriteria></SortCriteria>"
-        "</u:Browse>"
-        "</s:Body>"
-        "</s:Envelope>"
-    )
-
-    soap_action = f"\"{service_type}#Browse\""
-    headers = {
-        "Content-Type": 'text/xml; charset="utf-8"',
-        "SOAPAction": soap_action,
-        "SOAPACTION": soap_action,
-    }
-
-    req = Request(control_url, data=body.encode("utf-8"), headers=headers, method="POST")
-    try:
-        with urlopen(req, timeout=10) as resp:
-            raw = resp.read()
-    except Exception as exc:  # pragma: no cover
-        _logger.error(f"[DLNA] Error SOAP Browse contra {control_url}: {exc}", always=True)
-        return None
-
-    try:
-        envelope = ET.fromstring(raw)
-    except Exception as exc:  # pragma: no cover
-        _logger.error(f"[DLNA] Respuesta SOAP inválida: {exc}", always=True)
-        return None
-
-    result_text: str | None = None
-    total_matches: int | None = None
-
-    for elem in envelope.iter():
-        if not isinstance(elem.tag, str):
-            continue
-        if elem.tag.endswith("Result"):
-            result_text = _xml_text(elem)
-        elif elem.tag.endswith("TotalMatches"):
-            tm = _xml_text(elem)
-            if tm and tm.isdigit():
-                total_matches = int(tm)
-
-    if result_text is None:
-        return None
-
-    try:
-        didl = ET.fromstring(result_text)
-    except Exception:
-        unescaped = (
-            result_text.replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", '"')
-            .replace("&apos;", "'")
-            .replace("&amp;", "&")
-        )
-        try:
-            didl = ET.fromstring(unescaped)
-        except Exception as exc:  # pragma: no cover
-            _logger.error(f"[DLNA] No se pudo parsear DIDL-Lite: {exc}", always=True)
-            return None
-
-    children = list(didl)
-    return children, (total_matches or len(children))
+_Row = dict[str, object]
 
 
-def _extract_container_title_and_id(container: ET.Element) -> _DlnaContainer | None:
-    obj_id = container.attrib.get("id")
-    if not obj_id:
-        return None
+class _RowWriter(Protocol):
+    """Interfaz mínima que exponen nuestros CSV writers del módulo reporting."""
 
-    title: str | None = None
-    for ch in list(container):
-        if isinstance(ch.tag, str) and ch.tag.endswith("title"):
-            title = _xml_text(ch)
-            break
-
-    if not title:
-        return None
-
-    return _DlnaContainer(object_id=obj_id, title=title)
+    def write_row(self, row: _Row) -> None: ...
 
 
-def _is_likely_video_root_title(title: str) -> bool:
-    t = title.strip().lower()
-    if not t:
-        return False
+# Result y Future types (evita líos de inference)
+_AnalyzeResult: TypeAlias = tuple[_Row | None, _Row | None, list[str]]
+_AnalyzeFuture: TypeAlias = Future[_AnalyzeResult]
 
-    negative = (
-        "music",
-        "música",
-        "audio",
-        "photo",
-        "photos",
-        "foto",
-        "fotos",
-        "picture",
-        "pictures",
-        "imagen",
-        "imágenes",
-    )
-    if any(n in t for n in negative):
-        return False
-
-    positive = ("video", "vídeo", "videos", "vídeos")
-    return any(p in t for p in positive)
+# Scan result types (para no mezclar con AnalyzeResult)
+_ScanResult: TypeAlias = tuple[str, list[DlnaVideoItem]]
+_ScanFuture: TypeAlias = Future[_ScanResult]
 
 
-def _folder_browse_container_score(title: str) -> int:
-    t = title.strip().lower()
-    if not t:
+# ============================================================================
+# Dedupe global por run
+# ============================================================================
+
+
+@dataclass(slots=True)
+class _GlobalDedupeState:
+    """Dedupe global por run (entre contenedores seleccionados)."""
+
+    seen_item_urls: set[str]
+    seen_item_ids: set[str]
+    skipped_global: int = 0
+
+
+# ============================================================================
+# Helpers “typing-safe”
+# ============================================================================
+
+
+def _counter_int(counters: Mapping[str, object], key: str, default: int = 0) -> int:
+    """
+    Convierte un contador (object) a int de forma segura.
+    Acepta int/float/bool/str numérico. Cualquier otra cosa => default.
+    """
+    v = counters.get(key, default)
+
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return int(v)
+    if isinstance(v, str):
+        s = v.strip()
+        if s.isdigit():
+            return int(s)
+        return default
+    return default
+
+
+def _as_object_mapping(d: Mapping[str, int]) -> Mapping[str, object]:
+    # dict[str, int] es un Mapping, pero Pyright/Pylance no siempre permite “upcast”
+    return {k: v for k, v in d.items()}
+
+
+# ============================================================================
+# OMDb metrics helpers (solo SILENT+DEBUG)
+# ============================================================================
+
+
+def _metrics_get_int(m: Mapping[str, object], key: str) -> int:
+    v = m.get(key, 0)
+    if v is None:
         return 0
-
-    strong = (
-        "by folder",
-        "browse folders",
-        "examinar carpetas",
-        "carpetas",
-        "por carpeta",
-        "folders",
-    )
-    for s in strong:
-        if t == s or s in t:
-            return 100
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return int(v)
+    if isinstance(v, str):
+        s = v.strip()
+        return int(s) if s.isdigit() else 0
     return 0
 
 
-def _is_plex_virtual_container_title(title: str) -> bool:
-    t = title.strip().lower()
-    if not t:
-        return True
-
-    plex_virtual_tokens = (
-        "video channels",
-        "channels",
-        "shared video",
-        "remote video",
-        "watch later",
-        "recommended",
-        "preferences",
-        "continue watching",
-        "recently viewed",
-        "recently added",
-        "recently released",
-        "by collection",
-        "by edition",
-        "by genre",
-        "by year",
-        "by decade",
-        "by director",
-        "by starring actor",
-        "by country",
-        "by content rating",
-        "by rating",
-        "by resolution",
-        "by first letter",
+def _metrics_diff(before: Mapping[str, object], after: Mapping[str, object]) -> dict[str, int]:
+    keys = (
+        "cache_hits",
+        "cache_misses",
+        "http_requests",
+        "http_failures",
+        "throttle_sleeps",
+        "rate_limit_hits",
+        "rate_limit_sleeps",
+        "disabled_switches",
+        "cache_store_writes",
+        "cache_patch_writes",
+        "candidate_search_calls",
     )
-    return any(tok in t for tok in plex_virtual_tokens)
-
-
-def _list_root_containers(device: DLNADevice) -> tuple[list[_DlnaContainer], tuple[str, str] | None]:
-    endpoints = _find_content_directory_endpoints(device.location)
-    if endpoints is None:
-        _logger.error(
-            f"[DLNA] El dispositivo '{device.friendly_name}' no expone ContentDirectory.",
-            always=True,
-        )
-        return [], None
-
-    control_url, service_type = endpoints
-    root_children = _soap_browse_direct_children(control_url, service_type, "0", 0, 500)
-    if root_children is None:
-        return [], endpoints
-
-    children, _ = root_children
-    containers: list[_DlnaContainer] = []
-
-    for elem in children:
-        if not (isinstance(elem.tag, str) and elem.tag.endswith("container")):
-            continue
-        c = _extract_container_title_and_id(elem)
-        if c is not None:
-            containers.append(c)
-
-    return containers, endpoints
-
-
-def _list_video_root_containers(device: DLNADevice) -> list[_DlnaContainer]:
-    containers, _ = _list_root_containers(device)
-    return [c for c in containers if _is_likely_video_root_title(c.title)]
-
-
-def _list_child_containers(device: DLNADevice, parent_object_id: str) -> list[_DlnaContainer]:
-    endpoints = _find_content_directory_endpoints(device.location)
-    if endpoints is None:
-        return []
-
-    control_url, service_type = endpoints
-    children_resp = _soap_browse_direct_children(control_url, service_type, parent_object_id, 0, 500)
-    if children_resp is None:
-        return []
-
-    children, _ = children_resp
-    out: list[_DlnaContainer] = []
-
-    for elem in children:
-        if not (isinstance(elem.tag, str) and elem.tag.endswith("container")):
-            continue
-        c = _extract_container_title_and_id(elem)
-        if c is not None:
-            out.append(c)
-
+    out: dict[str, int] = {}
+    for k in keys:
+        out[k] = max(0, _metrics_get_int(after, k) - _metrics_get_int(before, k))
     return out
 
 
-def _auto_descend_folder_browse(device: DLNADevice, container: _DlnaContainer) -> _DlnaContainer:
-    current = container
-    for _ in range(3):
-        children = _list_child_containers(device, current.object_id)
-        if not children:
-            return current
+def _log_omdb_metrics(prefix: str, metrics: Mapping[str, object] | None = None) -> None:
+    if not (SILENT_MODE and DEBUG_MODE):
+        return
 
-        best: _DlnaContainer | None = None
-        best_score = 0
-
-        for c in children:
-            score = _folder_browse_container_score(c.title)
-            if score > best_score:
-                best_score = score
-                best = c
-
-        if best is None or best_score <= 0:
-            return current
-
-        current = best
-
-    return current
-
-
-def _ask_dlna_device() -> DLNADevice | None:
-    _logger.info("\nBuscando servidores DLNA/UPnP en la red...\n", always=True)
-    devices = discover_dlna_devices()
-
-    if not devices:
-        _logger.error("[DLNA] No se han encontrado servidores DLNA/UPnP.", always=True)
-        return None
-
-    _logger.info("Se han encontrado los siguientes servidores DLNA/UPnP:\n", always=True)
-    for idx, dev in enumerate(devices, start=1):
-        _logger.info(f"  {idx}) {dev.friendly_name} ({dev.host}:{dev.port})", always=True)
-        _logger.info(f"      LOCATION: {dev.location}", always=True)
-
-    while True:
-        raw = input(
-            f"\nSelecciona un servidor (1-{len(devices)}) o pulsa Enter para cancelar: "
-        ).strip()
-        if raw == "":
-            _logger.info("[DLNA] Operación cancelada.", always=True)
-            return None
-        if not raw.isdigit():
-            _logger.warning("Opción no válida. Debe ser un número (o Enter para cancelar).", always=True)
-            continue
-        num = int(raw)
-        if not (1 <= num <= len(devices)):
-            _logger.warning("Opción fuera de rango.", always=True)
-            continue
-        chosen = devices[num - 1]
-        _logger.info(
-            f"\nHas seleccionado: {chosen.friendly_name} ({chosen.host}:{chosen.port})\n",
-            always=True,
-        )
-        return chosen
-
-
-def _parse_multi_selection(raw: str, max_value: int) -> list[int] | None:
-    parts = [p.strip() for p in raw.split(",") if p.strip()]
-    if not parts:
-        return None
-
-    values: list[int] = []
-    for part in parts:
-        if not part.isdigit():
-            return None
-        val = int(part)
-        if not (1 <= val <= max_value):
-            return None
-        values.append(val)
-
-    seen: set[int] = set()
-    unique: list[int] = []
-    for v in values:
-        if v not in seen:
-            seen.add(v)
-            unique.append(v)
-    return unique
-
-
-def _select_folders_non_plex(base: _DlnaContainer, device: DLNADevice) -> list[_DlnaContainer] | None:
-    _logger.info("\nMenú (Enter cancela):", always=True)
-    _logger.info("  0) Todas las carpetas de vídeo de DLNA", always=True)
-    _logger.info("  1) Seleccionar qué carpetas analizar", always=True)
-
-    while True:
-        raw = input("Selecciona una opción (0/1) o pulsa Enter para cancelar: ").strip()
-        if raw == "":
-            _logger.info("[DLNA] Operación cancelada.", always=True)
-            return None
-        if raw not in ("0", "1"):
-            _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
-            continue
-
-        if raw == "0":
-            return [base]
-
-        folders = _list_child_containers(device, base.object_id)
-        folders = [c for c in folders if c.title not in EXCLUDE_DLNA_LIBRARIES]
-
-        if not folders:
-            _logger.error("[DLNA] No se han encontrado carpetas dentro del contenedor seleccionado.", always=True)
-            return None
-
-        _logger.info("\nCarpetas detectadas (Enter cancela):", always=True)
-        for idx, c in enumerate(folders, start=1):
-            _logger.info(f"  {idx}) {c.title}", always=True)
-
-        raw_sel = input(
-            "Selecciona carpetas separadas por comas (ej: 1,2) o pulsa Enter para cancelar: "
-        ).strip()
-        if raw_sel == "":
-            _logger.info("[DLNA] Operación cancelada.", always=True)
-            return None
-
-        selected = _parse_multi_selection(raw_sel, len(folders))
-        if selected is None:
-            _logger.warning(
-                f"Selección no válida. Usa números 1-{len(folders)} separados por comas (ej: 1,2).",
-                always=True,
-            )
-            continue
-
-        return [folders[i - 1] for i in selected]
-
-
-def _select_folders_plex(base: _DlnaContainer, device: DLNADevice) -> list[_DlnaContainer] | None:
-    _logger.info("\nOpciones Plex (Enter cancela):", always=True)
-    _logger.info("  0) Todas las carpetas de vídeo de Plex Media Server", always=True)
-    _logger.info("  1) Seleccionar qué carpetas analizar", always=True)
-
-    while True:
-        raw = input("Selecciona una opción (0/1) o pulsa Enter para cancelar: ").strip()
-        if raw == "":
-            _logger.info("[DLNA] Operación cancelada.", always=True)
-            return None
-        if raw not in ("0", "1"):
-            _logger.warning("Opción no válida. Introduce 0 o 1 (o Enter para cancelar).", always=True)
-            continue
-
-        if raw == "0":
-            return [base]
-
-        folders = _list_child_containers(device, base.object_id)
-        folders = [c for c in folders if c.title not in EXCLUDE_DLNA_LIBRARIES]
-        folders = [c for c in folders if not _is_plex_virtual_container_title(c.title)]
-
-        if not folders:
-            _logger.error(
-                "[DLNA] No se han encontrado carpetas Plex seleccionables (tras filtrar vistas/servicios).",
-                always=True,
-            )
-            return None
-
-        _logger.info("\nCarpetas detectadas en Plex (Enter cancela):", always=True)
-        for idx, c in enumerate(folders, start=1):
-            _logger.info(f"  {idx}) {c.title}", always=True)
-
-        raw_sel = input(
-            "Selecciona carpetas separadas por comas (ej: 1,2) o pulsa Enter para cancelar: "
-        ).strip()
-        if raw_sel == "":
-            _logger.info("[DLNA] Operación cancelada.", always=True)
-            return None
-
-        selected = _parse_multi_selection(raw_sel, len(folders))
-        if selected is None:
-            _logger.warning(
-                f"Selección no válida. Usa números 1-{len(folders)} separados por comas (ej: 1,2).",
-                always=True,
-            )
-            continue
-
-        return [folders[i - 1] for i in selected]
-
-
-def _is_video_item(elem: ET.Element) -> bool:
-    upnp_class: str | None = None
-    protocol_info: str | None = None
-
-    for ch in list(elem):
-        if not isinstance(ch.tag, str):
-            continue
-        if ch.tag.endswith("class"):
-            upnp_class = _xml_text(ch)
-        elif ch.tag.endswith("res"):
-            protocol_info = ch.attrib.get("protocolInfo")
-
-    if upnp_class and "videoItem" in upnp_class:
-        return True
-    if protocol_info and ":video" in protocol_info:
-        return True
-    return False
-
-
-def _extract_video_item(elem: ET.Element) -> _DlnaVideoItem | None:
-    title: str | None = None
-    resource_url: str | None = None
-    size_bytes: int | None = None
-
-    for ch in list(elem):
-        if not isinstance(ch.tag, str):
-            continue
-
-        if ch.tag.endswith("title") and title is None:
-            title = _xml_text(ch)
-        elif ch.tag.endswith("res") and resource_url is None:
-            resource_url = _xml_text(ch)
-            size_attr = ch.attrib.get("size")
-            if size_attr and size_attr.isdigit():
-                size_bytes = int(size_attr)
-
-    if not title or not resource_url:
-        return None
-
-    return _DlnaVideoItem(
-        title=title,
-        resource_url=resource_url,
-        size_bytes=size_bytes,
+    m = metrics or get_omdb_metrics_snapshot()
+    logger.progress(
+        f"{prefix} OMDb metrics: "
+        f"cache_hits={_metrics_get_int(m, 'cache_hits')} "
+        f"cache_misses={_metrics_get_int(m, 'cache_misses')} "
+        f"http_requests={_metrics_get_int(m, 'http_requests')} "
+        f"http_failures={_metrics_get_int(m, 'http_failures')} "
+        f"throttle_sleeps={_metrics_get_int(m, 'throttle_sleeps')} "
+        f"rate_limit_hits={_metrics_get_int(m, 'rate_limit_hits')} "
+        f"rate_limit_sleeps={_metrics_get_int(m, 'rate_limit_sleeps')} "
+        f"disabled_switches={_metrics_get_int(m, 'disabled_switches')} "
+        f"cache_store_writes={_metrics_get_int(m, 'cache_store_writes')} "
+        f"cache_patch_writes={_metrics_get_int(m, 'cache_patch_writes')} "
+        f"candidate_search_calls={_metrics_get_int(m, 'candidate_search_calls')}"
     )
 
 
-def _iter_video_items_recursive(device: DLNADevice, root_object_id: str) -> list[_DlnaVideoItem]:
-    endpoints = _find_content_directory_endpoints(device.location)
-    if endpoints is None:
-        return []
+def _compute_cost_score(delta: Mapping[str, int]) -> int:
+    http_requests = int(delta.get("http_requests", 0))
+    rate_limit_sleeps = int(delta.get("rate_limit_sleeps", 0))
+    http_failures = int(delta.get("http_failures", 0))
+    rate_limit_hits = int(delta.get("rate_limit_hits", 0))
+    throttle_sleeps = int(delta.get("throttle_sleeps", 0))
 
-    control_url, service_type = endpoints
-    results: list[_DlnaVideoItem] = []
-    stack: list[str] = [root_object_id]
-    page_size = 200
+    score = 0
+    score += http_requests * 1
+    score += throttle_sleeps * 3
+    score += rate_limit_hits * 10
+    score += http_failures * 20
+    score += rate_limit_sleeps * 50
+    return score
 
-    while stack:
-        current_id = stack.pop()
-        start = 0
-        total = 1
 
-        while start < total:
-            browse = _soap_browse_direct_children(
-                control_url,
-                service_type,
-                current_id,
-                start,
-                page_size,
-            )
-            if browse is None:
-                break
+def _log_omdb_rankings(deltas_by_group: dict[str, dict[str, int]], *, min_groups: int = 2) -> None:
+    if not (SILENT_MODE and DEBUG_MODE):
+        return
+    if len(deltas_by_group) < min_groups:
+        return
 
-            children, total_matches = browse
-            total = total_matches
+    usable = [(name, _compute_cost_score(d)) for name, d in deltas_by_group.items()]
+    usable = [(n, v) for (n, v) in usable if v > 0]
+    usable.sort(key=lambda x: x[1], reverse=True)
 
-            for elem in children:
-                if not isinstance(elem.tag, str):
-                    continue
+    if not usable:
+        return
 
-                if elem.tag.endswith("container"):
-                    cid = elem.attrib.get("id")
-                    if cid:
-                        stack.append(cid)
-                    continue
+    line = " | ".join([f"{i+1}) {name}: {val}" for i, (name, val) in enumerate(usable[:5])])
+    logger.progress(f"[DLNA][DEBUG] Top containers by TOTAL_COST: {line}")
 
-                if not elem.tag.endswith("item"):
-                    continue
 
-                if not _is_video_item(elem):
-                    continue
+# ============================================================================
+# Concurrency helpers
+# ============================================================================
 
-                item = _extract_video_item(elem)
-                if item is not None:
-                    results.append(item)
 
-            start += page_size
+def _compute_max_workers(requested: int) -> int:
+    max_workers = int(requested)
+    if max_workers < 1:
+        max_workers = 1
+    if max_workers > _MAX_WORKERS_CAP:
+        max_workers = _MAX_WORKERS_CAP
 
-    return results
+    omdb_cap = max(4, int(OMDB_HTTP_MAX_CONCURRENCY) * 8)
+    return max(1, min(max_workers, omdb_cap))
+
+
+def _compute_max_inflight(max_workers: int) -> int:
+    inflight = max_workers * _DEFAULT_MAX_INFLIGHT_FACTOR
+    return max(max_workers, inflight)
+
+
+def _compute_scan_workers() -> int:
+    try:
+        w = int(DLNA_SCAN_WORKERS)
+    except Exception:
+        w = 2
+    return max(1, min(8, w))
+
+
+# ============================================================================
+# Normalización título/año + file display
+# ============================================================================
 
 
 def _extract_year_from_title(title: str) -> tuple[str, int | None]:
+    # Legacy: intenta "(YYYY)" al final
     raw = title.strip()
     if not raw:
         return title, None
@@ -621,170 +334,708 @@ def _extract_year_from_title(title: str) -> tuple[str, int | None]:
     if not (1900 <= year <= 2100):
         return title, None
 
-    base = match.group("base").strip()
-    base = base.rstrip(".").strip()
+    base = match.group("base").strip().rstrip(".").strip()
     return (base or title), year
 
 
-def _extract_ext_from_resource_url(resource_url: str) -> str:
-    try:
-        parsed = urlparse(resource_url)
-        filename = parsed.path.rsplit("/", 1)[-1].strip()
-        filename = unquote(filename)
-        if "." not in filename:
-            return ""
-        ext = f".{filename.rsplit('.', 1)[-1].strip()}"
-        if ext == ".":
-            return ""
-        if len(ext) > 8:
-            return ""
-        if not ext[1:].isalnum():
-            return ""
-        return ext
-    except Exception:
+def _dlna_display_file(client: DLNAClient, library: str, raw_title: str, resource_url: str) -> tuple[str, str]:
+    ext = client.extract_ext_from_resource_url(resource_url)
+    base = raw_title.strip() or "UNKNOWN"
+    if ext and not base.lower().endswith(ext.lower()):
+        base = f"{base}{ext}"
+    lib = library.strip() or "DLNA"
+    return f"{lib}/{base}", resource_url
+
+
+def _format_item_progress_line(*, index: int, total: int, title: str, year: int | None, file_size_bytes: int | None) -> str:
+    base = title.strip() or "UNKNOWN"
+    if year is not None:
+        base = f"{base} ({year})"
+    if DEBUG_MODE and file_size_bytes is not None and file_size_bytes >= 0:
+        base = f"{base} [{file_size_bytes} bytes]"
+    return f"({index}/{total}) {base}"
+
+
+# ============================================================================
+# URL/filename extraction helpers (apoyados en title_utils)
+# ============================================================================
+
+
+def _url_to_filename(url: str) -> str:
+    """
+    Extrae un filename “humano” desde una URL (best-effort), sin tocar disco.
+    """
+    u = (url or "").strip()
+    if not u:
         return ""
+    try:
+        p = urlparse(u)
+        path = unquote(p.path or "")
+    except Exception:
+        path = u
+    # El último segmento suele ser el filename
+    seg = path.rsplit("/", 1)[-1]
+    return seg.strip()
 
 
-def _dlna_display_file(library: str, raw_title: str, resource_url: str) -> tuple[str, str]:
+def _best_filename_stem_from_url(url: str) -> str:
     """
-    Requisito DLNA:
-      - file (friendly) = "{library}/{Nombre original del registro sin normalizar}{ext}"
-      - file_url         = URL real del servidor
+    Devuelve un stem usable desde la URL:
+      - parse + unquote
+      - filename_stem() para quitar extensión
+      - clean_title_candidate() para quitar ruido conservador (sin lookup-agresivo)
     """
-    ext = _extract_ext_from_resource_url(resource_url)
+    fn = _url_to_filename(url)
+    st = filename_stem(fn)
+    return clean_title_candidate(st)
 
-    base = raw_title.strip()
-    if not base:
-        base = "UNKNOWN"
+def _title_from_filename(url: str) -> tuple[str, int | None]:
+    """
+    Best-effort: extrae un (title, year) desde el "filename" contenido en una URL/path.
+    En DLNA la resource_url suele incluir el nombre del fichero (o parte del path),
+    aunque no sea una URL "semántica".
 
-    if ext:
-        base_l = base.lower()
-        ext_l = ext.lower()
-        if not base_l.endswith(ext_l):
-            base = f"{base}{ext}"
+    Estrategia:
+      1) Parse + unquote del path
+      2) basename (último segmento) como filename
+      3) filename_stem() para quitar extensión
+      4) clean_title_candidate() para normalizar separadores y quitar ruido conservador
+      5) split_title_and_year_from_text() para separar "Title (1999)" / "Title - 1999" / etc.
+      6) fallback year: extract_year_from_text(url) si no salió del stem limpio
 
-    return f"{library}/{base}", resource_url
+    Devuelve:
+      - title: "" si no se puede inferir nada
+      - year: int o None
+    """
+    u = (url or "").strip()
+    if not u:
+        return "", None
+
+    # 1) intenta parsear como URL estándar (http/file/etc.)
+    # si falla, tratamos el input como un path "crudo"
+    try:
+        parsed = urlparse(u)
+        path = unquote(parsed.path or "") or u
+    except Exception:
+        path = u
+
+    # 2) filename = último segmento del path (si hay /)
+    # nota: si no hay '/', rsplit devuelve el mismo string
+    filename = path.rsplit("/", 1)[-1].strip()
+    if not filename:
+        # fallback: intenta con el input original por si era algo raro
+        filename = u.rsplit("/", 1)[-1].strip()
+
+    # 3) stem sin extensión
+    stem = filename_stem(filename)
+    if not stem:
+        # nada que rascar
+        year_fallback = extract_year_from_text(u)
+        return "", year_fallback
+
+    # 4) limpieza conservadora (separadores, bracket-noise si knob, etc.)
+    cleaned = clean_title_candidate(stem)
+    if not cleaned:
+        year_fallback = extract_year_from_text(u)
+        return "", year_fallback
+
+    # 5) split título/año si viene trailing (o año “en medio” conservador)
+    title_part, year = split_title_and_year_from_text(cleaned)
+    title_part = (title_part or "").strip()
+
+    # 6) fallback year desde URL completa si no salió del stem limpio
+    if year is None:
+        year = extract_year_from_text(u)
+
+    # si el split devolvió vacío (raro), usa cleaned como título
+    if not title_part:
+        title_part = cleaned.strip()
+
+    return title_part, year
+
+
+def _is_generic_title(title: str) -> bool:
+    """
+    Heurística local para decidir si el it.title es genérico y conviene reemplazarlo por filename.
+    Conservador: devuelve True solo si hay señales claras.
+    """
+    t = (title or "").strip()
+    if not t:
+        return True
+    low = t.lower().strip()
+
+    # Muy corto y con pinta de “vol2/disc1”
+    if _GENERIC_SHORT_RE.match(low):
+        return True
+
+    # Tiene tokens típicos de colecciones/volúmenes
+    if _GENERIC_TITLE_RE.search(low):
+        # si además es muy corto, más seguro
+        if len(low) <= 20:
+            return True
+
+    # Muchos dígitos y poca letra => sospechoso (ej. "01", "Movie 2")
+    letters = sum(1 for ch in low if ch.isalpha())
+    digits = sum(1 for ch in low if ch.isdigit())
+    if digits >= 2 and letters <= 3:
+        return True
+
+    return False
+
+
+def _derive_best_title_year_imdb(
+    *,
+    raw_title: str,
+    resource_url: str,
+    display_file: str,
+) -> tuple[str, int | None, str | None, dict[str, object]]:
+    """
+    Devuelve (title, year, imdb_hint, extra_patch)
+    - title: preferimos raw_title, salvo que sea genérico -> filename stem.
+    - year: primero desde raw_title (legacy), luego desde filename/url/display_file.
+    - imdb_hint: tt* desde url/filename/raw_title.
+    - extra_patch: campos para MovieInput.extra (debug/observabilidad).
+    """
+    extra_patch: dict[str, object] = {}
+
+    # 1) title/year desde el título UPnP (legacy)
+    clean_title_legacy, year_legacy = _extract_year_from_title(raw_title)
+    title_candidate = clean_title_legacy.strip() or raw_title.strip() or "UNKNOWN"
+
+    # 2) filename stem (desde URL) como fuente secundaria (título/año)
+    fn_split_title, fn_year = _title_from_filename(resource_url)
+    fn_title = fn_split_title
+
+    # 3) year fallback desde URL/filename/display_file
+    # (extract_year_from_text es conservador)
+    url_year = extract_year_from_text(resource_url)
+    file_year = extract_year_from_text(display_file)
+
+    # 4) imdb_id_hint desde cualquier texto (primero URL, luego filename/display/title)
+    imdb_hint = extract_imdb_id_from_text(resource_url)
+    if imdb_hint is None and fn_title:
+        imdb_hint = extract_imdb_id_from_text(fn_title)
+    if imdb_hint is None:
+        imdb_hint = extract_imdb_id_from_text(display_file)
+    if imdb_hint is None:
+        imdb_hint = extract_imdb_id_from_text(raw_title)
+
+    # 5) Decide título final: si it.title es genérico, usar filename split title si es usable
+    used_filename_title = False
+    if _is_generic_title(title_candidate) and fn_split_title.strip():
+        title_candidate = fn_split_title.strip()
+        used_filename_title = True
+
+    # 6) Decide year final
+    year_final = year_legacy
+    if year_final is None:
+        year_final = fn_year
+    if year_final is None:
+        year_final = url_year
+    if year_final is None:
+        year_final = file_year
+
+    # 7) Observabilidad (no afecta lógica)
+    extra_patch["raw_title"] = raw_title
+    extra_patch["filename_title_candidate"] = fn_title
+    extra_patch["filename_title_used"] = used_filename_title
+    extra_patch["year_from_title"] = year_legacy
+    extra_patch["year_from_filename"] = fn_year
+    extra_patch["year_from_url"] = url_year
+    extra_patch["year_from_display_file"] = file_year
+    if imdb_hint:
+        extra_patch["imdb_id_hint_from_text"] = imdb_hint
+
+    return title_candidate, year_final, imdb_hint, extra_patch
+
+
+# ============================================================================
+# Snapshot counters helper (robust)
+# ============================================================================
+
+
+def _safe_snapshot_counters() -> Mapping[str, object]:
+    try:
+        snap = METRICS.snapshot()
+        if isinstance(snap, Mapping):
+            c = snap.get("counters", {})
+            return c if isinstance(c, Mapping) else {}
+    except Exception:
+        pass
+    return {}
+
+
+# ============================================================================
+# Entry-point
+# ============================================================================
 
 
 def analyze_dlna_server(device: DLNADevice | None = None) -> None:
-    if device is None:
-        device = _ask_dlna_device()
+    t0 = time.monotonic()
+    reset_omdb_metrics()
+
+    client = DLNAClient()
+    global_dedupe = _GlobalDedupeState(seen_item_urls=set(), seen_item_ids=set())
+    limits: TraversalLimits = build_traversal_limits()
+
+    try:
         if device is None:
+            picked = client.ask_user_to_select_device()
+            if picked is None:
+                return
+            device = picked
+
+        server_label = f"{device.friendly_name} ({device.host}:{device.port})"
+        logger.progress(f"[DLNA] Servidor: {server_label}")
+
+        if DEBUG_MODE:
+            logger.debug_ctx("DLNA", f"location={device.location!r}")
+            logger.debug_ctx(
+                "DLNA",
+                "traverse_limits: "
+                f"max_depth={limits.max_depth} max_containers={limits.max_containers} "
+                f"max_items_total={limits.max_items_total} max_empty_pages={limits.max_empty_pages} "
+                f"max_pages_per_container={limits.max_pages_per_container}",
+            )
+
+        picked_containers = client.ask_user_to_select_video_containers(device)
+        if picked_containers is None:
             return
 
-    roots = _list_video_root_containers(device)
-    if not roots:
-        _logger.error("[DLNA] No se han encontrado contenedores raíz de vídeo.", always=True)
-        return
+        chosen_root, selected_containers = picked_containers
 
-    chosen_root: _DlnaContainer
-    if len(roots) == 1:
-        chosen_root = roots[0]
-    else:
-        _logger.info("\nDirectorios raíz de vídeo (Enter cancela):", always=True)
-        for idx, c in enumerate(roots, start=1):
-            _logger.info(f"  {idx}) {c.title}", always=True)
+        if not SILENT_MODE:
+            logger.progress(f"[DLNA] Raíz de vídeo: {chosen_root.title}")
 
-        while True:
-            raw = input(
-                f"Selecciona un directorio de vídeo (1-{len(roots)}) o pulsa Enter para cancelar: "
-            ).strip()
-            if raw == "":
-                _logger.info("[DLNA] Operación cancelada.", always=True)
+        scan_workers = _compute_scan_workers()
+        analyze_workers = _compute_max_workers(PLEX_ANALYZE_WORKERS)
+        max_inflight = _compute_max_inflight(analyze_workers)
+
+        if SILENT_MODE:
+            logger.progress(
+                f"[DLNA] Concurrency: scan_workers={scan_workers} analyze_workers={analyze_workers} inflight_cap={max_inflight} | "
+                f"(PLEX_ANALYZE_WORKERS={PLEX_ANALYZE_WORKERS}, OMDB_HTTP_MAX_CONCURRENCY={OMDB_HTTP_MAX_CONCURRENCY}, "
+                f"OMDB_HTTP_MIN_INTERVAL_SECONDS={OMDB_HTTP_MIN_INTERVAL_SECONDS})"
+            )
+        else:
+            logger.debug_ctx(
+                "DLNA",
+                f"Concurrency: scan_workers={scan_workers} analyze_workers={analyze_workers} inflight_cap={max_inflight} "
+                f"(cap por OMDb limiter, OMDB_HTTP_MIN_INTERVAL_SECONDS={OMDB_HTTP_MIN_INTERVAL_SECONDS})",
+            )
+
+        filtered_rows: list[_Row] = []
+        decisions_count: dict[str, int] = {"KEEP": 0, "MAYBE": 0, "DELETE": 0, "UNKNOWN": 0}
+        total_items_processed = 0
+        total_items_errors = 0
+        total_rows_written = 0
+        total_suggestions_written = 0
+        container_omdb_delta_analyze: dict[str, dict[str, int]] = {}
+
+        analyze_snapshot_start: dict[str, object] | None = None
+        if SILENT_MODE and DEBUG_MODE:
+            analyze_snapshot_start = dict(get_omdb_metrics_snapshot())
+            _log_omdb_metrics(prefix="[DLNA][DEBUG] analyze: start:")
+
+        def _maybe_print_item_logs(logs: list[str]) -> None:
+            if not logs:
                 return
-            if not raw.isdigit():
-                _logger.warning("Opción no válida. Debe ser un número.", always=True)
-                continue
-            n = int(raw)
-            if not (1 <= n <= len(roots)):
-                _logger.warning("Opción fuera de rango.", always=True)
-                continue
-            chosen_root = roots[n - 1]
-            break
+            if not SILENT_MODE:
+                for line in logs:
+                    logger.info(line)
+                return
+            if DEBUG_MODE:
+                for line in logs:
+                    logger.info(line, always=True)
 
-    base = _auto_descend_folder_browse(device, chosen_root)
+        def _tally_decision(row: Mapping[str, object]) -> None:
+            d = row.get("decision")
+            if d in ("KEEP", "MAYBE", "DELETE"):
+                decisions_count[str(d)] += 1
+            else:
+                decisions_count["UNKNOWN"] += 1
 
-    selected_containers: list[_DlnaContainer] | None
-    if _is_plex_server(device):
-        selected_containers = _select_folders_plex(base, device)
-    else:
-        selected_containers = _select_folders_non_plex(base, device)
+        def _apply_global_dedupe(container_title: str, items: list[DlnaVideoItem]) -> list[DlnaVideoItem]:
+            if not items:
+                return items
 
-    if selected_containers is None:
-        return
+            out: list[DlnaVideoItem] = []
+            for it in items:
+                if it.item_id and it.item_id in global_dedupe.seen_item_ids:
+                    global_dedupe.skipped_global += 1
+                    continue
+                if it.resource_url in global_dedupe.seen_item_urls:
+                    global_dedupe.skipped_global += 1
+                    continue
 
-    candidates: list[tuple[str, str, int | None, str]] = []
-    for container in selected_containers:
-        if container.title in EXCLUDE_DLNA_LIBRARIES:
-            _logger.info(f"[DLNA] Omitiendo '{container.title}' por EXCLUDE_DLNA_LIBRARIES.", always=True)
-            continue
+                if it.item_id:
+                    global_dedupe.seen_item_ids.add(it.item_id)
+                global_dedupe.seen_item_urls.add(it.resource_url)
+                out.append(it)
 
-        items = _iter_video_items_recursive(device, container.object_id)
-        for it in items:
-            candidates.append((it.title, it.resource_url, it.size_bytes, container.title))
+            if DEBUG_MODE and (len(out) != len(items)):
+                logger.debug_ctx(
+                    "DLNA",
+                    f"global_dedupe: container={container_title!r} in={len(items)} out={len(out)} skipped={len(items)-len(out)}",
+                )
+            return out
 
-    if not candidates:
-        _logger.info("[DLNA] No se han encontrado items de vídeo para analizar.", always=True)
-        return
+        def _analyze_one(
+            *,
+            raw_title: str,
+            resource_url: str,
+            file_size: int | None,
+            library: str,
+        ) -> _AnalyzeResult:
+            # Construimos un "file_path" lógico + URL para inferencias
+            display_file, file_url = _dlna_display_file(client, library, raw_title, resource_url)
 
-    _logger.info(f"[DLNA] Analizando {len(candidates)} item(s) de vídeo...", always=True)
+            # ✅ NUEVO: title/year/imdb_hint best-effort desde title + filename/url/display_file
+            best_title, best_year, imdb_hint, extra_patch = _derive_best_title_year_imdb(
+                raw_title=raw_title,
+                resource_url=file_url,
+                display_file=display_file,
+            )
 
-    all_rows: list[dict[str, object]] = []
-    suggestions_rows: list[dict[str, object]] = []
+            movie_input = MovieInput(
+                source="dlna",
+                library=library,
+                title=best_title,
+                year=best_year,
+                file_path=display_file,
+                file_size_bytes=file_size,
+                imdb_id_hint=imdb_hint,
+                plex_guid=None,
+                rating_key=None,
+                thumb_url=None,
+                extra={
+                    "source_url": file_url,
+                    "display_title": best_title,
+                    "display_year": best_year,
+                    **extra_patch,
+                },
+            )
 
-    for raw_title, resource_url, file_size, library in candidates:
-        clean_title, extracted_year = _extract_year_from_title(raw_title)
-        display_file, file_url = _dlna_display_file(library, raw_title, resource_url)
+            row, meta_sugg, logs = analyze_movie(movie_input, source_movie=None)
 
-        movie_input = MovieInput(
-            source="dlna",
-            library=library,
-            title=clean_title,
-            year=extracted_year,
-            file_path=display_file,
-            file_size_bytes=file_size,
-            imdb_id_hint=None,
-            plex_guid=None,
-            rating_key=None,
-            thumb_url=None,
-            extra={
-                "source_url": file_url,
-            },
+            if row is not None:
+                row["file"] = display_file
+                row["file_url"] = file_url
+
+            return row, meta_sugg, logs
+
+        def _handle_result(
+            res: _AnalyzeResult,
+            *,
+            all_writer: _RowWriter,
+            sugg_writer: _RowWriter,
+        ) -> None:
+            nonlocal total_rows_written, total_suggestions_written
+
+            row, meta_sugg, logs = res
+            _maybe_print_item_logs(logs)
+
+            if row:
+                all_writer.write_row(row)
+                total_rows_written += 1
+                _tally_decision(row)
+                if row.get("decision") in {"DELETE", "MAYBE"}:
+                    filtered_rows.append(dict(row))
+
+            if meta_sugg:
+                sugg_writer.write_row(meta_sugg)
+                total_suggestions_written += 1
+
+        with open_all_csv_writer(REPORT_ALL_PATH) as all_writer, open_suggestions_csv_writer(METADATA_FIX_PATH) as sugg_writer:
+
+            def _scan_container(c: DlnaContainer) -> _ScanResult:
+                METRICS.incr("dlna.scan.containers")
+                t_scan0 = time.monotonic()
+                items, _stats = client.iter_video_items_recursive(device, c.object_id, limits=limits)
+                METRICS.observe_ms("dlna.scan.container_latency_ms", (time.monotonic() - t_scan0) * 1000.0)
+                return c.title, items
+
+            # ============================================================
+            # MODO INTERACTIVO (no-silent): escaneamos secuencial y analizamos por contenedor
+            # ============================================================
+            if not SILENT_MODE:
+                candidates_by_container: dict[str, list[DlnaVideoItem]] = {}
+                total_candidates = 0
+
+                total_containers = len(selected_containers)
+                for idx, container in enumerate(selected_containers, start=1):
+                    logger.progress(f"[DLNA] Escaneando contenedor ({idx}/{total_containers}): {container.title}")
+
+                    items, _stats = client.iter_video_items_recursive(device, container.object_id, limits=limits)
+                    items = _apply_global_dedupe(container.title, items)
+
+                    if DEBUG_MODE:
+                        logger.debug_ctx("DLNA", f"scan {container.title!r} items={len(items)}")
+
+                    bucket = candidates_by_container.setdefault(container.title, [])
+                    bucket.extend(items)
+                    total_candidates += len(items)
+
+                if total_candidates == 0:
+                    logger.progress("[DLNA] No se han encontrado items de vídeo.")
+                    return
+
+                logger.progress(f"[DLNA] Candidatos a analizar: {total_candidates}")
+                analyzed_so_far = 0
+
+                for container_title, items in candidates_by_container.items():
+                    if not items:
+                        continue
+
+                    logger.progress(f"[DLNA] Analizando contenedor: {container_title} (items={len(items)})")
+
+                    future_to_index: dict[_AnalyzeFuture, int] = {}
+                    pending_by_index: dict[int, _AnalyzeResult] = {}
+                    next_to_write = 1
+
+                    # ✅ renombrado para evitar [no-redef] con el modo SILENT
+                    inflight_interactive: set[_AnalyzeFuture] = set()
+
+                    def _drain_completed_interactive(*, drain_all: bool) -> None:
+                        nonlocal next_to_write, total_items_processed, total_items_errors
+
+                        while inflight_interactive:
+                            done, _ = wait(inflight_interactive, return_when=FIRST_COMPLETED)
+                            if not done:
+                                return
+
+                            for fut in done:
+                                inflight_interactive.discard(fut)
+                                idx_local = future_to_index.get(fut, -1)
+
+                                try:
+                                    res = fut.result()
+                                except Exception as exc:  # pragma: no cover
+                                    total_items_errors += 1
+                                    METRICS.incr("dlna.analyze.future_errors")
+                                    METRICS.add_error("dlna", "analyze_future", endpoint=None, detail=repr(exc))
+                                    logger.error(f"[DLNA] Error analizando item (future): {exc!r}", always=True)
+                                    total_items_processed += 1
+                                    continue
+
+                                if idx_local >= 1:
+                                    pending_by_index[idx_local] = res
+
+                                while next_to_write in pending_by_index:
+                                    ready = pending_by_index.pop(next_to_write)
+                                    _handle_result(ready, all_writer=all_writer, sugg_writer=sugg_writer)
+                                    total_items_processed += 1
+                                    next_to_write += 1
+
+                            if not drain_all:
+                                return
+
+                    workers_here = min(analyze_workers, max(1, len(items)))
+                    inflight_cap_here = min(max_inflight, max(1, len(items)))
+
+                    with ThreadPoolExecutor(max_workers=workers_here) as executor:
+                        for item_index, it in enumerate(items, start=1):
+                            analyzed_so_far += 1
+
+                            # ✅ progreso: usa year derivable del propio it.title (rápido), sin parsear URL aquí
+                            clean_title_preview, extracted_year_preview = _extract_year_from_title(it.title)
+                            display_title = it.title if DEBUG_MODE else clean_title_preview
+
+                            logger.info(
+                                _format_item_progress_line(
+                                    index=analyzed_so_far,
+                                    total=total_candidates,
+                                    title=display_title,
+                                    year=extracted_year_preview,
+                                    file_size_bytes=it.size_bytes,
+                                )
+                            )
+
+                            fut = executor.submit(
+                                _analyze_one,
+                                raw_title=it.title,
+                                resource_url=it.resource_url,
+                                file_size=it.size_bytes,
+                                library=container_title,
+                            )
+                            future_to_index[fut] = item_index
+                            inflight_interactive.add(fut)
+
+                            if len(inflight_interactive) >= inflight_cap_here:
+                                _drain_completed_interactive(drain_all=False)
+
+                        _drain_completed_interactive(drain_all=True)
+
+                    while next_to_write in pending_by_index:
+                        ready = pending_by_index.pop(next_to_write)
+                        _handle_result(ready, all_writer=all_writer, sugg_writer=sugg_writer)
+                        total_items_processed += 1
+                        next_to_write += 1
+
+            # ============================================================
+            # MODO SILENT: scanning concurrente + análisis en streaming
+            # ============================================================
+            else:
+                total_containers = len(selected_containers)
+                total_candidates = 0
+                analyzed_so_far = 0
+
+                with ThreadPoolExecutor(max_workers=scan_workers) as scan_pool, ThreadPoolExecutor(
+                    max_workers=analyze_workers
+                ) as analyze_pool:
+                    scan_futures: list[_ScanFuture] = []
+                    for idx, c in enumerate(selected_containers, start=1):
+                        logger.progress(f"[DLNA] Escaneando contenedor ({idx}/{total_containers}): {c.title}")
+                        scan_futures.append(scan_pool.submit(_scan_container, c))
+
+                    for sf in as_completed(scan_futures):
+                        try:
+                            container_title, items = sf.result()
+                        except Exception as exc:  # pragma: no cover
+                            METRICS.incr("dlna.scan.errors")
+                            METRICS.add_error("dlna", "scan_container", endpoint=None, detail=repr(exc))
+                            logger.error(f"[DLNA] Error escaneando contenedor (future): {exc!r}", always=True)
+                            continue
+
+                        items = _apply_global_dedupe(container_title, items)
+                        container_key = container_title or "<container>"
+                        total_candidates += len(items)
+
+                        if DEBUG_MODE:
+                            logger.debug_ctx("DLNA", f"scan {container_title!r} items={len(items)}")
+
+                        if not items:
+                            continue
+
+                        logger.progress(f"[DLNA] Analizando contenedor: {container_title} (items={len(items)})")
+
+                        analyze_snap_start_container: dict[str, object] | None = None
+                        if DEBUG_MODE:
+                            analyze_snap_start_container = dict(get_omdb_metrics_snapshot())
+                            _log_omdb_metrics(prefix=f"[DLNA][DEBUG] {container_key}: analyze:start:")
+
+                        inflight_silent: set[_AnalyzeFuture] = set()
+                        inflight_cap_here = min(max_inflight, max(1, len(items)))
+
+                        def _drain_completed_silent(*, drain_all: bool) -> None:
+                            nonlocal total_items_processed, total_items_errors
+
+                            while inflight_silent:
+                                done, _ = wait(inflight_silent, return_when=FIRST_COMPLETED)
+                                if not done:
+                                    return
+
+                                for af in done:
+                                    inflight_silent.discard(af)
+                                    try:
+                                        res = af.result()
+                                    except Exception as exc:  # pragma: no cover
+                                        total_items_errors += 1
+                                        METRICS.incr("dlna.analyze.future_errors")
+                                        METRICS.add_error("dlna", "analyze_future", endpoint=None, detail=repr(exc))
+                                        logger.error(f"[DLNA] Error analizando item (future): {exc!r}", always=True)
+                                        total_items_processed += 1
+                                        continue
+
+                                    _handle_result(res, all_writer=all_writer, sugg_writer=sugg_writer)
+                                    total_items_processed += 1
+
+                                if not drain_all:
+                                    return
+
+                        for it in items:
+                            analyzed_so_far += 1
+                            if DEBUG_MODE and (analyzed_so_far % _PROGRESS_EVERY_N_ITEMS == 0):
+                                logger.progress(f"[DLNA][DEBUG] Progreso: analizados {analyzed_so_far} items...")
+
+                            inflight_silent.add(
+                                analyze_pool.submit(
+                                    _analyze_one,
+                                    raw_title=it.title,
+                                    resource_url=it.resource_url,
+                                    file_size=it.size_bytes,
+                                    library=container_title,
+                                )
+                            )
+
+                            if len(inflight_silent) >= inflight_cap_here:
+                                _drain_completed_silent(drain_all=False)
+
+                        _drain_completed_silent(drain_all=True)
+
+                        if DEBUG_MODE and analyze_snap_start_container is not None:
+                            analyze_delta_container = _metrics_diff(analyze_snap_start_container, get_omdb_metrics_snapshot())
+                            container_omdb_delta_analyze[container_key] = dict(analyze_delta_container)
+                            _log_omdb_metrics(
+                                prefix=f"[DLNA][DEBUG] {container_key}: analyze:delta:",
+                                metrics=_as_object_mapping(analyze_delta_container),
+                            )
+
+                if total_candidates == 0 and _counter_int(_safe_snapshot_counters(), "dlna.scan.errors") == 0:
+                    logger.progress("[DLNA] No se han encontrado items de vídeo.")
+                    return
+
+                logger.progress(f"[DLNA] Candidatos detectados (streaming): {total_candidates}")
+
+        filtered_csv_status = "SKIPPED (0 rows)"
+        filtered_len = 0
+
+        if filtered_rows:
+            filtered = sort_filtered_rows(filtered_rows)
+            filtered_len = len(filtered)
+            with open_filtered_csv_writer_only_if_rows(REPORT_FILTERED_PATH) as fw:
+                for r in filtered:
+                    fw.write_row(r)
+            filtered_csv_status = f"OK ({filtered_len} rows)"
+
+        elapsed = time.monotonic() - t0
+
+        if SILENT_MODE and DEBUG_MODE and analyze_snapshot_start is not None:
+            analyze_delta = _metrics_diff(analyze_snapshot_start, get_omdb_metrics_snapshot())
+            _log_omdb_metrics(prefix="[DLNA][DEBUG] analyze: delta:", metrics=_as_object_mapping(analyze_delta))
+
+        counters = _safe_snapshot_counters()
+        dlna_scan_errors = _counter_int(counters, "dlna.scan.errors") + _counter_int(counters, "dlna.browse.errors")
+        dlna_circuit_blocks = _counter_int(counters, "dlna.browse.blocked_by_circuit") + _counter_int(
+            counters, "dlna.xml_fetch.blocked_by_circuit"
         )
 
+        if SILENT_MODE:
+            logger.progress(
+                "[DLNA] Resumen final: "
+                f"server={server_label} containers={len(selected_containers)} "
+                f"scan_workers={_compute_scan_workers()} analyze_workers={_compute_max_workers(PLEX_ANALYZE_WORKERS)} "
+                f"inflight_cap={_compute_max_inflight(_compute_max_workers(PLEX_ANALYZE_WORKERS))} "
+                f"time={elapsed:.1f}s | "
+                f"scan_errors={dlna_scan_errors} circuit_blocks={dlna_circuit_blocks} analysis_errors={total_items_errors} | "
+                f"items={total_items_processed} rows={total_rows_written} "
+                f"(KEEP={decisions_count['KEEP']} MAYBE={decisions_count['MAYBE']} "
+                f"DELETE={decisions_count['DELETE']} UNKNOWN={decisions_count['UNKNOWN']}) | "
+                f"filtered_rows={filtered_len} filtered_csv={filtered_csv_status} "
+                f"suggestions={total_suggestions_written}"
+            )
+
+            if global_dedupe.skipped_global > 0:
+                logger.progress(f"[DLNA] Dedupe global: evitados {global_dedupe.skipped_global} items duplicados entre contenedores.")
+
+            logger.progress(
+                "[DLNA] CSVs: "
+                f"all={REPORT_ALL_PATH} | suggestions={METADATA_FIX_PATH} | filtered={REPORT_FILTERED_PATH}"
+            )
+
+            _log_omdb_metrics(prefix="[DLNA][DEBUG] Global:")
+
+            if DEBUG_MODE and container_omdb_delta_analyze:
+                _log_omdb_rankings(container_omdb_delta_analyze, min_groups=2)
+
+        logger.info("[DLNA] Análisis completado.", always=True)
+
+    finally:
         try:
-            row, meta_sugg, logs = analyze_movie(movie_input, source_movie=None)
+            flush_external_caches()
         except Exception as exc:  # pragma: no cover
-            _logger.error(f"[DLNA] Error analizando {file_url}: {exc}", always=True)
-            continue
+            if DEBUG_MODE:
+                logger.debug_ctx("DLNA", f"flush_external_caches failed: {exc!r}")
 
-        for log in logs:
-            _logger.info(log)
 
-        if row:
-            # Mantener compatibilidad con tu pipeline actual:
-            row["file_url"] = file_url
-            row["file"] = display_file
-            all_rows.append(row)
-
-        if meta_sugg:
-            suggestions_rows.append(meta_sugg)
-
-    if not all_rows:
-        _logger.info("[DLNA] No se han generado filas de análisis.", always=True)
-        return
-
-    filtered_rows = [r for r in all_rows if r.get("decision") in {"DELETE", "MAYBE"}]
-    filtered_rows = sort_filtered_rows(filtered_rows) if filtered_rows else []
-
-    write_all_csv(REPORT_ALL_PATH, all_rows)
-    write_filtered_csv(REPORT_FILTERED_PATH, filtered_rows)
-    write_suggestions_csv(METADATA_FIX_PATH, suggestions_rows)
-
-    _logger.info(
-        (
-            f"[DLNA] Análisis completado. CSV completo: {REPORT_ALL_PATH} | "
-            f"CSV filtrado: {REPORT_FILTERED_PATH}"
-        ),
-        always=True,
-    )
+__all__ = ["analyze_dlna_server"]

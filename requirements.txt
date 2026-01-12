@@ -1,28 +1,6 @@
-# Runtime dependencies for Analiza Movies
-# --------------------------------------
-# Core runtime libraries required to run the application
-# (CLI analysis + Streamlit dashboard)
+# Runtime install (editable) for local/dev usage.
+# The canonical list of runtime deps lives in setup.py:install_requires.
+-e .
 
-python-dotenv>=1.0
-requests>=2.31
-plexapi>=4.15
-pandas>=2.1
-
-# Streamlit and UI stack
-streamlit>=1.32
-streamlit-aggrid>=0.3.4
-altair>=5.2
-
-# Optional but strongly recommended:
-# Improves Streamlit hot-reload performance and removes startup warning
-watchdog>=3.0
-
-# --------------------------------------------------------------------
-# Development notes:
-#
-# If you are developing locally, prefer installing the package
-# in editable mode with dev extras:
-#
-#   pip install -e .[dev]
-#
-# Only use this requirements file for dev tooling if strictly necessary.
+# Optional extras:
+# -e .[viz]
