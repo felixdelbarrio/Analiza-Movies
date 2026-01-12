@@ -1,5 +1,7 @@
 # 🎬 Analiza Movies
 
+[![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://paypal.me/felixdelbarrio)
+
 > **EN / ES – Bilingual Documentation**  
 > Intelligent Media Library Analysis Platform
 
@@ -22,6 +24,13 @@ It combines **automated analysis**, **intelligent scoring**, **interactive dashb
 - 📈 Interactive dashboards and exportable reports  
 - 🔌 REST API ready for integrations  
 - 🛡️ Robust, modular, and scalable architecture  
+
+---
+
+### 💖 Support
+
+If you find this project useful, you can support its development here:  
+➡️ https://paypal.me/felixdelbarrio
 
 ---
 
@@ -81,6 +90,13 @@ Combina **análisis automático**, **scoring inteligente**, **dashboards interac
 - 📈 Dashboards interactivos y reportes exportables  
 - 🔌 API REST lista para integraciones  
 - 🛡️ Arquitectura robusta, modular y escalable  
+
+---
+
+### 💖 Apóyame
+
+Si este proyecto te resulta útil, puedes apoyarlo aquí:  
+➡️ https://paypal.me/felixdelbarrio
 
 ---
 
