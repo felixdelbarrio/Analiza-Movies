@@ -96,7 +96,9 @@ except Exception:  # pragma: no cover
 
 _PLEX_RUN_METRICS_ENABLED: bool = bool(getattr(_cfg, "PLEX_RUN_METRICS_ENABLED", True))
 
-_PLEX_LIBRARY_LANGUAGE_DEFAULT: str = cast(str, getattr(_cfg, "PLEX_LIBRARY_LANGUAGE_DEFAULT", "es"))
+_PLEX_LIBRARY_LANGUAGE_DEFAULT: str = cast(
+    str, getattr(_cfg, "PLEX_LIBRARY_LANGUAGE_DEFAULT", "es")
+)
 
 _PLEX_LIBRARY_LANGUAGE_BY_NAME: dict[str, str] = cast(
     dict[str, str],
@@ -119,7 +121,9 @@ METADATA_FIX_PATH: str = str(getattr(_cfg, "METADATA_FIX_PATH"))
 
 # OMDb knobs (solo para capear workers; no hacemos lógica OMDb aquí)
 OMDB_HTTP_MAX_CONCURRENCY: int = int(getattr(_cfg, "OMDB_HTTP_MAX_CONCURRENCY", 2))
-OMDB_HTTP_MIN_INTERVAL_SECONDS: float = float(getattr(_cfg, "OMDB_HTTP_MIN_INTERVAL_SECONDS", 0.10))
+OMDB_HTTP_MIN_INTERVAL_SECONDS: float = float(
+    getattr(_cfg, "OMDB_HTTP_MIN_INTERVAL_SECONDS", 0.10)
+)
 
 
 # -----------------------------------------------------------------------------
@@ -293,9 +297,13 @@ def analyze_all_libraries() -> None:
         # “Conectores” sensibles: se benefician de resilience si está disponible.
         try:
             plex = _with_resilience(connect_plex, label="plex.connect")
-            raw_libraries = _with_resilience(lambda: get_libraries_to_analyze(plex), label="plex.list_libraries")
+            raw_libraries = _with_resilience(
+                lambda: get_libraries_to_analyze(plex), label="plex.list_libraries"
+            )
         except Exception as exc:
-            logger.error(f"[PLEX] Error conectando/listando bibliotecas: {exc!r}", always=True)
+            logger.error(
+                f"[PLEX] Error conectando/listando bibliotecas: {exc!r}", always=True
+            )
             _rm_inc("plex.run.fatal_error", 1)
             return
 
@@ -314,7 +322,10 @@ def analyze_all_libraries() -> None:
         _rm_set("plex.libraries.excluded", len(excluded))
 
         if SILENT_MODE and excluded:
-            logger.progress("[PLEX] Bibliotecas excluidas por configuración: " + ", ".join(sorted(excluded)))
+            logger.progress(
+                "[PLEX] Bibliotecas excluidas por configuración: "
+                + ", ".join(sorted(excluded))
+            )
 
         if total_libs == 0:
             logger.progress("[PLEX] No hay bibliotecas para analizar (0).")
@@ -322,7 +333,12 @@ def analyze_all_libraries() -> None:
             return
 
         filtered_rows: list[dict[str, object]] = []
-        decisions_count: dict[str, int] = {"KEEP": 0, "MAYBE": 0, "DELETE": 0, "UNKNOWN": 0}
+        decisions_count: dict[str, int] = {
+            "KEEP": 0,
+            "MAYBE": 0,
+            "DELETE": 0,
+            "UNKNOWN": 0,
+        }
 
         total_movies_processed = 0
         total_movies_errors = 0
@@ -407,12 +423,17 @@ def analyze_all_libraries() -> None:
         # =========================================================================
         # Writers (streaming global)
         # =========================================================================
-        with open_all_csv_writer(REPORT_ALL_PATH) as all_writer, open_suggestions_csv_writer(METADATA_FIX_PATH) as sugg_writer:
+        with (
+            open_all_csv_writer(REPORT_ALL_PATH) as all_writer,
+            open_suggestions_csv_writer(METADATA_FIX_PATH) as sugg_writer,
+        ):
             for lib_index, library in enumerate(libraries, start=1):
                 lib_name = _library_title(library)
                 lib_key = lib_name or f"<lib_{lib_index}>"
 
-                logger.progress(f"[PLEX] ({lib_index}/{total_libs}) {lib_name or '<sin nombre>'}")
+                logger.progress(
+                    f"[PLEX] ({lib_index}/{total_libs}) {lib_name or '<sin nombre>'}"
+                )
                 if not SILENT_MODE:
                     logger.info(f"Analizando biblioteca Plex: {lib_name}")
 
@@ -433,20 +454,34 @@ def analyze_all_libraries() -> None:
                 movies_iter, total_movies_in_library = _iter_movies_with_total(library)
 
                 future_to_index: dict[
-                    Future[tuple[dict[str, object] | None, dict[str, object] | None, list[str]]],
+                    Future[
+                        tuple[
+                            dict[str, object] | None,
+                            dict[str, object] | None,
+                            list[str],
+                        ]
+                    ],
                     int,
                 ] = {}
 
                 next_to_write = 1
                 pending_by_index: dict[
                     int,
-                    tuple[dict[str, object] | None, dict[str, object] | None, list[str]],
+                    tuple[
+                        dict[str, object] | None, dict[str, object] | None, list[str]
+                    ],
                 ] = {}
 
                 index_to_title_year: dict[int, tuple[str, int | None]] = {}
 
                 inflight: set[
-                    Future[tuple[dict[str, object] | None, dict[str, object] | None, list[str]]]
+                    Future[
+                        tuple[
+                            dict[str, object] | None,
+                            dict[str, object] | None,
+                            list[str],
+                        ]
+                    ]
                 ] = set()
 
                 def _drain_completed(*, drain_all: bool) -> None:
@@ -473,7 +508,9 @@ def analyze_all_libraries() -> None:
                                 total_movies_processed += 1
                                 _rm_inc("plex.movie.error", 1, library=lib_key)
 
-                                if (not SILENT_MODE) and (idx_local in index_to_title_year):
+                                if (not SILENT_MODE) and (
+                                    idx_local in index_to_title_year
+                                ):
                                     t, y = index_to_title_year[idx_local]
                                     logger.error(
                                         f"[PLEX] Error analizando '{t}' ({y or 'n/a'}) en '{lib_name}': {exc!r}",
@@ -517,7 +554,13 @@ def analyze_all_libraries() -> None:
 
                             lib_movies_completed += 1
 
-                            if SILENT_MODE and DEBUG_MODE and (lib_movies_completed % _PROGRESS_EVERY_N_MOVIES == 0):
+                            if (
+                                SILENT_MODE
+                                and DEBUG_MODE
+                                and (
+                                    lib_movies_completed % _PROGRESS_EVERY_N_MOVIES == 0
+                                )
+                            ):
                                 logger.progress(
                                     f"[PLEX][DEBUG] {lib_key}: completadas {lib_movies_completed}/{lib_movies_enqueued}..."
                                 )
@@ -525,12 +568,17 @@ def analyze_all_libraries() -> None:
                         if not drain_all:
                             return
 
-                with _RM_Timer("plex.library.seconds", library=lib_key), ThreadPoolExecutor(max_workers=max_workers) as executor:
+                with (
+                    _RM_Timer("plex.library.seconds", library=lib_key),
+                    ThreadPoolExecutor(max_workers=max_workers) as executor,
+                ):
                     for movie_index, movie in enumerate(movies_iter, start=1):
                         title = getattr(movie, "title", "") or ""
 
                         year_value = getattr(movie, "year", None)
-                        year: int | None = year_value if isinstance(year_value, int) else None
+                        year: int | None = (
+                            year_value if isinstance(year_value, int) else None
+                        )
 
                         guid = getattr(movie, "guid", None)
                         thumb = getattr(movie, "thumb", None)
@@ -549,7 +597,9 @@ def analyze_all_libraries() -> None:
                             )
 
                         rating_key_raw = getattr(movie, "ratingKey", None)
-                        rating_key: str | None = str(rating_key_raw) if rating_key_raw is not None else None
+                        rating_key: str | None = (
+                            str(rating_key_raw) if rating_key_raw is not None else None
+                        )
 
                         imdb_id_hint = get_imdb_id_from_movie(movie)
                         search_title = get_best_search_title(movie) or title
@@ -575,7 +625,9 @@ def analyze_all_libraries() -> None:
                             },
                         )
 
-                        fut = executor.submit(analyze_movie, movie_input, source_movie=movie)
+                        fut = executor.submit(
+                            analyze_movie, movie_input, source_movie=movie
+                        )
 
                         future_to_index[fut] = movie_index
                         inflight.add(fut)
@@ -585,8 +637,14 @@ def analyze_all_libraries() -> None:
                         if not SILENT_MODE:
                             index_to_title_year[movie_index] = (title, year)
 
-                        if SILENT_MODE and DEBUG_MODE and (movie_index % _PROGRESS_EVERY_N_MOVIES == 0):
-                            logger.progress(f"[PLEX][DEBUG] {lib_key}: encoladas {movie_index} películas...")
+                        if (
+                            SILENT_MODE
+                            and DEBUG_MODE
+                            and (movie_index % _PROGRESS_EVERY_N_MOVIES == 0)
+                        ):
+                            logger.progress(
+                                f"[PLEX][DEBUG] {lib_key}: encoladas {movie_index} películas..."
+                            )
 
                         if len(inflight) >= max_inflight:
                             _drain_completed(drain_all=False)
@@ -623,8 +681,12 @@ def analyze_all_libraries() -> None:
                         f"rows={lib_rows_written['v']} suggestions={lib_suggestions_written['v']}"
                     )
 
-                _rm_set("plex.library.movies.enqueued", lib_movies_enqueued, library=lib_key)
-                _rm_set("plex.library.movies.errors", lib_movies_errors, library=lib_key)
+                _rm_set(
+                    "plex.library.movies.enqueued", lib_movies_enqueued, library=lib_key
+                )
+                _rm_set(
+                    "plex.library.movies.errors", lib_movies_errors, library=lib_key
+                )
 
         # =========================================================================
         # filtered report (solo si hay DELETE/MAYBE)

@@ -5,7 +5,9 @@ def test_circuit_breaker_transitions(monkeypatch):
     now = [0.0]
     monkeypatch.setattr(res.time, "monotonic", lambda: now[0])
 
-    breaker = res.CircuitBreaker(failure_threshold=2, open_seconds=1.0, half_open_max_calls=1)
+    breaker = res.CircuitBreaker(
+        failure_threshold=2, open_seconds=1.0, half_open_max_calls=1
+    )
 
     allowed, reason = breaker.allow("svc")
     assert allowed is True

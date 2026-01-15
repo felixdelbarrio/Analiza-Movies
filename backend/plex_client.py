@@ -345,7 +345,9 @@ def _is_networkish_exception(exc: BaseException) -> bool:
     - nombres típicos de http.client / urllib3 (RemoteDisconnected, ProtocolError, timeouts, resets)
     """
     try:
-        if isinstance(exc, (requests.exceptions.RequestException, OSError, ConnectionError)):
+        if isinstance(
+            exc, (requests.exceptions.RequestException, OSError, ConnectionError)
+        ):
             return True
     except Exception:
         pass
@@ -379,7 +381,9 @@ def _safe_getattr(obj: object, attr: str, default: Any = None) -> Any:
     except Exception as exc:
         if _is_networkish_exception(exc):
             _metrics_inc_network_attr_error(attr, exc)
-            _log_always(f"[PLEX] Network error reading attribute {attr!r} (lazy reload skipped): {exc!r}")
+            _log_always(
+                f"[PLEX] Network error reading attribute {attr!r} (lazy reload skipped): {exc!r}"
+            )
             return default
 
         _metrics_inc_helper_failure("_safe_getattr", exc)
@@ -426,7 +430,12 @@ def connect_plex() -> PlexServer:
     - Faltan BASEURL/PLEX_TOKEN -> RuntimeError
     - Fallo de conexión -> se re-lanza (caller decide)
     """
-    if not BASEURL or not str(BASEURL).strip() or not PLEX_TOKEN or not str(PLEX_TOKEN).strip():
+    if (
+        not BASEURL
+        or not str(BASEURL).strip()
+        or not PLEX_TOKEN
+        or not str(PLEX_TOKEN).strip()
+    ):
         raise RuntimeError("Faltan BASEURL o PLEX_TOKEN en el .env")
 
     base_url = _build_plex_base_url()
@@ -520,7 +529,11 @@ def get_movie_file_info(movie: object) -> tuple[str | None, int | None]:
                 file_path = _safe_getattr(part, "file", None)
                 size_val = _safe_getattr(part, "size", None)
 
-                if best_path is None and isinstance(file_path, str) and file_path.strip():
+                if (
+                    best_path is None
+                    and isinstance(file_path, str)
+                    and file_path.strip()
+                ):
                     best_path = file_path.strip()
 
                 if isinstance(size_val, bool):
@@ -607,6 +620,7 @@ def get_original_title(movie: object) -> str | None:
     con ``_safe_getattr_str`` para que un fallo puntual no rompa el run.
     """
     return _safe_getattr_str(movie, "originalTitle")
+
 
 def get_best_search_title(movie: object) -> str | None:
     """

@@ -10,7 +10,7 @@ def main() -> None:
     port = int(os.getenv("API_PORT", "8000"))
 
     # Default seguro: sin env var -> no reload
-    reload = (os.getenv("API_RELOAD", "0") == "1")
+    reload = os.getenv("API_RELOAD", "0") == "1"
 
     uvicorn.run(
         "server.am_api:app",

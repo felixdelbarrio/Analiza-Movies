@@ -152,7 +152,9 @@ def _fetch_df_paginated(
     return df
 
 
-def fetch_report_all_df(*, base_url: str, timeout_s: float, page_size: int, query: str | None = None) -> pd.DataFrame:
+def fetch_report_all_df(
+    *, base_url: str, timeout_s: float, page_size: int, query: str | None = None
+) -> pd.DataFrame:
     df = _fetch_df_paginated(
         base_url=base_url,
         endpoint="/reports/all",
@@ -179,7 +181,9 @@ def fetch_report_filtered_df(
     )
 
 
-def fetch_metadata_fix_df(*, base_url: str, timeout_s: float, page_size: int, query: str | None = None) -> pd.DataFrame:
+def fetch_metadata_fix_df(
+    *, base_url: str, timeout_s: float, page_size: int, query: str | None = None
+) -> pd.DataFrame:
     df = _fetch_df_paginated(
         base_url=base_url,
         endpoint="/reports/metadata-fix",

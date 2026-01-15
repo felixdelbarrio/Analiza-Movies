@@ -58,7 +58,9 @@ def ready(cache: FileCache = Depends(get_file_cache)) -> dict[str, Any]:
                 else:
                     _ = cache.load_json(p)
             elif p.suffix.lower() == ".csv":
-                _ = cache.load_csv(p, text_columns=["poster_url", "trailer_url", "omdb_json"])
+                _ = cache.load_csv(
+                    p, text_columns=["poster_url", "trailer_url", "omdb_json"]
+                )
         except Exception as exc:
             issues[k] = f"unreadable: {p} ({exc!r})"
 

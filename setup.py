@@ -5,9 +5,7 @@ from setuptools import find_packages, setup
 # Load README.md as long description
 readme_path = Path(__file__).parent / "README.md"
 long_description = (
-    readme_path.read_text(encoding="utf-8")
-    if readme_path.exists()
-    else ""
+    readme_path.read_text(encoding="utf-8") if readme_path.exists() else ""
 )
 
 setup(
@@ -29,20 +27,16 @@ setup(
         "requests>=2.31",
         "urllib3>=2.0",
         "typing_extensions>=4.9",
-
         # App runtime
         "plexapi>=4.15",
         "pandas>=2.1",
-
         # FastAPI server
         "fastapi>=0.110",
         "uvicorn[standard]>=0.27",
-
         # Streamlit UI
         "streamlit>=1.32",
         "altair>=5.2",
         "streamlit-aggrid>=0.3.4",
-
         # Recommended (hot reload / warning)
         "watchdog>=3.0",
     ],
@@ -53,16 +47,13 @@ setup(
             "ruff>=0.6",
             "pytest>=8.0",
             "pytest-cov>=4.1",
-
             # Typing / static analysis
             "mypy>=1.8",
             "pyright>=1.1.408",
-
             # Stubs
             "pandas-stubs>=2.1",
             "types-requests>=2.31",
             "types-python-dateutil>=2.8",
-
             # Some pandas-stubs expect these to be importable
             "matplotlib>=3.8",
             "xarray>=2024.1",

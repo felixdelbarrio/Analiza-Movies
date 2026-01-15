@@ -70,6 +70,7 @@ def _dbg(msg: object) -> None:
 # Tipos de reglas
 # =============================================================================
 
+
 class RuleHit(NamedTuple):
     rule_id: str
     name: str
@@ -80,6 +81,7 @@ class RuleHit(NamedTuple):
 # =============================================================================
 # Helpers defensivos
 # =============================================================================
+
 
 def _safe_imdb_id(value: object) -> str | None:
     if not isinstance(value, str):
@@ -112,7 +114,10 @@ def _should_run_title_similarity(pt_norm: str, ot_norm: str) -> bool:
         return False
     if pt_norm in ot_norm or ot_norm in pt_norm:
         return False
-    if len(pt_norm) < _MIN_TITLE_LEN_FOR_DIFFLIB or len(ot_norm) < _MIN_TITLE_LEN_FOR_DIFFLIB:
+    if (
+        len(pt_norm) < _MIN_TITLE_LEN_FOR_DIFFLIB
+        or len(ot_norm) < _MIN_TITLE_LEN_FOR_DIFFLIB
+    ):
         return False
     return True
 
@@ -202,7 +207,9 @@ def evaluate_misidentified_rules(
     pt_raw = plex_title if isinstance(plex_title, str) else ""
 
     # Normalización compare centralizada (recorte defensivo)
-    norm_opts = NormalizeOptions(max_len=_MAX_TITLE_LEN_FOR_COMPARE, strip_accents=False)
+    norm_opts = NormalizeOptions(
+        max_len=_MAX_TITLE_LEN_FOR_COMPARE, strip_accents=False
+    )
     pt_norm = normalize_title_for_compare(pt_raw, options=norm_opts)
     ot_norm = normalize_title_for_compare(omdb_title, options=norm_opts)
 
@@ -230,24 +237,30 @@ def evaluate_misidentified_rules(
 
         if not skip_title:
             sim, compared = _title_similarity(pt_norm, ot_norm)
-            title_bad = (sim is not None and sim < _TITLE_SIMILARITY_THRESHOLD)
+            title_bad = sim is not None and sim < _TITLE_SIMILARITY_THRESHOLD
 
             # ✅ Importante: "diverge" solo si REALMENTE hemos intentado comparar
             # (evita falsos positivos cuando la comparación se "skipped" por títulos cortos/substrings).
             if compared and sim is None and pt_norm and ot_norm and pt_norm != ot_norm:
                 cheap_title_diverge = True
 
-        year_bad = (year_delta is not None and year_delta > _YEAR_MISMATCH_MAX_DELTA)
+        year_bad = year_delta is not None and year_delta > _YEAR_MISMATCH_MAX_DELTA
 
         if title_bad or year_bad or cheap_title_diverge:
             parts: list[str] = []
             if year_bad:
-                parts.append(f"Year Plex={plex_year} vs OMDb={omdb_year_int} (delta={year_delta})")
+                parts.append(
+                    f"Year Plex={plex_year} vs OMDb={omdb_year_int} (delta={year_delta})"
+                )
             if not skip_title:
                 if title_bad and sim is not None:
-                    parts.append(f"Title sim={sim:.2f} Plex='{pt_raw}' vs OMDb='{omdb_title}'")
+                    parts.append(
+                        f"Title sim={sim:.2f} Plex='{pt_raw}' vs OMDb='{omdb_title}'"
+                    )
                 elif cheap_title_diverge:
-                    parts.append(f"Title compare failed Plex='{pt_raw}' vs OMDb='{omdb_title}'")
+                    parts.append(
+                        f"Title compare failed Plex='{pt_raw}' vs OMDb='{omdb_title}'"
+                    )
             else:
                 parts.append("Title compare skipped (likely localized vs EN)")
 
@@ -296,7 +309,9 @@ def evaluate_misidentified_rules(
                     )
                 )
         except Exception:
-            _dbg(f"year compare failed | plex_year={plex_year!r} omdb_year={omdb_data.get('Year')!r}")
+            _dbg(
+                f"year compare failed | plex_year={plex_year!r} omdb_year={omdb_data.get('Year')!r}"
+            )
 
     # Hard: título mismatch (solo si no hay señales hard fuertes, y con guard multi-idioma)
     if not (hard_imdb_mismatch or hard_year_mismatch):
@@ -304,7 +319,9 @@ def evaluate_misidentified_rules(
         if not skip_title:
             sim, compared = _title_similarity(pt_norm, ot_norm)
             if compared and sim is not None:
-                _dbg(f"title similarity | plex='{pt_raw}' omdb='{omdb_title}' sim={sim:.2f}")
+                _dbg(
+                    f"title similarity | plex='{pt_raw}' omdb='{omdb_title}' sim={sim:.2f}"
+                )
                 if sim < _TITLE_SIMILARITY_THRESHOLD:
                     hits.append(
                         RuleHit(
@@ -390,6 +407,7 @@ def detect_misidentified(
 # Ordenación determinista (reporting)
 # =============================================================================
 
+
 def _clamp_int(v: object, default: int = 0) -> int:
     try:
         if isinstance(v, bool):
@@ -436,7 +454,12 @@ def _get_file_size(r: Mapping[str, object]) -> int:
 
 
 def sort_filtered_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    decision_rank_map: dict[str, int] = {"DELETE": 0, "MAYBE": 1, "KEEP": 2, "UNKNOWN": 3}
+    decision_rank_map: dict[str, int] = {
+        "DELETE": 0,
+        "MAYBE": 1,
+        "KEEP": 2,
+        "UNKNOWN": 3,
+    }
 
     def key_func(r: dict[str, object]) -> tuple[int, int, float, float, int, str]:
         decision = _norm_decision(r.get("decision"))

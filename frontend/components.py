@@ -100,7 +100,9 @@ def _rerun() -> None:
         exp_rerun_fn()
 
 
-def _columns_with_gap(spec: Sequence[int], *, gap: Literal["small", "medium", "large"]) -> Sequence[Any]:
+def _columns_with_gap(
+    spec: Sequence[int], *, gap: Literal["small", "medium", "large"]
+) -> Sequence[Any]:
     try:
         return cast(Sequence[Any], st.columns(spec, gap=gap))
     except TypeError:
@@ -194,7 +196,9 @@ def _normalize_selected_rows(selected_raw: Any) -> list[RowDict]:
         out_list: list[RowDict] = []
         for item in selected_raw:
             if isinstance(item, pd.Series):
-                out_list.append(_to_str_key_dict(cast(Mapping[Hashable, Any], item.to_dict())))
+                out_list.append(
+                    _to_str_key_dict(cast(Mapping[Hashable, Any], item.to_dict()))
+                )
                 continue
             if isinstance(item, Mapping):
                 out_list.append(_to_str_key_dict(cast(Mapping[Hashable, Any], item)))
@@ -214,11 +218,15 @@ def _normalize_selected_rows(selected_raw: Any) -> list[RowDict]:
         return out_list
 
     # iterable genérico (no str/bytes)
-    if isinstance(selected_raw, Iterable) and not isinstance(selected_raw, (str, bytes)):
+    if isinstance(selected_raw, Iterable) and not isinstance(
+        selected_raw, (str, bytes)
+    ):
         out_it: list[RowDict] = []
         for x in selected_raw:
             if isinstance(x, pd.Series):
-                out_it.append(_to_str_key_dict(cast(Mapping[Hashable, Any], x.to_dict())))
+                out_it.append(
+                    _to_str_key_dict(cast(Mapping[Hashable, Any], x.to_dict()))
+                )
                 continue
             if isinstance(x, Mapping):
                 out_it.append(_to_str_key_dict(cast(Mapping[Hashable, Any], x)))
@@ -358,7 +366,9 @@ function(params) {
 }
 """
     )
-    gb.configure_grid_options(onFirstDataRendered=auto_size_js, onGridSizeChanged=fit_js)
+    gb.configure_grid_options(
+        onFirstDataRendered=auto_size_js, onGridSizeChanged=fit_js
+    )
 
     header_names: dict[str, str] = {
         "title": "Title",
@@ -372,7 +382,14 @@ function(params) {
         "reason": "Reason",
         "file": "File",
     }
-    auto_size_cols = {"year", "library", "file_size_gb", "imdb_rating", "imdb_votes", "rt_score"}
+    auto_size_cols = {
+        "year",
+        "library",
+        "file_size_gb",
+        "imdb_rating",
+        "imdb_votes",
+        "rt_score",
+    }
     wrap_cols = {"title", "reason", "file"}
 
     for col in df.columns:
@@ -383,7 +400,9 @@ function(params) {
         if col == "file_size_gb":
             col_def["valueFormatter"] = "value != null ? value.toFixed(2) + ' GB' : ''"
         if col == "imdb_votes":
-            col_def["valueFormatter"] = "value != null ? Math.round(Number(value)).toLocaleString() : ''"
+            col_def["valueFormatter"] = (
+                "value != null ? Math.round(Number(value)).toLocaleString() : ''"
+            )
         if col in auto_size_cols:
             col_def.update({"minWidth": 70, "suppressSizeToFit": True})
         if col == "year":
@@ -393,7 +412,9 @@ function(params) {
         if col == "metacritic_score":
             col_def.update({"minWidth": 70, "maxWidth": 90, "suppressSizeToFit": True})
         if col == "library":
-            col_def.update({"minWidth": 120, "maxWidth": 240, "suppressSizeToFit": True})
+            col_def.update(
+                {"minWidth": 120, "maxWidth": 240, "suppressSizeToFit": True}
+            )
         if col in wrap_cols:
             flex = 2 if col == "title" else 3
             col_def.update(
@@ -471,7 +492,9 @@ function(params) {
 # ============================================================================
 
 
-def _get_from_omdb_or_row(row: Mapping[str, Any], omdb_dict: Mapping[str, Any] | None, key: str) -> Any:
+def _get_from_omdb_or_row(
+    row: Mapping[str, Any], omdb_dict: Mapping[str, Any] | None, key: str
+) -> Any:
     """
     Devuelve primero row[key] y, si no existe/no es usable, omdb_dict[key].
     """
@@ -539,7 +562,12 @@ def _build_plex_url(rating_key: Any) -> str | None:
     plex_base = PLEX_BASEURL or ""
     plex_port: int | None = int(PLEX_PORT) if PLEX_PORT else None
     if not plex_base:
-        plex_base = os.getenv("PLEX_WEB_BASEURL") or os.getenv("PLEX_BASEURL") or os.getenv("BASEURL") or ""
+        plex_base = (
+            os.getenv("PLEX_WEB_BASEURL")
+            or os.getenv("PLEX_BASEURL")
+            or os.getenv("BASEURL")
+            or ""
+        )
 
     if not plex_base:
         return None
@@ -605,7 +633,9 @@ def _get_wiki_cache() -> Mapping[str, Any] | None:
         mtime = WIKI_CACHE_PATH.stat().st_mtime
     except Exception:
         return None
-    return cast(Mapping[str, Any] | None, _load_wiki_cache_json(str(WIKI_CACHE_PATH), mtime))
+    return cast(
+        Mapping[str, Any] | None, _load_wiki_cache_json(str(WIKI_CACHE_PATH), mtime)
+    )
 
 
 def _get_omdb_cache() -> Mapping[str, Any] | None:
@@ -615,7 +645,9 @@ def _get_omdb_cache() -> Mapping[str, Any] | None:
         mtime = OMDB_CACHE_PATH.stat().st_mtime
     except Exception:
         return None
-    return cast(Mapping[str, Any] | None, _load_omdb_cache_json(str(OMDB_CACHE_PATH), mtime))
+    return cast(
+        Mapping[str, Any] | None, _load_omdb_cache_json(str(OMDB_CACHE_PATH), mtime)
+    )
 
 
 _WIKI_TITLE_CLEAN_RE = re.compile(r"[^0-9A-Za-záéíóúÁÉÍÓÚñÑüÜ]+")
@@ -765,7 +797,9 @@ def _extract_omdb_payload(item: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return payload if isinstance(payload, Mapping) else None
 
 
-def _extract_summary_from_item(item: Mapping[str, Any]) -> tuple[str | None, str | None]:
+def _extract_summary_from_item(
+    item: Mapping[str, Any],
+) -> tuple[str | None, str | None]:
     status = item.get("status")
     if status not in (None, "ok"):
         return None, None
@@ -966,7 +1000,9 @@ def render_detail_card(
             if file_path:
                 st.code(str(file_path), language="bash")
 
-            if file_size is not None and not (isinstance(file_size, float) and _pd_isna(file_size)):
+            if file_size is not None and not (
+                isinstance(file_size, float) and _pd_isna(file_size)
+            ):
                 try:
                     gb = float(file_size) / (1024**3)
                     st.write(f"**Tamaño:** {gb:.2f} GB")

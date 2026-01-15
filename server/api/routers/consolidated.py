@@ -26,15 +26,21 @@ def consolidated_by_imdb(
 ) -> Any:
     # Consolidated depende de dos ficheros: OMDb + Wiki.
     # Si el cliente manda If-None-Match/If-Modified-Since, devolvemos 304 cuando aplique.
-    if maybe_not_modified(request=request, response=response, stat=stat_or_none(OMDB_CACHE_PATH)):
+    if maybe_not_modified(
+        request=request, response=response, stat=stat_or_none(OMDB_CACHE_PATH)
+    ):
         return Response(status_code=304, headers=dict(response.headers))
-    if maybe_not_modified(request=request, response=response, stat=stat_or_none(WIKI_CACHE_PATH)):
+    if maybe_not_modified(
+        request=request, response=response, stat=stat_or_none(WIKI_CACHE_PATH)
+    ):
         return Response(status_code=304, headers=dict(response.headers))
 
     data = consolidate(cache=cache, imdb_id=imdb_id, title=None, year=None)
 
     if not data["sources"]["omdb"]["rid"] and not data["sources"]["wiki"]["rid"]:
-        raise HTTPException(status_code=404, detail=f"No encontrado en caches para imdb_id={imdb_id}")
+        raise HTTPException(
+            status_code=404, detail=f"No encontrado en caches para imdb_id={imdb_id}"
+        )
 
     return data
 
@@ -47,16 +53,22 @@ def consolidated_by_title_year(
     year: str | None = Query(None, description="Año (p.ej. 1999)"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
-    if maybe_not_modified(request=request, response=response, stat=stat_or_none(OMDB_CACHE_PATH)):
+    if maybe_not_modified(
+        request=request, response=response, stat=stat_or_none(OMDB_CACHE_PATH)
+    ):
         return Response(status_code=304, headers=dict(response.headers))
-    if maybe_not_modified(request=request, response=response, stat=stat_or_none(WIKI_CACHE_PATH)):
+    if maybe_not_modified(
+        request=request, response=response, stat=stat_or_none(WIKI_CACHE_PATH)
+    ):
         return Response(status_code=304, headers=dict(response.headers))
 
     data = consolidate(cache=cache, imdb_id=None, title=title, year=year)
 
     if not data["sources"]["omdb"]["rid"] and not data["sources"]["wiki"]["rid"]:
         key = f"{title}|{year or ''}"
-        raise HTTPException(status_code=404, detail=f"No encontrado en caches para {key}")
+        raise HTTPException(
+            status_code=404, detail=f"No encontrado en caches para {key}"
+        )
 
     return data
 
@@ -67,13 +79,21 @@ def consolidated_records(
     response: Response,
     limit: int = Query(100, ge=1, le=2000),
     offset: int = Query(0, ge=0),
-    status_omdb: str | None = Query(None, description="Filtra por status en omdb_cache (ok/not_found/error/...)"),
-    status_wiki: str | None = Query(None, description="Filtra por status en wiki_cache (ok/no_qid/not_film/...)"),
+    status_omdb: str | None = Query(
+        None, description="Filtra por status en omdb_cache (ok/not_found/error/...)"
+    ),
+    status_wiki: str | None = Query(
+        None, description="Filtra por status en wiki_cache (ok/no_qid/not_film/...)"
+    ),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
-    if maybe_not_modified(request=request, response=response, stat=stat_or_none(OMDB_CACHE_PATH)):
+    if maybe_not_modified(
+        request=request, response=response, stat=stat_or_none(OMDB_CACHE_PATH)
+    ):
         return Response(status_code=304, headers=dict(response.headers))
-    if maybe_not_modified(request=request, response=response, stat=stat_or_none(WIKI_CACHE_PATH)):
+    if maybe_not_modified(
+        request=request, response=response, stat=stat_or_none(WIKI_CACHE_PATH)
+    ):
         return Response(status_code=304, headers=dict(response.headers))
 
     omdb_payload = cache.load_json(OMDB_CACHE_PATH)
@@ -87,7 +107,10 @@ def consolidated_records(
     for rec in omdb_records.values() if isinstance(omdb_records, dict) else []:
         if not isinstance(rec, dict):
             continue
-        if status_omdb and str(rec.get("status", "")).lower() != status_omdb.strip().lower():
+        if (
+            status_omdb
+            and str(rec.get("status", "")).lower() != status_omdb.strip().lower()
+        ):
             continue
         v = rec.get("imdbID")
         if isinstance(v, str) and v.strip():
@@ -96,7 +119,10 @@ def consolidated_records(
     for rec in wiki_records.values() if isinstance(wiki_records, dict) else []:
         if not isinstance(rec, dict):
             continue
-        if status_wiki and str(rec.get("status", "")).lower() != status_wiki.strip().lower():
+        if (
+            status_wiki
+            and str(rec.get("status", "")).lower() != status_wiki.strip().lower()
+        ):
             continue
         v = rec.get("imdbID")
         if isinstance(v, str) and v.strip():
@@ -106,6 +132,9 @@ def consolidated_records(
     total = len(imdb_list)
 
     page = imdb_list[offset : offset + limit]
-    items = [consolidate(cache=cache, imdb_id=imdb_id, title=None, year=None) for imdb_id in page]
+    items = [
+        consolidate(cache=cache, imdb_id=imdb_id, title=None, year=None)
+        for imdb_id in page
+    ]
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}

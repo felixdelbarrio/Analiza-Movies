@@ -32,7 +32,9 @@ def _hash_file_quick(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
 
 @router.get("/meta/files")
 def meta_files(
-    include_sha256: bool = Query(False, description="Si true, calcula sha256 (costoso en ficheros grandes)"),
+    include_sha256: bool = Query(
+        False, description="Si true, calcula sha256 (costoso en ficheros grandes)"
+    ),
 ) -> dict[str, Any]:
     paths = {
         "omdb_cache": OMDB_CACHE_PATH,
@@ -51,7 +53,11 @@ def meta_files(
                 "path": str(p),
                 "exists": bool(exists),
                 "size": int(stat.st_size) if stat else None,
-                "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat() if stat else None,
+                "mtime": (
+                    datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+                    if stat
+                    else None
+                ),
                 "sha256": _hash_file_quick(p) if (exists and include_sha256) else None,
             }
         except Exception as exc:

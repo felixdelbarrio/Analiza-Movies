@@ -61,13 +61,17 @@ def _sum_size(df: pd.DataFrame, mask: pd.Series | None = None) -> float | None:
         try:
             series = series.loc[mask]
         except Exception as exc:  # defensivo
-            log_warning(f"[summary] Error aplicando máscara en '{FILE_SIZE_COL}': {exc!r}. Devolviendo None.")
+            log_warning(
+                f"[summary] Error aplicando máscara en '{FILE_SIZE_COL}': {exc!r}. Devolviendo None."
+            )
             return None
 
     try:
         return float(series.sum(skipna=True))
     except Exception as exc:  # defensivo
-        log_warning(f"[summary] Error sumando '{FILE_SIZE_COL}': {exc!r}. Devolviendo None.")
+        log_warning(
+            f"[summary] Error sumando '{FILE_SIZE_COL}': {exc!r}. Devolviendo None."
+        )
         return None
 
 
@@ -92,7 +96,9 @@ def compute_summary(df_all: pd.DataFrame) -> Summary:
     imdb_mean_df = compute_global_imdb_mean_from_df(df_all)
 
     if DECISION_COL not in df_all.columns:
-        log_warning("[summary] Columna 'decision' no encontrada; devolviendo conteos 0 por decisión.")
+        log_warning(
+            "[summary] Columna 'decision' no encontrada; devolviendo conteos 0 por decisión."
+        )
         return {
             "total_count": total_count,
             "total_size_gb": total_size,

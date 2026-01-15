@@ -218,23 +218,34 @@ def analyze_wiki_for_movie_inputs(
 
             res = None
             if title_norm:
-                res = get_wiki_for_input(movie_input=mi, title=title_norm, year=year2, imdb_id=imdb2)
+                res = get_wiki_for_input(
+                    movie_input=mi, title=title_norm, year=year2, imdb_id=imdb2
+                )
 
             # fallback muy conservador
             if res is None and title2 and (not title_norm or len(title_norm) < 3):
-                _ = get_wiki_for_input(movie_input=mi, title=title2, year=year2, imdb_id=imdb2)
+                _ = get_wiki_for_input(
+                    movie_input=mi, title=title2, year=year2, imdb_id=imdb2
+                )
 
         except Exception as exc:  # pragma: no cover
             total_errors += 1
             logger.error(f"[{label}] Error en wiki enrichment: {exc!r}", always=True)
 
     if SILENT_MODE:
-        logger.progress(f"[{label}] Inicio (SILENT) | workers={max_workers} inflight_cap={max_inflight}")
+        logger.progress(
+            f"[{label}] Inicio (SILENT) | workers={max_workers} inflight_cap={max_inflight}"
+        )
     else:
-        logger.progress(f"[{label}] Inicio | workers={max_workers} inflight_cap={max_inflight}")
+        logger.progress(
+            f"[{label}] Inicio | workers={max_workers} inflight_cap={max_inflight}"
+        )
 
     if DEBUG_MODE:
-        logger.debug_ctx("WIKI", f"analyze_wiki_for_movie_inputs: workers={max_workers} inflight={max_inflight}")
+        logger.debug_ctx(
+            "WIKI",
+            f"analyze_wiki_for_movie_inputs: workers={max_workers} inflight={max_inflight}",
+        )
 
     try:
         # NO-SILENT: determinista
@@ -254,7 +265,9 @@ def analyze_wiki_for_movie_inputs(
                     dedupe.seen_keys.add(key)
 
                     if DEBUG_MODE:
-                        logger.info(f"[{label}] ({idx}) {title2} ({year2 if year2 is not None else '?'})")
+                        logger.info(
+                            f"[{label}] ({idx}) {title2} ({year2 if year2 is not None else '?'})"
+                        )
                     else:
                         logger.info(f"[{label}] ({idx}) {title2}")
 
@@ -301,7 +314,9 @@ def analyze_wiki_for_movie_inputs(
                     total_submitted += 1
 
                     if DEBUG_MODE and (total_submitted % progress_every == 0):
-                        logger.progress(f"[{label}][DEBUG] Progreso: submitted={total_submitted} processed={total_processed}...")
+                        logger.progress(
+                            f"[{label}][DEBUG] Progreso: submitted={total_submitted} processed={total_processed}..."
+                        )
 
                     if len(inflight2) >= max_inflight:
                         done, _ = wait(inflight2, return_when=FIRST_COMPLETED)

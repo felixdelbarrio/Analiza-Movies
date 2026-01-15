@@ -71,7 +71,9 @@ class FileCache:
         age = time.monotonic() - entry.loaded_at_monotonic
         return age <= self._ttl_seconds
 
-    def _lru_get(self, cache: "OrderedDict[str, CachedEntry]", key: str) -> CachedEntry | None:
+    def _lru_get(
+        self, cache: "OrderedDict[str, CachedEntry]", key: str
+    ) -> CachedEntry | None:
         with self._cache_lock:
             entry = cache.get(key)
             if entry is None:
@@ -79,7 +81,9 @@ class FileCache:
             cache.move_to_end(key)
             return entry
 
-    def _lru_put(self, cache: "OrderedDict[str, CachedEntry]", key: str, entry: CachedEntry) -> None:
+    def _lru_put(
+        self, cache: "OrderedDict[str, CachedEntry]", key: str, entry: CachedEntry
+    ) -> None:
         with self._cache_lock:
             cache[key] = entry
             cache.move_to_end(key)
@@ -124,7 +128,9 @@ class FileCache:
             data = self._read_with_retries(_read)
 
             metrics.inc("cache_refresh_total", 1)
-            entry = CachedEntry(mtime_ns=m, loaded_at_monotonic=time.monotonic(), data=data)
+            entry = CachedEntry(
+                mtime_ns=m, loaded_at_monotonic=time.monotonic(), data=data
+            )
             self._lru_put(self._json_cache, key, entry)
             return data
 
@@ -137,7 +143,11 @@ class FileCache:
         with lock:
             m = self._mtime_ns(path)
             cached = self._lru_get(self._csv_cache, key)
-            if cached is not None and self._is_fresh(cached, m) and isinstance(cached.data, pd.DataFrame):
+            if (
+                cached is not None
+                and self._is_fresh(cached, m)
+                and isinstance(cached.data, pd.DataFrame)
+            ):
                 metrics.inc("cache_csv_hit_total", 1)
                 return cached.data
 
@@ -159,6 +169,8 @@ class FileCache:
                         df[col] = df[col].astype(str)
 
             metrics.inc("cache_refresh_total", 1)
-            entry = CachedEntry(mtime_ns=m, loaded_at_monotonic=time.monotonic(), data=df)
+            entry = CachedEntry(
+                mtime_ns=m, loaded_at_monotonic=time.monotonic(), data=df
+            )
             self._lru_put(self._csv_cache, key, entry)
             return df

@@ -1,10 +1,15 @@
 import pandas as pd
 
-from frontend.front_stats import compute_global_imdb_mean_from_df, compute_global_imdb_mean_from_report_all
+from frontend.front_stats import (
+    compute_global_imdb_mean_from_df,
+    compute_global_imdb_mean_from_report_all,
+)
 
 
 def test_compute_global_imdb_mean_from_df():
-    df = pd.DataFrame([{"imdb_rating": 7.0}, {"imdb_rating": "8.0"}, {"imdb_rating": None}])
+    df = pd.DataFrame(
+        [{"imdb_rating": 7.0}, {"imdb_rating": "8.0"}, {"imdb_rating": None}]
+    )
     assert compute_global_imdb_mean_from_df(df) == 7.5
 
 

@@ -16,6 +16,7 @@ Notas:
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 
@@ -32,7 +33,11 @@ _ENV_FRONT_PATH: Final[Path] = PROJECT_DIR / ".env.front"
 
 # Carga SOLO desde .env.front (si no existe, config vacía -> defaults)
 _ENV: Final[dict[str, str]] = {
-    k: v for k, v in (dotenv_values(_ENV_FRONT_PATH).items() if _ENV_FRONT_PATH.exists() else []) if v is not None
+    k: v
+    for k, v in (
+        dotenv_values(_ENV_FRONT_PATH).items() if _ENV_FRONT_PATH.exists() else []
+    )
+    if v is not None
 }
 
 # ---------------------------------------------------------------------
@@ -102,11 +107,74 @@ def _resolve_dir(raw: str, *, base: Path) -> Path:
     return p if p.is_absolute() else (base / p)
 
 
+def _sanitize_filename_component(value: str) -> str:
+    s = (value or "").strip()
+    if not s:
+        return ""
+    out = []
+    for ch in s:
+        if ch.isalnum() or ch in ("-", "_", "."):
+            out.append(ch)
+        else:
+            out.append("_")
+    return "".join(out).strip("._-")
+
+
 # ---------------------------------------------------------------------
 # Flags del front (si quieres controlarlo desde .env.front)
 # ---------------------------------------------------------------------
 
 FRONT_DEBUG: bool = _get_env_bool("FRONT_DEBUG", False)
+
+# ---------------------------------------------------------------------
+# Logging (frontend) - usa .env.front
+# ---------------------------------------------------------------------
+
+LOGGER_FILE_ENABLED: bool = _get_env_bool("LOGGER_FILE_ENABLED", False)
+
+_LOGGER_FILE_DIR_RAW: Final[str] = _get_env_str("LOGGER_FILE_DIR", "logs") or "logs"
+LOGGER_FILE_DIR: Final[Path] = _resolve_dir(_LOGGER_FILE_DIR_RAW, base=FRONTEND_DIR)
+
+LOGGER_FILE_PREFIX: Final[str] = _get_env_str("LOGGER_FILE_PREFIX", "run") or "run"
+LOGGER_FILE_TIMESTAMP_FORMAT: Final[str] = (
+    _get_env_str("LOGGER_FILE_TIMESTAMP_FORMAT", "%Y-%m-%d_%H-%M-%S")
+    or "%Y-%m-%d_%H-%M-%S"
+)
+LOGGER_FILE_INCLUDE_PID: bool = _get_env_bool("LOGGER_FILE_INCLUDE_PID", True)
+
+_LOGGER_FILE_PATH_EXPLICIT_RAW: str | None = _get_env_str("LOGGER_FILE_PATH", None)
+_LOGGER_FILE_PATH_SENTINEL: Final[object] = object()
+_LOGGER_FILE_PATH_CACHED: Path | None | object = _LOGGER_FILE_PATH_SENTINEL
+
+
+def _build_logger_file_path() -> Path | None:
+    global _LOGGER_FILE_PATH_CACHED
+
+    if _LOGGER_FILE_PATH_CACHED is not _LOGGER_FILE_PATH_SENTINEL:
+        return None if _LOGGER_FILE_PATH_CACHED is None else _LOGGER_FILE_PATH_CACHED  # type: ignore[return-value]
+
+    if not LOGGER_FILE_ENABLED:
+        _LOGGER_FILE_PATH_CACHED = None
+        return None
+
+    if (
+        isinstance(_LOGGER_FILE_PATH_EXPLICIT_RAW, str)
+        and _LOGGER_FILE_PATH_EXPLICIT_RAW.strip()
+    ):
+        p = Path(_LOGGER_FILE_PATH_EXPLICIT_RAW.strip())
+        resolved = p if p.is_absolute() else (FRONTEND_DIR / p)
+        _LOGGER_FILE_PATH_CACHED = resolved.resolve()
+        return _LOGGER_FILE_PATH_CACHED
+
+    ts = datetime.now().strftime(LOGGER_FILE_TIMESTAMP_FORMAT)
+    prefix = _sanitize_filename_component(LOGGER_FILE_PREFIX) or "run"
+    pid_part = f"_{os.getpid()}" if LOGGER_FILE_INCLUDE_PID else ""
+    filename = f"{prefix}_{ts}{pid_part}.log"
+    _LOGGER_FILE_PATH_CACHED = (LOGGER_FILE_DIR / filename).resolve()
+    return _LOGGER_FILE_PATH_CACHED
+
+
+LOGGER_FILE_PATH: Path | None = _build_logger_file_path()
 
 # ---------------------------------------------------------------------
 # Modo de ejecución (sin fallback)
@@ -128,9 +196,10 @@ FRONT_MODE: Final[str] = _FRONT_MODE_RAW
 # API config (solo relevante si FRONT_MODE == "api")
 # ---------------------------------------------------------------------
 
-FRONT_API_BASE_URL: str = (_get_env_str("FRONT_API_BASE_URL", "http://localhost:8000") or "http://localhost:8000").rstrip(
-    "/"
-)
+FRONT_API_BASE_URL: str = (
+    _get_env_str("FRONT_API_BASE_URL", "http://localhost:8000")
+    or "http://localhost:8000"
+).rstrip("/")
 FRONT_API_TIMEOUT_S: float = _get_env_float("FRONT_API_TIMEOUT_S", 30.0)
 FRONT_API_PAGE_SIZE: int = _get_env_int("FRONT_API_PAGE_SIZE", 2000)
 FRONT_API_CACHE_TTL_S: int = _get_env_int("FRONT_API_CACHE_TTL_S", 60)

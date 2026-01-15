@@ -73,7 +73,7 @@ _WS_RE: Final[re.Pattern[str]] = re.compile(r"\s+")
 _SEP_REPLACEMENTS: Final[tuple[tuple[str, str], ...]] = (
     ("_", " "),
     (".", " "),
-    ("\u00A0", " "),  # NBSP
+    ("\u00a0", " "),  # NBSP
     ("–", "-"),
     ("—", "-"),
 )
@@ -148,8 +148,12 @@ _NON_EN_FUNCTION_WORD_RE: Final[re.Pattern[str]] = re.compile(
 )
 
 # Unicode blocks (pistas fuertes por escritura; no equivalen 1:1 a idioma)
-_KANA_RE: Final[re.Pattern[str]] = re.compile(r"[\u3040-\u30FF\u31F0-\u31FF\uFF66-\uFF9F]")
-_HANGUL_RE: Final[re.Pattern[str]] = re.compile(r"[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]")
+_KANA_RE: Final[re.Pattern[str]] = re.compile(
+    r"[\u3040-\u30FF\u31F0-\u31FF\uFF66-\uFF9F]"
+)
+_HANGUL_RE: Final[re.Pattern[str]] = re.compile(
+    r"[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]"
+)
 _HAN_RE: Final[re.Pattern[str]] = re.compile(r"[\u4E00-\u9FFF]")
 _CJK_ANY_RE: Final[re.Pattern[str]] = re.compile(
     r"[\u3040-\u30FF\u31F0-\u31FF\uFF66-\uFF9F\u4E00-\u9FFF\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]"
@@ -222,7 +226,9 @@ def is_probably_non_english_title(title: str) -> bool:
     return bool(_NON_EN_FUNCTION_WORD_RE.search(words))
 
 
-def should_skip_title_similarity_due_to_language(plex_title: str, omdb_title: str) -> bool:
+def should_skip_title_similarity_due_to_language(
+    plex_title: str, omdb_title: str
+) -> bool:
     """
     Guard para evitar comparar títulos localizados (ES/FR/IT, etc.) contra OMDb (a menudo EN),
     ya que la similitud será baja y generará falsos “diverge”.
@@ -232,7 +238,9 @@ def should_skip_title_similarity_due_to_language(plex_title: str, omdb_title: st
     if not pt or not ot:
         return True
 
-    if MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK and (title_has_cjk_script(pt) or title_has_cjk_script(ot)):
+    if MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK and (
+        title_has_cjk_script(pt) or title_has_cjk_script(ot)
+    ):
         return True
 
     omdb_is_en = is_probably_english_title(ot)
@@ -241,7 +249,9 @@ def should_skip_title_similarity_due_to_language(plex_title: str, omdb_title: st
     plex_non_en = is_probably_non_english_title(pt)
     omdb_non_en = is_probably_non_english_title(ot)
 
-    if (omdb_is_en and (plex_non_en or not plex_is_en)) or (plex_is_en and (omdb_non_en or not omdb_is_en)):
+    if (omdb_is_en and (plex_non_en or not plex_is_en)) or (
+        plex_is_en and (omdb_non_en or not omdb_is_en)
+    ):
         return True
 
     return bool(omdb_is_en and not plex_is_en)
@@ -448,6 +458,7 @@ class NormalizeOptions:
     - max_len: recorte defensivo para evitar coste en difflib / entradas raras.
     - strip_accents: si quieres comparar sin diacríticos.
     """
+
     max_len: int | None = None
     strip_accents: bool = False
 
@@ -475,7 +486,9 @@ def normalize_title_for_lookup(title: str) -> str:
     return t
 
 
-def normalize_title_for_compare(title: str, *, options: NormalizeOptions | None = None) -> str:
+def normalize_title_for_compare(
+    title: str, *, options: NormalizeOptions | None = None
+) -> str:
     """
     Normalización conservadora para comparación/identidad:
     - minúsculas

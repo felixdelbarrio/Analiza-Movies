@@ -26,7 +26,9 @@ def omdb_records(
     response: Response,
     limit: int = Query(100, ge=1, le=5000),
     offset: int = Query(0, ge=0),
-    status: str | None = Query(None, description="Filtra por record.status (ok/not_found/error)"),
+    status: str | None = Query(
+        None, description="Filtra por record.status (ok/not_found/error)"
+    ),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
     st = stat_or_none(OMDB_CACHE_PATH)
@@ -36,12 +38,18 @@ def omdb_records(
     payload = _payload(cache)
     records = payload.get("records")
     if not isinstance(records, dict):
-        raise HTTPException(status_code=500, detail="omdb_cache.json: falta 'records' dict")
+        raise HTTPException(
+            status_code=500, detail="omdb_cache.json: falta 'records' dict"
+        )
 
     rids = sorted(records.keys())
     if status:
         wanted = status.strip().lower()
-        rids = [rid for rid in rids if str((records.get(rid) or {}).get("status", "")).lower() == wanted]
+        rids = [
+            rid
+            for rid in rids
+            if str((records.get(rid) or {}).get("status", "")).lower() == wanted
+        ]
 
     total = len(rids)
     page_rids = rids[offset : offset + limit]
@@ -66,11 +74,15 @@ def omdb_by_imdb(
 
     rid = index_imdb.get(imdb_id)
     if not rid:
-        raise HTTPException(status_code=404, detail=f"imdb_id no encontrado en index_imdb: {imdb_id}")
+        raise HTTPException(
+            status_code=404, detail=f"imdb_id no encontrado en index_imdb: {imdb_id}"
+        )
 
     rec = records.get(str(rid))
     if not rec:
-        raise HTTPException(status_code=404, detail=f"rid no encontrado en records: {rid}")
+        raise HTTPException(
+            status_code=404, detail=f"rid no encontrado en records: {rid}"
+        )
 
     return {"rid": str(rid), **rec}
 
@@ -105,7 +117,9 @@ def omdb_by_title_year(
 
     rec = records.get(str(rid))
     if not rec:
-        raise HTTPException(status_code=404, detail=f"rid no encontrado en records: {rid}")
+        raise HTTPException(
+            status_code=404, detail=f"rid no encontrado en records: {rid}"
+        )
 
     return {"rid": str(rid), **rec}
 

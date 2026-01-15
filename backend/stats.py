@@ -123,7 +123,10 @@ def get_global_imdb_mean_from_cache() -> float:
     """
     Devuelve la media global IMDb usada como C en el score bayesiano.
     """
-    global _GLOBAL_IMDB_MEAN_FROM_CACHE, _GLOBAL_IMDB_MEAN_SOURCE, _GLOBAL_IMDB_MEAN_COUNT
+    global \
+        _GLOBAL_IMDB_MEAN_FROM_CACHE, \
+        _GLOBAL_IMDB_MEAN_SOURCE, \
+        _GLOBAL_IMDB_MEAN_COUNT
 
     cached = _GLOBAL_IMDB_MEAN_FROM_CACHE
     if cached is not None:
@@ -223,7 +226,9 @@ def _load_imdb_ratings_list_from_cache() -> tuple[list[float], int]:
         _RATINGS_COUNT = len(ratings)
 
         if _RATINGS_COUNT == 0:
-            _log_stats("INFO [stats] omdb_cache sin ratings válidos para auto-umbrales.")
+            _log_stats(
+                "INFO [stats] omdb_cache sin ratings válidos para auto-umbrales."
+            )
 
         return ratings, _RATINGS_COUNT
 
@@ -268,7 +273,9 @@ def _load_imdb_ratings_list_no_rt_from_cache() -> tuple[list[float], int]:
         _RATINGS_NO_RT_COUNT = len(ratings)
 
         if _RATINGS_NO_RT_COUNT == 0:
-            _log_stats("INFO [stats] omdb_cache sin títulos válidos para auto-umbrales NO_RT.")
+            _log_stats(
+                "INFO [stats] omdb_cache sin títulos válidos para auto-umbrales NO_RT."
+            )
 
         return ratings, _RATINGS_NO_RT_COUNT
 

@@ -119,13 +119,15 @@ class CircuitBreaker:
             return None if st is None else CircuitState(**st.__dict__)
 
 
-def backoff_sleep(attempt: int, *, base: float = 0.35, cap: float = 6.0, jitter: float = 0.35) -> None:
+def backoff_sleep(
+    attempt: int, *, base: float = 0.35, cap: float = 6.0, jitter: float = 0.35
+) -> None:
     """
     Exponential backoff: base * 2^attempt, cap y jitter.
     jitter=0.35 => +-35% aleatorio.
     """
     a = max(0, int(attempt))
-    delay = min(cap, base * (2 ** a))
+    delay = min(cap, base * (2**a))
     if jitter > 0:
         j = 1.0 + random.uniform(-jitter, jitter)
         delay = max(0.0, delay * j)

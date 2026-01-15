@@ -166,7 +166,9 @@ def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     if "omdb_json" in df.columns and "metacritic_score" not in df.columns:
-        df["metacritic_score"] = df["omdb_json"].apply(_extract_metacritic_from_omdb_json)
+        df["metacritic_score"] = df["omdb_json"].apply(
+            _extract_metacritic_from_omdb_json
+        )
 
     for col in _NUMERIC_COLS:
         if col in df.columns:

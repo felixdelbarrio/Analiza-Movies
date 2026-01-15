@@ -54,7 +54,9 @@ _IMDB_VOTES_BY_YEAR_RAW: str = (
     _get_env_str("IMDB_VOTES_BY_YEAR", "1980:500,2000:2000,2010:5000,9999:10000")
     or "1980:500,2000:2000,2010:5000,9999:10000"
 )
-IMDB_VOTES_BY_YEAR: list[tuple[int, int]] = _parse_votes_by_year(_IMDB_VOTES_BY_YEAR_RAW)
+IMDB_VOTES_BY_YEAR: list[tuple[int, int]] = _parse_votes_by_year(
+    _IMDB_VOTES_BY_YEAR_RAW
+)
 
 IMDB_KEEP_MIN_RATING: float = _get_env_float("IMDB_KEEP_MIN_RATING", 5.7)
 IMDB_DELETE_MAX_RATING: float = _get_env_float("IMDB_DELETE_MAX_RATING", 5.5)
@@ -187,7 +189,9 @@ METACRITIC_DELETE_MAX_SCORE: int = _cap_int(
 # ============================================================
 
 AUTO_KEEP_RATING_PERCENTILE: float = _get_env_float("AUTO_KEEP_RATING_PERCENTILE", 0.10)
-AUTO_DELETE_RATING_PERCENTILE: float = _get_env_float("AUTO_DELETE_RATING_PERCENTILE", 0.90)
+AUTO_DELETE_RATING_PERCENTILE: float = _get_env_float(
+    "AUTO_DELETE_RATING_PERCENTILE", 0.90
+)
 
 # ============================================================
 # Metadata fix
@@ -195,4 +199,3 @@ AUTO_DELETE_RATING_PERCENTILE: float = _get_env_float("AUTO_DELETE_RATING_PERCEN
 
 METADATA_DRY_RUN: bool = _get_env_bool("METADATA_DRY_RUN", True)
 METADATA_APPLY_CHANGES: bool = _get_env_bool("METADATA_APPLY_CHANGES", False)
-

@@ -51,6 +51,7 @@ class DLNADevice:
     """
     Modelo mínimo de un servidor DLNA descubierto.
     """
+
     friendly_name: str
     location: str
     host: str
@@ -61,6 +62,7 @@ class DLNADevice:
 # ============================================================================
 # Logging controlado por modos (sin depender de imports directos a config)
 # ============================================================================
+
 
 def _safe_get_cfg() -> ModuleType | None:
     """Devuelve backend.config si ya está importado (evita dependencias circulares)."""
@@ -116,6 +118,7 @@ def _log_debug(msg: object) -> None:
 # ============================================================================
 # SSDP parsing + URL/XML helpers
 # ============================================================================
+
 
 def _parse_ssdp_response(data: bytes) -> dict[str, str]:
     try:
@@ -205,7 +208,9 @@ def _extract_device_id_from_headers(headers: dict[str, str]) -> str | None:
     return usn
 
 
-def _fetch_device_description(location: str, *, timeout_s: float, max_bytes: int) -> bytes | None:
+def _fetch_device_description(
+    location: str, *, timeout_s: float, max_bytes: int
+) -> bytes | None:
     """
     Descarga la descripción del device (LOCATION) con límites de tamaño.
 
@@ -244,7 +249,9 @@ def _fetch_device_description(location: str, *, timeout_s: float, max_bytes: int
             return data
 
     except Exception as exc:  # pragma: no cover
-        _logger.warning(f"[DLNA] No se pudo descargar LOCATION {location}: {exc!r}", always=True)
+        _logger.warning(
+            f"[DLNA] No se pudo descargar LOCATION {location}: {exc!r}", always=True
+        )
         return None
 
 
@@ -284,26 +291,52 @@ def _has_content_directory(xml_data: bytes) -> bool:
 # API pública
 # ============================================================================
 
+
 def discover_dlna_devices(
     timeout: float | None = None,
     st: str | None = None,
     mx: int | None = None,
 ) -> list[DLNADevice]:
-    timeout_s: float = float(timeout) if timeout is not None else float(
-        _cfg_get("DLNA_DISCOVERY_TIMEOUT_SECONDS", _DEFAULT_DISCOVERY_TIMEOUT)
+    timeout_s: float = (
+        float(timeout)
+        if timeout is not None
+        else float(
+            _cfg_get("DLNA_DISCOVERY_TIMEOUT_SECONDS", _DEFAULT_DISCOVERY_TIMEOUT)
+        )
     )
-    st_s: str = str(st) if st is not None else str(_cfg_get("DLNA_DISCOVERY_ST", _DEFAULT_SSDP_ST))
-    mx_i: int = int(mx) if mx is not None else int(_cfg_get("DLNA_DISCOVERY_MX", _DEFAULT_SSDP_MX))
+    st_s: str = (
+        str(st)
+        if st is not None
+        else str(_cfg_get("DLNA_DISCOVERY_ST", _DEFAULT_SSDP_ST))
+    )
+    mx_i: int = (
+        int(mx)
+        if mx is not None
+        else int(_cfg_get("DLNA_DISCOVERY_MX", _DEFAULT_SSDP_MX))
+    )
 
-    device_desc_timeout_s: float = float(_cfg_get("DLNA_DEVICE_DESC_TIMEOUT_SECONDS", _DEFAULT_DEVICE_DESC_TIMEOUT))
-    device_desc_max_bytes: int = int(_cfg_get("DLNA_DEVICE_DESC_MAX_BYTES", _DEFAULT_DEVICE_DESC_MAX_BYTES))
+    device_desc_timeout_s: float = float(
+        _cfg_get("DLNA_DEVICE_DESC_TIMEOUT_SECONDS", _DEFAULT_DEVICE_DESC_TIMEOUT)
+    )
+    device_desc_max_bytes: int = int(
+        _cfg_get("DLNA_DEVICE_DESC_MAX_BYTES", _DEFAULT_DEVICE_DESC_MAX_BYTES)
+    )
 
-    deny_tokens: list[str] = list(_cfg_get("DLNA_DISCOVERY_DENY_TOKENS", _DEFAULT_DENY_TOKENS))
-    allow_hint_tokens: list[str] = list(_cfg_get("DLNA_DISCOVERY_ALLOW_HINT_TOKENS", _DEFAULT_ALLOW_HINT_TOKENS))
+    deny_tokens: list[str] = list(
+        _cfg_get("DLNA_DISCOVERY_DENY_TOKENS", _DEFAULT_DENY_TOKENS)
+    )
+    allow_hint_tokens: list[str] = list(
+        _cfg_get("DLNA_DISCOVERY_ALLOW_HINT_TOKENS", _DEFAULT_ALLOW_HINT_TOKENS)
+    )
 
-    max_responses: int = int(_cfg_get("DLNA_DISCOVERY_MAX_RESPONSES", _DEFAULT_DISCOVERY_MAX_RESPONSES))
+    max_responses: int = int(
+        _cfg_get("DLNA_DISCOVERY_MAX_RESPONSES", _DEFAULT_DISCOVERY_MAX_RESPONSES)
+    )
     max_responses_per_host: int = int(
-        _cfg_get("DLNA_DISCOVERY_MAX_RESPONSES_PER_HOST", _DEFAULT_DISCOVERY_MAX_RESPONSES_PER_HOST)
+        _cfg_get(
+            "DLNA_DISCOVERY_MAX_RESPONSES_PER_HOST",
+            _DEFAULT_DISCOVERY_MAX_RESPONSES_PER_HOST,
+        )
     )
 
     if timeout_s < 0.2:
@@ -416,7 +449,9 @@ def discover_dlna_devices(
 
             hdr_blob = _headers_text_for_filter(headers, normalized_location)
             if _should_ignore_by_tokens(hdr_blob, deny_tokens):
-                _log_debug(f"Ignorado por deny-tokens (ruido UPnP): {normalized_location} from={src_ip}")
+                _log_debug(
+                    f"Ignorado por deny-tokens (ruido UPnP): {normalized_location} from={src_ip}"
+                )
                 bad_locations.add(normalized_location)
                 continue
 
@@ -424,7 +459,11 @@ def discover_dlna_devices(
                 _log_debug(f"Allow-hint detectado: {normalized_location}")
 
             host = parsed.hostname
-            port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
+            port = (
+                parsed.port
+                if parsed.port is not None
+                else (443 if parsed.scheme == "https" else 80)
+            )
 
             device_id = _extract_device_id_from_headers(headers)
             if device_id and device_id in found_by_device_id:
@@ -440,7 +479,9 @@ def discover_dlna_devices(
             )
             if xml_data is None:
                 bad_locations.add(normalized_location)
-                _log_debug(f"LOCATION fetch falló o fue limitado: {normalized_location!r}")
+                _log_debug(
+                    f"LOCATION fetch falló o fue limitado: {normalized_location!r}"
+                )
                 continue
 
             if not _has_content_directory(xml_data):
@@ -467,7 +508,10 @@ def discover_dlna_devices(
         if _is_silent_mode():
             _log_debug(f"Descubiertos {len(devices)} servidor(es) DLNA/UPnP.")
         else:
-            _logger.info(f"[DLNA] Descubiertos {len(devices)} servidor(es) DLNA/UPnP.", always=True)
+            _logger.info(
+                f"[DLNA] Descubiertos {len(devices)} servidor(es) DLNA/UPnP.",
+                always=True,
+            )
 
         return devices
 

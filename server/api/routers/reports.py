@@ -51,7 +51,9 @@ def reports_filtered(
     if not REPORT_FILTERED_PATH.exists():
         if empty_as_204:
             return Response(status_code=204)
-        raise HTTPException(status_code=404, detail=f"No encontrado: {REPORT_FILTERED_PATH}")
+        raise HTTPException(
+            status_code=404, detail=f"No encontrado: {REPORT_FILTERED_PATH}"
+        )
 
     st = stat_or_none(REPORT_FILTERED_PATH)
     if maybe_not_modified(request=request, response=response, stat=st):
@@ -84,7 +86,9 @@ def metadata_fix(
     try:
         df = cache.load_csv(METADATA_FIX_PATH, text_columns=_TEXT_COLUMNS)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"No encontrado: {METADATA_FIX_PATH}")
+        raise HTTPException(
+            status_code=404, detail=f"No encontrado: {METADATA_FIX_PATH}"
+        )
 
     if "__search_blob" not in df.columns:
         prepare_search_blob(df)

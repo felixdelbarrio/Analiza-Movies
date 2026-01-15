@@ -145,8 +145,12 @@ _ZH_HINT_RE: Final[re.Pattern[str]] = re.compile(
 )
 
 # Unicode blocks (solo para ayudas locales)
-_KANA_RE: Final[re.Pattern[str]] = re.compile(r"[\u3040-\u30FF\u31F0-\u31FF\uFF66-\uFF9F]")
-_HANGUL_RE: Final[re.Pattern[str]] = re.compile(r"[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]")
+_KANA_RE: Final[re.Pattern[str]] = re.compile(
+    r"[\u3040-\u30FF\u31F0-\u31FF\uFF66-\uFF9F]"
+)
+_HANGUL_RE: Final[re.Pattern[str]] = re.compile(
+    r"[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]"
+)
 _HAN_RE: Final[re.Pattern[str]] = re.compile(r"[\u4E00-\u9FFF]")
 _CJK_ANY_RE: Final[re.Pattern[str]] = re.compile(
     r"[\u3040-\u30FF\u31F0-\u31FF\uFF66-\uFF9F\u4E00-\u9FFF\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]"
@@ -330,7 +334,11 @@ def guess_chinese_from_title_or_path(title: str, file_path: str) -> bool:
     if _ZH_HINT_RE.search(haystack):
         return True
 
-    if _HAN_RE.search(haystack) and not _KANA_RE.search(haystack) and not _HANGUL_RE.search(haystack):
+    if (
+        _HAN_RE.search(haystack)
+        and not _KANA_RE.search(haystack)
+        and not _HANGUL_RE.search(haystack)
+    ):
         return True
 
     return False
