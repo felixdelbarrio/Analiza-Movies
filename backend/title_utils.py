@@ -127,6 +127,20 @@ _NOISE_PHRASE_RE: Final[re.Pattern[str]] = re.compile(
 )
 
 # ============================================================================
+# Secuelas / romanos (variantes de búsqueda)
+# ============================================================================
+
+_SEQUEL_PART_SUFFIX_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:part|parte|pt)\s+(?:i|ii|iii|iv|v|vi|vii|viii|ix|\d+)\s*$",
+    re.IGNORECASE,
+)
+_SEQUEL_ROMAN_SUFFIX_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:i|ii|iii|iv|v|vi|vii|viii|ix)\s*$", re.IGNORECASE
+)
+_SEQUEL_TRAILING_PART_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:part|parte|pt)\s*$", re.IGNORECASE
+)
+# ============================================================================
 # Heurística de idioma / escritura (reutilizable)
 # ============================================================================
 
@@ -255,6 +269,37 @@ def should_skip_title_similarity_due_to_language(
         return True
 
     return bool(omdb_is_en and not plex_is_en)
+
+
+def generate_sequel_title_variants(title: str) -> list[str]:
+    """
+    Genera variantes simples sin sufijos de secuela (I/II/III o Parte II).
+    """
+    raw = (title or "").strip()
+    if not raw:
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    lower_raw = raw.lower()
+
+    t_part = _SEQUEL_PART_SUFFIX_RE.sub("", raw).strip()
+    if t_part and t_part.lower() != lower_raw:
+        key = t_part.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(t_part)
+
+    t_roman = _SEQUEL_ROMAN_SUFFIX_RE.sub("", raw).strip()
+    if t_roman and t_roman.lower() != lower_raw:
+        if _SEQUEL_TRAILING_PART_RE.search(t_roman):
+            return out
+        key = t_roman.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(t_roman)
+
+    return out
 
 
 def looks_like_noise_group(text: str) -> bool:
@@ -531,6 +576,7 @@ __all__ = [
     "is_probably_english_title",
     "is_probably_non_english_title",
     "should_skip_title_similarity_due_to_language",
+    "generate_sequel_title_variants",
     # extractors
     "extract_imdb_id_from_text",
     "extract_year_from_text",
