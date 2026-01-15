@@ -31,25 +31,18 @@ def _sort_all_movies_view(df: pd.DataFrame) -> pd.DataFrame:
     """
     Ordena el DataFrame por título (asc) si existe la columna.
     """
-    if "title" not in df.columns:
-        return df
+    df_view = df.copy()
+
+    if "title" not in df_view.columns:
+        return df_view
 
     try:
-        if df["title"].is_monotonic_increasing:
-            return df
-    except Exception:
-        pass
-
-    try:
-        return df.sort_values(
-            by=["title"],
-            ascending=[True],
-            na_position="last",
-            ignore_index=True,
+        return df_view.sort_values(
+            by=["title"], ascending=[True], na_position="last", ignore_index=True
         )
     except Exception:
         # Degradación segura: si algún dtype raro rompe sort_values, devolvemos sin ordenar.
-        return df
+        return df_view
 
 
 def render(df_all: pd.DataFrame) -> None:
