@@ -36,12 +36,18 @@ def wiki_records(
     payload = _payload(cache)
     records = payload.get("records")
     if not isinstance(records, dict):
-        raise HTTPException(status_code=500, detail="wiki_cache.json: falta 'records' dict")
+        raise HTTPException(
+            status_code=500, detail="wiki_cache.json: falta 'records' dict"
+        )
 
     rids = sorted(records.keys())
     if status:
         wanted = status.strip().lower()
-        rids = [rid for rid in rids if str((records.get(rid) or {}).get("status", "")).lower() == wanted]
+        rids = [
+            rid
+            for rid in rids
+            if str((records.get(rid) or {}).get("status", "")).lower() == wanted
+        ]
 
     total = len(rids)
     page_rids = rids[offset : offset + limit]
@@ -70,7 +76,9 @@ def wiki_by_imdb(
 
     rec = records.get(str(rid))
     if not rec:
-        raise HTTPException(status_code=404, detail=f"rid no encontrado en records: {rid}")
+        raise HTTPException(
+            status_code=404, detail=f"rid no encontrado en records: {rid}"
+        )
 
     return {"rid": str(rid), **rec}
 

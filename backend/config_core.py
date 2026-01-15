@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from backend.config_base import _cap_float_min, _cap_int, _get_env_bool, _get_env_float, _get_env_int
+from backend.config_base import (
+    _cap_float_min,
+    _cap_int,
+    _get_env_bool,
+    _get_env_float,
+    _get_env_int,
+)
 
 # ============================================================
 # CORE (backend/analyze_input_core.py)

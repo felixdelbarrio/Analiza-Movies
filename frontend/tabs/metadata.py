@@ -128,7 +128,9 @@ def render_df(df_meta: pd.DataFrame) -> None:
     st.write("### Corrección de metadata (sugerencias)")
 
     if df_meta.empty:
-        st.info("El CSV de sugerencias de metadata está vacío o no se pudo leer correctamente.")
+        st.info(
+            "El CSV de sugerencias de metadata está vacío o no se pudo leer correctamente."
+        )
         return
 
     _render_df_body(df_meta)
@@ -148,7 +150,9 @@ def render(metadata_sugg_csv: str) -> None:
         return
 
     if not os.path.exists(metadata_sugg_csv):
-        st.info(f"No se encontró el CSV de sugerencias de metadata: `{metadata_sugg_csv}`")
+        st.info(
+            f"No se encontró el CSV de sugerencias de metadata: `{metadata_sugg_csv}`"
+        )
         return
 
     if not os.path.isfile(metadata_sugg_csv):
@@ -158,7 +162,9 @@ def render(metadata_sugg_csv: str) -> None:
     df_meta = _load_metadata_csv(metadata_sugg_csv)
 
     if df_meta.empty:
-        st.info("El CSV de sugerencias de metadata está vacío o no se pudo leer correctamente.")
+        st.info(
+            "El CSV de sugerencias de metadata está vacío o no se pudo leer correctamente."
+        )
         return
 
     _render_df_body(df_meta)

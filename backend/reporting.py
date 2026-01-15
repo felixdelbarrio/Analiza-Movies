@@ -87,6 +87,7 @@ _STANDARD_SUGGESTION_FIELDS: Final[list[str]] = [
 # CSV ATÓMICO EN STREAMING
 # ============================================================================
 
+
 class CSVAtomicWriter:
     """
     Writer incremental con commit atómico.
@@ -156,7 +157,9 @@ class CSVAtomicWriter:
 
         self._dir.mkdir(parents=True, exist_ok=True)
 
-        fd, tmp_name = tempfile.mkstemp(prefix=".tmp_", suffix=".csv", dir=str(self._dir), text=True)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=".tmp_", suffix=".csv", dir=str(self._dir), text=True
+        )
         self._tmp_name = tmp_name
 
         try:
@@ -215,7 +218,9 @@ class CSVAtomicWriter:
             writer.writerow(dict(row))
             self._rows_written += 1
         except Exception as exc:
-            _logger.error(f"Error escribiendo fila en {self._kind_label}: {exc!r}", always=True)
+            _logger.error(
+                f"Error escribiendo fila en {self._kind_label}: {exc!r}", always=True
+            )
 
     # --------------------------------------------------------
 
@@ -247,7 +252,9 @@ class CSVAtomicWriter:
                 except Exception:
                     pass
         finally:
-            _logger.info(f"{self._kind_label} abortado: no se comitea fichero ({self._path})")
+            _logger.info(
+                f"{self._kind_label} abortado: no se comitea fichero ({self._path})"
+            )
 
     def close(self) -> None:
         if not self._is_open:
@@ -285,14 +292,19 @@ class CSVAtomicWriter:
                     os.remove(tmp_name)
                 except Exception:
                     pass
-                _logger.info(f"{self._kind_label} vacío: no se genera fichero ({self._path})")
+                _logger.info(
+                    f"{self._kind_label} vacío: no se genera fichero ({self._path})"
+                )
                 return
 
             os.replace(tmp_name, str(self._pathp))
             _logger.info(f"{self._kind_label} escrito en {self._path}")
 
         except Exception as exc:
-            _logger.error(f"Error cerrando {self._kind_label} en {self._path}: {exc!r}", always=True)
+            _logger.error(
+                f"Error cerrando {self._kind_label} en {self._path}: {exc!r}",
+                always=True,
+            )
             if tmp_name and os.path.exists(tmp_name):
                 try:
                     os.remove(tmp_name)
@@ -303,6 +315,7 @@ class CSVAtomicWriter:
 # ============================================================================
 # FACTORIES (STREAMING)
 # ============================================================================
+
 
 def open_all_csv_writer(path: str) -> CSVAtomicWriter:
     return CSVAtomicWriter(
@@ -337,6 +350,7 @@ def open_suggestions_csv_writer(path: str) -> CSVAtomicWriter:
 # ============================================================================
 # API LEGACY (compatibilidad)
 # ============================================================================
+
 
 def write_all_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
     with open_all_csv_writer(path) as w:

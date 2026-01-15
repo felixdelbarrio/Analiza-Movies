@@ -37,7 +37,9 @@ def _sort_all_movies_view(df: pd.DataFrame) -> pd.DataFrame:
         return df_view
 
     try:
-        return df_view.sort_values(by=["title"], ascending=[True], na_position="last", ignore_index=True)
+        return df_view.sort_values(
+            by=["title"], ascending=[True], na_position="last", ignore_index=True
+        )
     except Exception:
         # Degradación segura: si algún dtype raro rompe sort_values, devolvemos sin ordenar.
         return df_view

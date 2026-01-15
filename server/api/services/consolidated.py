@@ -53,7 +53,11 @@ def get_wiki_record(
     rid: str | None = None
     if imdb_id:
         imdb_norm = imdb_id.strip().lower()
-        rid = idx_imdb.get(imdb_norm) or idx_imdb.get(f"imdb:{imdb_norm}") or idx_imdb.get(imdb_id.strip())
+        rid = (
+            idx_imdb.get(imdb_norm)
+            or idx_imdb.get(f"imdb:{imdb_norm}")
+            or idx_imdb.get(imdb_id.strip())
+        )
     if not rid and norm_title is not None:
         t = norm_title.strip().lower()
         y = (norm_year or "").strip()
@@ -80,8 +84,12 @@ def consolidate(
     norm_year = (year or "").strip() if isinstance(year, str) else None
     imdb_norm = imdb_id.strip().lower() if isinstance(imdb_id, str) else None
 
-    omdb_rid, omdb_rec = get_omdb_record(cache=cache, imdb_id=imdb_norm, norm_title=norm_title, norm_year=norm_year)
-    wiki_rid, wiki_rec = get_wiki_record(cache=cache, imdb_id=imdb_norm, norm_title=norm_title, norm_year=norm_year)
+    omdb_rid, omdb_rec = get_omdb_record(
+        cache=cache, imdb_id=imdb_norm, norm_title=norm_title, norm_year=norm_year
+    )
+    wiki_rid, wiki_rec = get_wiki_record(
+        cache=cache, imdb_id=imdb_norm, norm_title=norm_title, norm_year=norm_year
+    )
 
     omdb_payload: dict[str, Any] | None = None
     wiki_payload: dict[str, Any] | None = None
@@ -128,31 +136,67 @@ def consolidate(
         merged["ratings"] = omdb_payload.get("Ratings")
 
     if isinstance(wiki_payload, dict):
-        merged["wikipedia_title"] = wiki_payload.get("wikipedia_title") or wiki_payload.get("title")
-        merged["source_language"] = wiki_payload.get("source_language") or wiki_payload.get("language")
+        merged["wikipedia_title"] = wiki_payload.get(
+            "wikipedia_title"
+        ) or wiki_payload.get("title")
+        merged["source_language"] = wiki_payload.get(
+            "source_language"
+        ) or wiki_payload.get("language")
 
     if isinstance(wikidata_payload, dict):
-        merged["wikidata_id"] = wikidata_payload.get("wikidata_id") or wikidata_payload.get("qid")
+        merged["wikidata_id"] = wikidata_payload.get(
+            "wikidata_id"
+        ) or wikidata_payload.get("qid")
 
     if not merged.get("wikipedia_title") and isinstance(wiki_from_omdb_cache, dict):
         merged["wikipedia_title"] = wiki_from_omdb_cache.get("wikipedia_title")
         merged["source_language"] = wiki_from_omdb_cache.get("source_language")
-        merged["wikidata_id"] = merged.get("wikidata_id") or wiki_from_omdb_cache.get("wikidata_id")
+        merged["wikidata_id"] = merged.get("wikidata_id") or wiki_from_omdb_cache.get(
+            "wikidata_id"
+        )
 
     return {
-        "key": {"imdb_id": resolved_imdb, "title_norm": norm_title, "year_norm": norm_year},
+        "key": {
+            "imdb_id": resolved_imdb,
+            "title_norm": norm_title,
+            "year_norm": norm_year,
+        },
         "sources": {
             "omdb": {
                 "rid": omdb_rid,
-                "status": (omdb_rec or {}).get("status") if isinstance(omdb_rec, dict) else None,
-                "fetched_at": (omdb_rec or {}).get("fetched_at") if isinstance(omdb_rec, dict) else None,
-                "ttl_s": (omdb_rec or {}).get("ttl_s") if isinstance(omdb_rec, dict) else None,
+                "status": (
+                    (omdb_rec or {}).get("status")
+                    if isinstance(omdb_rec, dict)
+                    else None
+                ),
+                "fetched_at": (
+                    (omdb_rec or {}).get("fetched_at")
+                    if isinstance(omdb_rec, dict)
+                    else None
+                ),
+                "ttl_s": (
+                    (omdb_rec or {}).get("ttl_s")
+                    if isinstance(omdb_rec, dict)
+                    else None
+                ),
             },
             "wiki": {
                 "rid": wiki_rid,
-                "status": (wiki_rec or {}).get("status") if isinstance(wiki_rec, dict) else None,
-                "fetched_at": (wiki_rec or {}).get("fetched_at") if isinstance(wiki_rec, dict) else None,
-                "ttl_s": (wiki_rec or {}).get("ttl_s") if isinstance(wiki_rec, dict) else None,
+                "status": (
+                    (wiki_rec or {}).get("status")
+                    if isinstance(wiki_rec, dict)
+                    else None
+                ),
+                "fetched_at": (
+                    (wiki_rec or {}).get("fetched_at")
+                    if isinstance(wiki_rec, dict)
+                    else None
+                ),
+                "ttl_s": (
+                    (wiki_rec or {}).get("ttl_s")
+                    if isinstance(wiki_rec, dict)
+                    else None
+                ),
             },
         },
         "merged": merged,

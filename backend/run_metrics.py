@@ -30,8 +30,8 @@ from typing import Any
 @dataclass(frozen=True)
 class ErrorEvent:
     ts: float
-    subsystem: str   # "dlna" | "plex" | "omdb" | "wiki"
-    action: str      # "browse" | "attr_read" | "query" | ...
+    subsystem: str  # "dlna" | "plex" | "omdb" | "wiki"
+    action: str  # "browse" | "attr_read" | "query" | ...
     endpoint: str | None
     detail: str
 
@@ -85,7 +85,9 @@ class RunMetrics:
             t["min"] = min(float(t.get("min", v)), v)
             t["max"] = max(float(t.get("max", v)), v)
 
-    def add_error(self, subsystem: str, action: str, *, endpoint: str | None, detail: str) -> None:
+    def add_error(
+        self, subsystem: str, action: str, *, endpoint: str | None, detail: str
+    ) -> None:
         ev = ErrorEvent(
             ts=time.time(),
             subsystem=str(subsystem),
@@ -120,12 +122,18 @@ class RunMetrics:
             cnt = max(1.0, float(t.get("count", 0.0)))
             t["avg"] = float(t.get("sum", 0.0)) / cnt
 
-        return {"counters": counters, "timings_ms": timings, "errors": errors, "derived": derived}
+        return {
+            "counters": counters,
+            "timings_ms": timings,
+            "errors": errors,
+            "derived": derived,
+        }
 
 
 # -----------------------------------------------------------------------------
 # Compat shims (para módulos que esperan inc/observe_seconds)
 # -----------------------------------------------------------------------------
+
 
 def inc(name: str, *, value: int = 1) -> None:
     """Compat: incrementa contador."""

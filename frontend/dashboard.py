@@ -151,7 +151,9 @@ def _read_csv_or_none(path: Path) -> pd.DataFrame | None:
         return None
 
 
-_API_CACHE_TTL_S: int | None = FRONT_API_CACHE_TTL_S if FRONT_API_CACHE_TTL_S > 0 else None
+_API_CACHE_TTL_S: int | None = (
+    FRONT_API_CACHE_TTL_S if FRONT_API_CACHE_TTL_S > 0 else None
+)
 
 
 @_cache_data_decorator(ttl_s=_API_CACHE_TTL_S)
@@ -251,7 +253,9 @@ def _import_tabs_module(module_name: str) -> Any | None:
         return None
 
 
-def _call_candidates_render(module: Any, *, df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
+def _call_candidates_render(
+    module: Any, *, df_all: pd.DataFrame, df_filtered: pd.DataFrame | None
+) -> None:
     """
     Llama a candidates.render() de forma compatible con firmas:
       - render(df_all)
@@ -266,7 +270,8 @@ def _call_candidates_render(module: Any, *, df_all: pd.DataFrame, df_filtered: p
     params = [
         p
         for p in sig.parameters.values()
-        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        if p.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     ]
     if len(params) >= 2:
         render_fn(df_all, df_filtered)
@@ -373,10 +378,16 @@ st.subheader("Resumen general")
 summary = compute_summary(df_all)
 
 col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Películas", format_count_size(summary["total_count"], summary["total_size_gb"]))
+col1.metric(
+    "Películas", format_count_size(summary["total_count"], summary["total_size_gb"])
+)
 col2.metric("KEEP", format_count_size(summary["keep_count"], summary["keep_size_gb"]))
-col3.metric("DELETE", format_count_size(summary["delete_count"], summary["delete_size_gb"]))
-col4.metric("MAYBE", format_count_size(summary["maybe_count"], summary["maybe_size_gb"]))
+col3.metric(
+    "DELETE", format_count_size(summary["delete_count"], summary["delete_size_gb"])
+)
+col4.metric(
+    "MAYBE", format_count_size(summary["maybe_count"], summary["maybe_size_gb"])
+)
 
 imdb_mean_df = compute_global_imdb_mean_from_df(df_all)
 if imdb_mean_df is not None and not pd.isna(imdb_mean_df):
@@ -435,7 +446,9 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 
 with tab1:
     all_movies_mod = _import_tabs_module("all_movies")
-    render_fn = getattr(all_movies_mod, "render", None) if all_movies_mod is not None else None
+    render_fn = (
+        getattr(all_movies_mod, "render", None) if all_movies_mod is not None else None
+    )
     if not callable(render_fn):
         _ui_error("No existe frontend.tabs.all_movies.render(df_all)")
     else:
@@ -451,7 +464,9 @@ with tab2:
 
 with tab3:
     advanced_mod = _import_tabs_module("advanced")
-    render_fn = getattr(advanced_mod, "render", None) if advanced_mod is not None else None
+    render_fn = (
+        getattr(advanced_mod, "render", None) if advanced_mod is not None else None
+    )
     if not callable(render_fn):
         _ui_error("No existe frontend.tabs.advanced.render(df_all)")
     else:

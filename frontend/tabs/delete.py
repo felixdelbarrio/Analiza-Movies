@@ -33,6 +33,7 @@ import streamlit as st
 from st_aggrid import GridOptionsBuilder, JsCode
 
 from frontend.data_utils import add_derived_columns
+
 Row = Mapping[str, Any]
 Rows = Sequence[Row]
 DeleteFilesFromRowsFn = Callable[[pd.DataFrame, bool], tuple[int, int, Sequence[str]]]
@@ -163,7 +164,9 @@ def _normalize_selected_rows(selected_raw: Any) -> list[dict[str, Any]]:
             out_list.append(_row_from_any(item))
         return out_list
 
-    if isinstance(selected_raw, Iterable) and not isinstance(selected_raw, (str, bytes)):
+    if isinstance(selected_raw, Iterable) and not isinstance(
+        selected_raw, (str, bytes)
+    ):
         out_it: list[dict[str, Any]] = []
         for x in selected_raw:
             out_it.append(_row_from_any(x))
@@ -250,7 +253,11 @@ def _truncate_logs(lines: Sequence[str], max_lines: int = 400) -> list[str]:
         return list(lines)
     head = list(lines[: max_lines // 2])
     tail = list(lines[-max_lines // 2 :])
-    return head + [f"... ({len(lines) - len(head) - len(tail)} lineas omitidas) ..."] + tail
+    return (
+        head
+        + [f"... ({len(lines) - len(head) - len(tail)} lineas omitidas) ..."]
+        + tail
+    )
 
 
 # ============================================================================
@@ -394,7 +401,14 @@ def render(
         "reason": "Reason",
         "file": "File",
     }
-    auto_size_cols = {"year", "library", "file_size", "imdb_rating", "imdb_votes", "rt_score"}
+    auto_size_cols = {
+        "year",
+        "library",
+        "file_size",
+        "imdb_rating",
+        "imdb_votes",
+        "rt_score",
+    }
     wrap_cols = {"title", "reason", "file"}
 
     for col in df_view.columns:
@@ -408,7 +422,9 @@ def render(
                 "(Number(value) / (1024*1024*1024)).toFixed(2) + ' GB' : ''"
             )
         if col == "imdb_votes":
-            col_def["valueFormatter"] = "value != null ? Math.round(Number(value)).toLocaleString() : ''"
+            col_def["valueFormatter"] = (
+                "value != null ? Math.round(Number(value)).toLocaleString() : ''"
+            )
         if col in auto_size_cols:
             col_def.update({"minWidth": 70, "suppressSizeToFit": True})
         if col == "year":
@@ -418,7 +434,9 @@ def render(
         if col == "metacritic_score":
             col_def.update({"minWidth": 70, "maxWidth": 90, "suppressSizeToFit": True})
         if col == "library":
-            col_def.update({"minWidth": 120, "maxWidth": 240, "suppressSizeToFit": True})
+            col_def.update(
+                {"minWidth": 120, "maxWidth": 240, "suppressSizeToFit": True}
+            )
         if col in wrap_cols:
             flex = 2 if col == "title" else 3
             col_def.update(
@@ -482,7 +500,9 @@ function(params) {
 }
 """
     )
-    gb.configure_grid_options(onFirstDataRendered=auto_size_js, onGridSizeChanged=fit_js)
+    gb.configure_grid_options(
+        onFirstDataRendered=auto_size_js, onGridSizeChanged=fit_js
+    )
     gb.configure_grid_options(enableCellTextSelection=True, ensureDomOrder=True)
     for col in df_view.columns:
         if col not in visible_cols:
@@ -510,7 +530,9 @@ function(params) {
 
     if num_selected > 0:
         existing = _count_existing_files(selected_rows)
-        st.caption(f"Ficheros reales detectados en disco (de la seleccion): **{existing}**")
+        st.caption(
+            f"Ficheros reales detectados en disco (de la seleccion): **{existing}**"
+        )
 
     total_gb = _compute_total_size_gb(selected_rows)
     if total_gb is not None:
@@ -535,7 +557,9 @@ function(params) {
         ok, err, logs = delete_files_from_rows_fn(df_sel, delete_dry_run)
 
         if delete_dry_run:
-            st.success(f"DRY RUN completado. Se habrian borrado {ok} archivo(s), {err} error(es).")
+            st.success(
+                f"DRY RUN completado. Se habrian borrado {ok} archivo(s), {err} error(es)."
+            )
         else:
             st.success(f"Borrado completado. OK={ok}, errores={err}")
 

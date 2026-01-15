@@ -67,8 +67,12 @@ def test_reports_filtered_204_when_missing(monkeypatch, tmp_path):
     _write_csv(report_all, [{"title": "Movie A"}])
 
     monkeypatch.setattr(reports_router, "REPORT_ALL_PATH", report_all)
-    monkeypatch.setattr(reports_router, "REPORT_FILTERED_PATH", tmp_path / "missing.csv")
-    monkeypatch.setattr(reports_router, "METADATA_FIX_PATH", tmp_path / "missing_meta.csv")
+    monkeypatch.setattr(
+        reports_router, "REPORT_FILTERED_PATH", tmp_path / "missing.csv"
+    )
+    monkeypatch.setattr(
+        reports_router, "METADATA_FIX_PATH", tmp_path / "missing_meta.csv"
+    )
 
     app = create_app()
     cache = FileCache(_settings())

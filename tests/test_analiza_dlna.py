@@ -27,7 +27,9 @@ class DummyMetrics:
     def observe_ms(self, key: str, ms: float) -> None:
         return
 
-    def add_error(self, subsystem: str, action: str, *, endpoint: str | None, detail: str) -> None:
+    def add_error(
+        self, subsystem: str, action: str, *, endpoint: str | None, detail: str
+    ) -> None:
         return
 
     def snapshot(self):
@@ -71,7 +73,9 @@ def _patch_common(monkeypatch, *, silent: bool) -> None:
     monkeypatch.setattr(analiza_dlna, "OMDB_HTTP_MAX_CONCURRENCY", 1)
     monkeypatch.setattr(analiza_dlna, "OMDB_HTTP_MIN_INTERVAL_SECONDS", 0)
     monkeypatch.setattr(analiza_dlna, "METRICS", DummyMetrics())
-    monkeypatch.setattr(analiza_dlna, "build_traversal_limits", lambda: TraversalLimits(1, 1, 1, 1, 1))
+    monkeypatch.setattr(
+        analiza_dlna, "build_traversal_limits", lambda: TraversalLimits(1, 1, 1, 1, 1)
+    )
     monkeypatch.setattr(analiza_dlna, "flush_external_caches", lambda: None)
     monkeypatch.setattr(analiza_dlna, "reset_omdb_metrics", lambda: None)
     monkeypatch.setattr(analiza_dlna, "get_omdb_metrics_snapshot", lambda: {})
@@ -82,7 +86,9 @@ def test_analyze_dlna_server_returns_when_no_device(monkeypatch):
 
     _patch_common(monkeypatch, silent=False)
 
-    fake_client = FakeDLNAClient(device=None, root=None, containers=[], items_by_object_id={})
+    fake_client = FakeDLNAClient(
+        device=None, root=None, containers=[], items_by_object_id={}
+    )
     monkeypatch.setattr(analiza_dlna, "DLNAClient", lambda: fake_client)
 
     def _fail_writer(*args, **kwargs):
@@ -140,8 +146,14 @@ def test_analyze_dlna_server_interactive_writes_filtered_rows(monkeypatch):
     filtered_writer = DummyWriter()
 
     monkeypatch.setattr(analiza_dlna, "open_all_csv_writer", lambda _path: all_writer)
-    monkeypatch.setattr(analiza_dlna, "open_suggestions_csv_writer", lambda _path: sugg_writer)
-    monkeypatch.setattr(analiza_dlna, "open_filtered_csv_writer_only_if_rows", lambda _path: filtered_writer)
+    monkeypatch.setattr(
+        analiza_dlna, "open_suggestions_csv_writer", lambda _path: sugg_writer
+    )
+    monkeypatch.setattr(
+        analiza_dlna,
+        "open_filtered_csv_writer_only_if_rows",
+        lambda _path: filtered_writer,
+    )
     monkeypatch.setattr(analiza_dlna, "sort_filtered_rows", lambda rows: list(rows))
 
     seen_inputs = []
@@ -165,8 +177,13 @@ def test_analyze_dlna_server_interactive_writes_filtered_rows(monkeypatch):
     assert any(title.startswith("Another Movie") for title in titles)
 
     years = {mi.title: mi.year for mi in seen_inputs}
-    assert years[next(title for title in years if title.startswith("Best Movie"))] == 1999
-    assert years[next(title for title in years if title.startswith("Another Movie"))] == 2001
+    assert (
+        years[next(title for title in years if title.startswith("Best Movie"))] == 1999
+    )
+    assert (
+        years[next(title for title in years if title.startswith("Another Movie"))]
+        == 2001
+    )
 
 
 def test_analyze_dlna_server_silent_dedupe(monkeypatch):
@@ -210,12 +227,18 @@ def test_analyze_dlna_server_silent_dedupe(monkeypatch):
     sugg_writer = DummyWriter()
 
     monkeypatch.setattr(analiza_dlna, "open_all_csv_writer", lambda _path: all_writer)
-    monkeypatch.setattr(analiza_dlna, "open_suggestions_csv_writer", lambda _path: sugg_writer)
+    monkeypatch.setattr(
+        analiza_dlna, "open_suggestions_csv_writer", lambda _path: sugg_writer
+    )
 
     def _fail_filtered_writer(_path):
-        raise AssertionError("filtered writer should not be called when no filtered rows")
+        raise AssertionError(
+            "filtered writer should not be called when no filtered rows"
+        )
 
-    monkeypatch.setattr(analiza_dlna, "open_filtered_csv_writer_only_if_rows", _fail_filtered_writer)
+    monkeypatch.setattr(
+        analiza_dlna, "open_filtered_csv_writer_only_if_rows", _fail_filtered_writer
+    )
 
     analyze_calls = []
 

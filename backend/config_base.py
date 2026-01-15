@@ -42,7 +42,9 @@ PROJECT_DIR: Final[Path] = BASE_DIR.parent
 _DATA_DIR_RAW: Final[str] = (os.getenv("DATA_DIR") or "data").strip() or "data"
 _DATA_DIR_CANDIDATE = Path(_DATA_DIR_RAW)
 DATA_DIR: Final[Path] = (
-    _DATA_DIR_CANDIDATE if _DATA_DIR_CANDIDATE.is_absolute() else (PROJECT_DIR / _DATA_DIR_CANDIDATE)
+    _DATA_DIR_CANDIDATE
+    if _DATA_DIR_CANDIDATE.is_absolute()
+    else (PROJECT_DIR / _DATA_DIR_CANDIDATE)
 )
 
 
@@ -77,7 +79,9 @@ def _get_env_int(name: str, default: int) -> int:
     try:
         return int(v)
     except Exception:
-        _logger.warning(f"Invalid int for {name!r}: {v!r}, using default {default}", always=True)
+        _logger.warning(
+            f"Invalid int for {name!r}: {v!r}, using default {default}", always=True
+        )
         return default
 
 
@@ -88,7 +92,9 @@ def _get_env_float(name: str, default: float) -> float:
     try:
         return float(v)
     except Exception:
-        _logger.warning(f"Invalid float for {name!r}: {v!r}, using default {default}", always=True)
+        _logger.warning(
+            f"Invalid float for {name!r}: {v!r}, using default {default}", always=True
+        )
         return default
 
 
@@ -101,7 +107,9 @@ def _get_env_bool(name: str, default: bool) -> bool:
         return True
     if s in _FALSE_SET:
         return False
-    _logger.warning(f"Invalid bool for {name!r}: {v!r}, using default {default}", always=True)
+    _logger.warning(
+        f"Invalid bool for {name!r}: {v!r}, using default {default}", always=True
+    )
     return default
 
 
@@ -144,7 +152,9 @@ def _cap_float_min(name: str, value: float, *, min_v: float) -> float:
     return value
 
 
-def _log_config_debug(label: str, value: object, *, debug_mode: bool, silent_mode: bool) -> None:
+def _log_config_debug(
+    label: str, value: object, *, debug_mode: bool, silent_mode: bool
+) -> None:
     if not debug_mode or silent_mode:
         return
     try:
@@ -185,13 +195,17 @@ def _parse_env_kv_map(raw: str) -> dict[str, str]:
         if not chunk:
             continue
         if ":" not in chunk:
-            _logger.warning(f"Invalid map chunk (missing ':') ignored: {chunk!r}", always=True)
+            _logger.warning(
+                f"Invalid map chunk (missing ':') ignored: {chunk!r}", always=True
+            )
             continue
         k, v = chunk.split(":", 1)
         ks = k.strip()
         vs = v.strip()
         if not ks or not vs:
-            _logger.warning(f"Invalid map chunk (empty key/value) ignored: {chunk!r}", always=True)
+            _logger.warning(
+                f"Invalid map chunk (empty key/value) ignored: {chunk!r}", always=True
+            )
             continue
         out[ks] = vs
 
@@ -252,11 +266,16 @@ LOGGER_FILE_ENABLED: bool = _get_env_bool("LOGGER_FILE_ENABLED", False)
 _LOGGER_FILE_DIR_RAW: Final[str] = _get_env_str("LOGGER_FILE_DIR", "logs") or "logs"
 _LOGGER_FILE_DIR_CANDIDATE = Path(_LOGGER_FILE_DIR_RAW)
 LOGGER_FILE_DIR: Final[Path] = (
-    _LOGGER_FILE_DIR_CANDIDATE if _LOGGER_FILE_DIR_CANDIDATE.is_absolute() else (BASE_DIR / _LOGGER_FILE_DIR_CANDIDATE)
+    _LOGGER_FILE_DIR_CANDIDATE
+    if _LOGGER_FILE_DIR_CANDIDATE.is_absolute()
+    else (BASE_DIR / _LOGGER_FILE_DIR_CANDIDATE)
 )
 
 LOGGER_FILE_PREFIX: Final[str] = _get_env_str("LOGGER_FILE_PREFIX", "run") or "run"
-LOGGER_FILE_TIMESTAMP_FORMAT: Final[str] = _get_env_str("LOGGER_FILE_TIMESTAMP_FORMAT", "%Y-%m-%d_%H-%M-%S") or "%Y-%m-%d_%H-%M-%S"
+LOGGER_FILE_TIMESTAMP_FORMAT: Final[str] = (
+    _get_env_str("LOGGER_FILE_TIMESTAMP_FORMAT", "%Y-%m-%d_%H-%M-%S")
+    or "%Y-%m-%d_%H-%M-%S"
+)
 LOGGER_FILE_INCLUDE_PID: bool = _get_env_bool("LOGGER_FILE_INCLUDE_PID", True)
 
 _LOGGER_FILE_PATH_EXPLICIT_RAW: str | None = _get_env_str("LOGGER_FILE_PATH", None)
@@ -267,7 +286,7 @@ _LOGGER_FILE_PATH_CACHED: Path | None | object = _LOGGER_FILE_PATH_SENTINEL
 
 def _sanitize_filename_component(s: str) -> str:
     out_chars: list[str] = []
-    for ch in (s or ""):
+    for ch in s or "":
         if ch.isalnum() or ch in ("-", "_", ".", "@"):
             out_chars.append(ch)
         else:
@@ -294,7 +313,10 @@ def _build_logger_file_path() -> Path | None:
             _LOGGER_FILE_PATH_CACHED = resolved
             return resolved
 
-        if isinstance(_LOGGER_FILE_PATH_EXPLICIT_RAW, str) and _LOGGER_FILE_PATH_EXPLICIT_RAW.strip():
+        if (
+            isinstance(_LOGGER_FILE_PATH_EXPLICIT_RAW, str)
+            and _LOGGER_FILE_PATH_EXPLICIT_RAW.strip()
+        ):
             p = Path(_LOGGER_FILE_PATH_EXPLICIT_RAW.strip())
             resolved = (p if p.is_absolute() else (BASE_DIR / p)).resolve()
             os.environ["LOGGER_FILE_PATH"] = str(resolved)

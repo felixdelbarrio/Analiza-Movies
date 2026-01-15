@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from frontend.config_front_artifacts import REPORT_FILTERED_PATH
-from frontend.config_front_base import DELETE_DRY_RUN, DELETE_REQUIRE_CONFIRM, SILENT_MODE
+from frontend.config_front_base import (
+    DELETE_DRY_RUN,
+    DELETE_REQUIRE_CONFIRM,
+    SILENT_MODE,
+)
 
 
 class LoggerLike(Protocol):
@@ -206,7 +210,9 @@ def delete_files_from_rows(
             resolved = path
 
         if not _is_probably_safe_file(resolved):
-            logs.append(f"[DELETE] row#{i}: skip (no existe/no es fichero): {resolved} (title={title!r})")
+            logs.append(
+                f"[DELETE] row#{i}: skip (no existe/no es fichero): {resolved} (title={title!r})"
+            )
             continue
 
         if delete_dry_run:
@@ -220,7 +226,9 @@ def delete_files_from_rows(
             logs.append(f"[DELETE] deleted: {resolved} (title={title!r})")
         except Exception as exc:
             err += 1
-            logs.append(f"[DELETE] ERROR deleting {resolved} (title={title!r}): {exc!r}")
+            logs.append(
+                f"[DELETE] ERROR deleting {resolved} (title={title!r}): {exc!r}"
+            )
 
     return ok, err, logs
 
@@ -299,7 +307,9 @@ def run_delete_from_report_filtered(
     logger = _get_logger()
 
     dry = DELETE_DRY_RUN if delete_dry_run is None else bool(delete_dry_run)
-    confirm = DELETE_REQUIRE_CONFIRM if require_confirm is None else bool(require_confirm)
+    confirm = (
+        DELETE_REQUIRE_CONFIRM if require_confirm is None else bool(require_confirm)
+    )
 
     logger.progress("[DELETE] Inicio")
 
@@ -315,10 +325,14 @@ def run_delete_from_report_filtered(
 
     mode = "DRY_RUN" if dry else "REAL_DELETE"
     logger.progress(f"[DELETE] Fuente: {csv_path_str}")
-    logger.progress(f"[DELETE] Filas: {len(rows)} | ficheros existentes: {existing} | modo={mode}")
+    logger.progress(
+        f"[DELETE] Filas: {len(rows)} | ficheros existentes: {existing} | modo={mode}"
+    )
 
     if existing == 0:
-        logger.progress("[DELETE] Nada que borrar (no se detectan ficheros reales en disco).")
+        logger.progress(
+            "[DELETE] Nada que borrar (no se detectan ficheros reales en disco)."
+        )
         return
 
     if confirm:

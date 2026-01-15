@@ -44,7 +44,11 @@ class URLOpenMock:
 
 
 def build_soap_envelope(result_xml: str, *, total_matches: int | None) -> bytes:
-    total = f"<TotalMatches>{total_matches}</TotalMatches>" if total_matches is not None else ""
+    total = (
+        f"<TotalMatches>{total_matches}</TotalMatches>"
+        if total_matches is not None
+        else ""
+    )
     return (
         "<?xml version='1.0'?>"
         "<s:Envelope xmlns:s='http://schemas.xmlsoap.org/soap/envelope/'>"
@@ -64,10 +68,10 @@ def didl_video_item_xml() -> str:
         '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" '
         'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
         'xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
-        "<item id=\"i1\">"
+        '<item id="i1">'
         "<dc:title>My Movie</dc:title>"
         "<dc:date>1999-01-01</dc:date>"
-        "<res protocolInfo=\"http-get:*:video/mp4:*\" size=\"123\">http://example/video.mp4</res>"
+        '<res protocolInfo="http-get:*:video/mp4:*" size="123">http://example/video.mp4</res>'
         "<upnp:class>object.item.videoItem.movie</upnp:class>"
         "</item>"
         "</DIDL-Lite>"
@@ -83,7 +87,7 @@ def didl_container_and_item_xml(didl_video_item_xml: str) -> str:
         '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" '
         'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
         'xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
-        "<container id=\"c1\"><dc:title>Movies</dc:title></container>"
+        '<container id="c1"><dc:title>Movies</dc:title></container>'
         f"{inner_item}"
         "</DIDL-Lite>"
     )

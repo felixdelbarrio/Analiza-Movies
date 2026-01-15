@@ -49,7 +49,9 @@ def _patch_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(health_router, "OMDB_CACHE_PATH", omdb_path)
     monkeypatch.setattr(health_router, "WIKI_CACHE_PATH", wiki_path)
     monkeypatch.setattr(health_router, "REPORT_ALL_PATH", report_all)
-    monkeypatch.setattr(health_router, "REPORT_FILTERED_PATH", tmp_path / "report_filtered.csv")
+    monkeypatch.setattr(
+        health_router, "REPORT_FILTERED_PATH", tmp_path / "report_filtered.csv"
+    )
     monkeypatch.setattr(health_router, "METADATA_FIX_PATH", metadata_fix)
 
     monkeypatch.setattr(omdb_service, "OMDB_CACHE_PATH", omdb_path)

@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from typing import Any, Final, TypeAlias, cast
@@ -78,6 +79,7 @@ from backend import logger
 from backend.analyze_input_core import AnalysisRow, analyze_input_movie
 from backend.config_collection import (
     COLLECTION_ENABLE_LAZY_WIKI,
+    COLLECTION_LAZY_WIKI_FOR_ALL,
     COLLECTION_LAZY_WIKI_ALLOW_TITLE_YEAR_FALLBACK,
     COLLECTION_LAZY_WIKI_FORCE_OMDB_POST_CORE,
     COLLECTION_OMDB_JSON_MODE,
@@ -86,6 +88,10 @@ from backend.config_collection import (
     COLLECTION_TRACE_ALSO_DEBUG_CTX,
     COLLECTION_TRACE_LINE_MAX_CHARS,
     COLLECTION_WIKI_LOCAL_CACHE_MAX_ITEMS,
+    DLNA_WIKI_EMBEDDED_MAX_AGE_SECONDS,
+    DLNA_WIKI_EMBEDDED_MODE,
+    DLNA_WIKI_FORCE_LAZY_EVEN_WITH_EMBEDDED,
+    DLNA_WIKI_PRE_OMDB_RESOLUTION,
 )
 from backend.metadata_fix import generate_metadata_suggestions_row
 from backend.movie_input import MovieInput, coalesce_movie_identity
@@ -149,7 +155,9 @@ _LOCAL_CACHE_LOCK = threading.Lock()
 _OMDB_CACHE_WRITE_LOCK = threading.Lock()
 
 
-def _lru_get(cache: "OrderedDict[_OmdbCacheKey, object]", key: _OmdbCacheKey) -> object | None:
+def _lru_get(
+    cache: "OrderedDict[_OmdbCacheKey, object]", key: _OmdbCacheKey
+) -> object | None:
     """
     LRU get (NO thread-safe; llamar bajo _LOCAL_CACHE_LOCK).
 
@@ -205,7 +213,9 @@ def _lru_set(
 _TRACE_LINE_MAX_CHARS: Final[int] = int(COLLECTION_TRACE_LINE_MAX_CHARS)
 
 
-def _append_log(logs: list[str], line: object, *, force: bool = False, tag: str | None = None) -> None:
+def _append_log(
+    logs: list[str], line: object, *, force: bool = False, tag: str | None = None
+) -> None:
     """
     ✅ NO early-return: evita "Statement is unreachable" si Pyright constant-fold.
     """
@@ -221,7 +231,9 @@ def _append_trace(logs: list[str], line: object) -> None:
     try:
         trunc_fn: object = getattr(_LOGGER, "truncate_line", None)
         if callable(trunc_fn):
-            text = cast(Callable[..., str], trunc_fn)(str(line), max_chars=_TRACE_LINE_MAX_CHARS)
+            text = cast(Callable[..., str], trunc_fn)(
+                str(line), max_chars=_TRACE_LINE_MAX_CHARS
+            )
         else:
             text = str(line)
     except Exception:
@@ -302,8 +314,51 @@ def _norm_imdb_hint(raw: object) -> str | None:
     return v or None
 
 
-def _cache_key(title_for_fetch: str, year_for_fetch: int | None, imdb_hint: str | None) -> _OmdbCacheKey:
+def _cache_key(
+    title_for_fetch: str, year_for_fetch: int | None, imdb_hint: str | None
+) -> _OmdbCacheKey:
     return (_norm_title(title_for_fetch), _norm_year_str(year_for_fetch), imdb_hint)
+
+
+def _now_epoch() -> int:
+    return int(time.time())
+
+
+def _extract_imdb_id_from_meta(meta: Mapping[str, object]) -> str | None:
+    raw = meta.get("imdb_id")
+    if not (isinstance(raw, str) and raw.strip()):
+        raw = meta.get("imdbID")  # compat legacy
+    return _norm_imdb_hint(raw)
+
+
+def _wiki_meta_is_fresh(meta: Mapping[str, object]) -> bool:
+    fetched_at = meta.get("fetched_at")
+    ttl_s = meta.get("ttl_s")
+
+    if (
+        not isinstance(fetched_at, int)
+        or isinstance(fetched_at, bool)
+        or fetched_at <= 0
+    ):
+        return False
+
+    age = _now_epoch() - fetched_at
+    if age < 0:
+        return False
+
+    max_age = int(DLNA_WIKI_EMBEDDED_MAX_AGE_SECONDS)
+    if max_age > 0 and age > max_age:
+        return False
+
+    if (
+        isinstance(ttl_s, int)
+        and not isinstance(ttl_s, bool)
+        and ttl_s > 0
+        and age > ttl_s
+    ):
+        return False
+
+    return True
 
 
 def _extract_wiki_meta(omdb_record: Mapping[str, object] | None) -> dict[str, object]:
@@ -315,7 +370,25 @@ def _extract_wiki_meta(omdb_record: Mapping[str, object] | None) -> dict[str, ob
     return {}
 
 
-def _build_lookup_key(title_for_fetch: str, year_for_fetch: int | None, imdb_hint: str | None) -> str:
+def _should_use_embedded_wiki(
+    movie_input: MovieInput, wiki_meta: Mapping[str, object]
+) -> bool:
+    if movie_input.source != "dlna":
+        return True
+
+    mode = (DLNA_WIKI_EMBEDDED_MODE or "ignore").strip().lower()
+    if mode == "ignore":
+        return False
+    if mode == "use":
+        return True
+    if mode == "use_if_fresh":
+        return _wiki_meta_is_fresh(wiki_meta)
+    return False
+
+
+def _build_lookup_key(
+    title_for_fetch: str, year_for_fetch: int | None, imdb_hint: str | None
+) -> str:
     t = (title_for_fetch or "").strip()
     if imdb_hint:
         return f"imdb_id:{imdb_hint}"
@@ -345,6 +418,8 @@ def _build_minimal_wiki_block(
     wikipedia_title: str | None,
     wiki_lookup: Mapping[str, object],
     source_language: str | None = None,
+    fetched_at: int | None = None,
+    ttl_s: int | None = None,
 ) -> dict[str, object]:
     out: dict[str, object] = {"wiki_lookup": dict(wiki_lookup)}
     if imdb_id:
@@ -355,7 +430,74 @@ def _build_minimal_wiki_block(
         out["wikipedia_title"] = wikipedia_title
     if source_language:
         out["source_language"] = source_language
+    if (
+        isinstance(fetched_at, int)
+        and fetched_at > 0
+        and not isinstance(fetched_at, bool)
+    ):
+        out["fetched_at"] = fetched_at
+    if isinstance(ttl_s, int) and ttl_s > 0 and not isinstance(ttl_s, bool):
+        out["ttl_s"] = ttl_s
     return out
+
+
+def _build_minimal_wiki_from_item(
+    *,
+    wiki_item: Mapping[str, object],
+    title_for_fetch: str,
+    year_for_fetch: int | None,
+    imdb_used_for_wiki: str | None,
+) -> tuple[dict[str, object] | None, str | None]:
+    if not _wiki_item_is_usable(wiki_item):
+        return None, None
+
+    wiki_block = wiki_item.get("wiki")
+    wikidata_block = wiki_item.get("wikidata")
+    if not isinstance(wiki_block, Mapping) or not isinstance(wikidata_block, Mapping):
+        return None, None
+
+    imdb_id_from_wiki = None
+    imdb_cached = wiki_item.get("imdbID")
+    if not (isinstance(imdb_cached, str) and imdb_cached.strip()):
+        imdb_cached = wiki_item.get("imdb_id")
+    if isinstance(imdb_cached, str) and imdb_cached.strip():
+        imdb_id_from_wiki = _norm_imdb_hint(imdb_cached)
+
+    wikidata_id_from_wiki = None
+    qid_val = wikidata_block.get("qid")
+    if isinstance(qid_val, str) and qid_val.strip():
+        wikidata_id_from_wiki = qid_val.strip()
+
+    wikipedia_title_from_wiki = None
+    source_language_from_wiki = None
+    wt = wiki_block.get("wikipedia_title")
+    if isinstance(wt, str) and wt.strip():
+        wikipedia_title_from_wiki = wt.strip()
+    sl = wiki_block.get("source_language")
+    if isinstance(sl, str) and sl.strip():
+        source_language_from_wiki = sl.strip()
+
+    imdb_for_meta = imdb_id_from_wiki or imdb_used_for_wiki
+    wiki_lookup = _build_wiki_lookup_info(
+        title_for_fetch=title_for_fetch,
+        year_for_fetch=year_for_fetch,
+        imdb_used=imdb_used_for_wiki or imdb_id_from_wiki,
+    )
+
+    fetched_at = wiki_item.get("fetched_at")
+    ttl_s = wiki_item.get("ttl_s")
+
+    minimal_wiki = _build_minimal_wiki_block(
+        imdb_id=imdb_for_meta,
+        wikidata_id=wikidata_id_from_wiki,
+        wikipedia_title=wikipedia_title_from_wiki,
+        wiki_lookup=wiki_lookup,
+        source_language=source_language_from_wiki,
+        fetched_at=fetched_at if isinstance(fetched_at, int) else None,
+        ttl_s=ttl_s if isinstance(ttl_s, int) else None,
+    )
+
+    return minimal_wiki, imdb_id_from_wiki
 
 
 def _persist_minimal_wiki_into_omdb_cache(
@@ -367,7 +509,10 @@ def _persist_minimal_wiki_into_omdb_cache(
     minimal_wiki: Mapping[str, object],
     lookup_key: str,
 ) -> None:
-    if _cfg_bool(COLLECTION_PERSIST_MINIMAL_WIKI_IN_OMDB_CACHE) and patch_cached_omdb_record is not None:
+    if (
+        _cfg_bool(COLLECTION_PERSIST_MINIMAL_WIKI_IN_OMDB_CACHE)
+        and patch_cached_omdb_record is not None
+    ):
         imdb_id_final = imdb_id_for_cache or imdb_hint
         norm_title = _norm_title(title_for_fetch)
         norm_year = _norm_year_str(year_for_fetch)
@@ -386,9 +531,13 @@ def _persist_minimal_wiki_into_omdb_cache(
                         },
                     },
                 )
-            _dbg_ctx(f"Persisted minimal wiki into OMDb cache | lookup_key={lookup_key}")
+            _dbg_ctx(
+                f"Persisted minimal wiki into OMDb cache | lookup_key={lookup_key}"
+            )
         except Exception as exc:  # pragma: no cover
-            _dbg_ctx(f"patch_cached_omdb_record failed | lookup_key={lookup_key} exc={exc!r}")
+            _dbg_ctx(
+                f"patch_cached_omdb_record failed | lookup_key={lookup_key} exc={exc!r}"
+            )
 
 
 def _wiki_item_is_usable(wiki_item: Mapping[str, object]) -> bool:
@@ -413,6 +562,9 @@ def _wiki_item_is_usable(wiki_item: Mapping[str, object]) -> bool:
 
 
 def _should_fetch_wiki_for_reporting(base_row: Mapping[str, object]) -> bool:
+    if _cfg_bool(COLLECTION_LAZY_WIKI_FOR_ALL):
+        return True
+
     misidentified_hint = base_row.get("misidentified_hint")
     if isinstance(misidentified_hint, str) and misidentified_hint.strip():
         return True
@@ -468,7 +620,11 @@ def _coalesce_identity(mi: MovieInput) -> tuple[str, int | None, str | None]:
         )
         return title2, year2, imdb2
     except Exception:
-        return (mi.title or ""), mi.year, (mi.imdb_id_hint if isinstance(mi.imdb_id_hint, str) else None)
+        return (
+            (mi.title or ""),
+            mi.year,
+            (mi.imdb_id_hint if isinstance(mi.imdb_id_hint, str) else None),
+        )
 
 
 # ============================================================================
@@ -507,7 +663,9 @@ def analyze_movie(
     display_year_raw = movie_input.extra.get("display_year")
 
     display_title = (
-        display_title_raw if isinstance(display_title_raw, str) and display_title_raw.strip() else movie_input.title
+        display_title_raw
+        if isinstance(display_title_raw, str) and display_title_raw.strip()
+        else movie_input.title
     )
 
     display_year: int | None
@@ -520,7 +678,11 @@ def analyze_movie(
     co_title, co_year, co_imdb = _coalesce_identity(movie_input)
 
     imdb_hint_raw = _norm_imdb_hint(movie_input.imdb_id_hint)
-    imdb_hint = _norm_imdb_hint(co_imdb) or imdb_hint_raw  # preferimos el coalesced si existe
+    imdb_hint = (
+        _norm_imdb_hint(co_imdb) or imdb_hint_raw
+    )  # preferimos el coalesced si existe
+    wiki_meta_from_embedded = False
+    wiki_prelookup_done = False
 
     # ✅ Nuevo: para el core (misidentified / comparación con OMDb),
     # preferimos originalTitle (EN) si existe en extra, y si no, el display_title.
@@ -535,10 +697,86 @@ def analyze_movie(
     omdb_data: dict[str, object] | None = None
     wiki_meta: dict[str, object] = {}
 
-    def fetch_omdb(title_for_fetch: str, year_for_fetch: int | None) -> Mapping[str, object]:
-        nonlocal omdb_data, wiki_meta
+    def _prelookup_wiki_imdb(
+        *, title_for_fetch: str, year_for_fetch: int | None
+    ) -> str | None:
+        nonlocal imdb_hint, wiki_meta, wiki_prelookup_done
 
-        key = _cache_key(title_for_fetch, year_for_fetch, imdb_hint)
+        if wiki_prelookup_done:
+            return _extract_imdb_id_from_meta(wiki_meta) if wiki_meta else None
+        wiki_prelookup_done = True
+
+        if movie_input.source != "dlna" or not _cfg_bool(DLNA_WIKI_PRE_OMDB_RESOLUTION):
+            return None
+
+        title_for_wiki = (co_title or title_for_fetch or "").strip()
+        year_for_wiki = co_year if co_year is not None else year_for_fetch
+        if not title_for_wiki:
+            return None
+
+        try:
+            wiki_item = get_wiki_for_input(
+                movie_input=movie_input,
+                title=title_for_wiki,
+                year=year_for_wiki,
+                imdb_id=None,
+            )
+            if wiki_item is None:
+                wiki_item = get_wiki(
+                    title=title_for_wiki,
+                    year=year_for_wiki,
+                    imdb_id=None,
+                )
+        except Exception as exc:  # pragma: no cover
+            _dbg_ctx(
+                f"DLNA wiki prelookup failed | title={title_for_wiki!r} exc={exc!r}"
+            )
+            return None
+
+        if not isinstance(wiki_item, Mapping):
+            return None
+
+        minimal_wiki, imdb_from_wiki = _build_minimal_wiki_from_item(
+            wiki_item=wiki_item,
+            title_for_fetch=title_for_wiki,
+            year_for_fetch=year_for_wiki,
+            imdb_used_for_wiki=None,
+        )
+
+        if minimal_wiki:
+            wiki_meta = dict(minimal_wiki)
+            if imdb_from_wiki:
+                imdb_hint = imdb_from_wiki
+            key_pre = _cache_key(title_for_wiki, year_for_wiki, imdb_hint)
+            with _LOCAL_CACHE_LOCK:
+                _lru_set(
+                    _WIKI_LOCAL_CACHE,
+                    key_pre,
+                    dict(wiki_meta),
+                    max_items=_WIKI_LOCAL_CACHE_MAX,
+                )
+
+        return imdb_from_wiki
+
+    def fetch_omdb(
+        title_for_fetch: str, year_for_fetch: int | None
+    ) -> Mapping[str, object]:
+        nonlocal imdb_hint, omdb_data, wiki_meta, wiki_meta_from_embedded
+
+        imdb_for_omdb = imdb_hint
+        imdb_from_wiki: str | None = None
+        if movie_input.source == "dlna" and _cfg_bool(DLNA_WIKI_PRE_OMDB_RESOLUTION):
+            imdb_from_wiki = _prelookup_wiki_imdb(
+                title_for_fetch=title_for_fetch, year_for_fetch=year_for_fetch
+            )
+            if imdb_from_wiki:
+                imdb_for_omdb = imdb_from_wiki
+            elif not (title_for_fetch or "").strip():
+                imdb_for_omdb = imdb_hint
+            else:
+                imdb_for_omdb = None
+
+        key = _cache_key(title_for_fetch, year_for_fetch, imdb_for_omdb)
 
         with _LOCAL_CACHE_LOCK:
             cached_omdb = _lru_get(_OMDB_LOCAL_CACHE, key)
@@ -546,47 +784,110 @@ def analyze_movie(
 
         if cached_omdb is _CACHE_MISS:
             omdb_data = {}
-            wiki_meta = {}
+            if not wiki_meta:
+                wiki_meta = {}
             return {}
 
         if isinstance(cached_omdb, dict):
             omdb_data = cached_omdb
-            wiki_meta = dict(cached_wiki) if isinstance(cached_wiki, dict) else {}
+            if not wiki_meta:
+                wiki_meta = dict(cached_wiki) if isinstance(cached_wiki, dict) else {}
             return cached_omdb
 
-        lookup_key = _build_lookup_key(title_for_fetch, year_for_fetch, imdb_hint)
+        lookup_key = _build_lookup_key(title_for_fetch, year_for_fetch, imdb_for_omdb)
 
         try:
             record = omdb_query_with_cache(
                 title=title_for_fetch,
                 year=year_for_fetch,
-                imdb_id=imdb_hint,
-                provenance={"lookup_key": lookup_key, "had_imdb_hint": bool(imdb_hint)},
+                imdb_id=imdb_for_omdb,
+                provenance={
+                    "lookup_key": lookup_key,
+                    "had_imdb_hint": bool(imdb_for_omdb),
+                },
             )
         except Exception as exc:  # pragma: no cover
-            _dbg_ctx(f"omdb_query_with_cache failed | lookup_key={lookup_key} exc={exc!r}")
+            _dbg_ctx(
+                f"omdb_query_with_cache failed | lookup_key={lookup_key} exc={exc!r}"
+            )
             record = None
 
         if record is None:
             with _LOCAL_CACHE_LOCK:
-                _lru_set(_OMDB_LOCAL_CACHE, key, _CACHE_MISS, max_items=_OMDB_LOCAL_CACHE_MAX)
-                _lru_set(_WIKI_LOCAL_CACHE, key, {}, max_items=_WIKI_LOCAL_CACHE_MAX)
+                _lru_set(
+                    _OMDB_LOCAL_CACHE, key, _CACHE_MISS, max_items=_OMDB_LOCAL_CACHE_MAX
+                )
+                if wiki_meta:
+                    _lru_set(
+                        _WIKI_LOCAL_CACHE,
+                        key,
+                        dict(wiki_meta),
+                        max_items=_WIKI_LOCAL_CACHE_MAX,
+                    )
+                else:
+                    _lru_set(
+                        _WIKI_LOCAL_CACHE, key, {}, max_items=_WIKI_LOCAL_CACHE_MAX
+                    )
             omdb_data = {}
-            wiki_meta = {}
+            if not wiki_meta:
+                wiki_meta = {}
             _append_log(logs, f"lookup_key={lookup_key}", tag="OMDB_NONE")
             return {}
 
         omdb_dict_local = dict(record)
         wiki_dict_local = _extract_wiki_meta(omdb_dict_local)
+        if (
+            wiki_dict_local
+            and _should_use_embedded_wiki(movie_input, wiki_dict_local)
+            and not wiki_meta
+        ):
+            wiki_meta = dict(wiki_dict_local)
+            wiki_meta_from_embedded = True
+        elif wiki_dict_local and not _should_use_embedded_wiki(
+            movie_input, wiki_dict_local
+        ):
+            wiki_dict_local = {}
+
+        if wiki_meta and not wiki_dict_local:
+            try:
+                omdb_dict_local["__wiki"] = dict(wiki_meta)
+            except Exception:
+                omdb_dict_local = dict(omdb_dict_local)
+                omdb_dict_local["__wiki"] = dict(wiki_meta)
+
+            _persist_minimal_wiki_into_omdb_cache(
+                title_for_fetch=title_for_fetch,
+                year_for_fetch=year_for_fetch,
+                imdb_id_for_cache=imdb_for_omdb,
+                imdb_hint=imdb_hint,
+                minimal_wiki=wiki_meta,
+                lookup_key=lookup_key,
+            )
 
         with _LOCAL_CACHE_LOCK:
-            _lru_set(_OMDB_LOCAL_CACHE, key, omdb_dict_local, max_items=_OMDB_LOCAL_CACHE_MAX)
-            _lru_set(_WIKI_LOCAL_CACHE, key, wiki_dict_local, max_items=_WIKI_LOCAL_CACHE_MAX)
+            _lru_set(
+                _OMDB_LOCAL_CACHE, key, omdb_dict_local, max_items=_OMDB_LOCAL_CACHE_MAX
+            )
+            if wiki_meta:
+                _lru_set(
+                    _WIKI_LOCAL_CACHE,
+                    key,
+                    dict(wiki_meta),
+                    max_items=_WIKI_LOCAL_CACHE_MAX,
+                )
+            else:
+                _lru_set(
+                    _WIKI_LOCAL_CACHE,
+                    key,
+                    wiki_dict_local,
+                    max_items=_WIKI_LOCAL_CACHE_MAX,
+                )
 
         omdb_data = omdb_dict_local
-        wiki_meta = wiki_dict_local
+        if not wiki_meta:
+            wiki_meta = wiki_dict_local
 
-        if wiki_dict_local:
+        if wiki_meta_from_embedded:
             _dbg_ctx(f"Using __wiki from OMDb cache | lookup_key={lookup_key}")
 
         return omdb_dict_local
@@ -603,7 +904,9 @@ def analyze_movie(
         _append_trace(logs, line)
         _dbg_trace(line)
 
-    analysis_trace_cb: Callable[[str], None] | None = _analysis_trace if logger.is_debug_mode() else None
+    analysis_trace_cb: Callable[[str], None] | None = (
+        _analysis_trace if logger.is_debug_mode() else None
+    )
 
     try:
         base_row: AnalysisRow = analyze_input_movie(
@@ -634,7 +937,19 @@ def analyze_movie(
         return None, None, logs
 
     # 4) Lazy Wiki (alineado con coalesced identity)
-    if _cfg_bool(COLLECTION_ENABLE_LAZY_WIKI) and not wiki_meta and _should_fetch_wiki_for_reporting(base_row):
+    allow_lazy_wiki = not wiki_meta
+    if (
+        movie_input.source == "dlna"
+        and wiki_meta_from_embedded
+        and _cfg_bool(DLNA_WIKI_FORCE_LAZY_EVEN_WITH_EMBEDDED)
+    ):
+        allow_lazy_wiki = True
+
+    if (
+        _cfg_bool(COLLECTION_ENABLE_LAZY_WIKI)
+        and allow_lazy_wiki
+        and _should_fetch_wiki_for_reporting(base_row)
+    ):
         # ✅ usamos (co_title/co_year/imdb_hint) para key/cache
         key_post = _cache_key(co_title, co_year, imdb_hint)
 
@@ -646,7 +961,9 @@ def analyze_movie(
         elif isinstance(wiki_local, dict) and wiki_local:
             wiki_meta = dict(wiki_local)
         else:
-            if omdb_data is None and _cfg_bool(COLLECTION_LAZY_WIKI_FORCE_OMDB_POST_CORE):
+            if omdb_data is None and _cfg_bool(
+                COLLECTION_LAZY_WIKI_FORCE_OMDB_POST_CORE
+            ):
                 _dbg_ctx("Lazy Wiki -> forcing OMDb fetch (post-core) due to config.")
                 _ = fetch_omdb(co_title, co_year)
 
@@ -660,10 +977,19 @@ def analyze_movie(
 
             imdb_used_for_wiki = imdb_id_from_omdb or imdb_hint
 
-            if not imdb_used_for_wiki and not _cfg_bool(COLLECTION_LAZY_WIKI_ALLOW_TITLE_YEAR_FALLBACK):
+            if not imdb_used_for_wiki and not _cfg_bool(
+                COLLECTION_LAZY_WIKI_ALLOW_TITLE_YEAR_FALLBACK
+            ):
                 with _LOCAL_CACHE_LOCK:
-                    _lru_set(_WIKI_LOCAL_CACHE, key_post, _CACHE_MISS, max_items=_WIKI_LOCAL_CACHE_MAX)
-                _dbg_ctx("Lazy Wiki skipped: no imdb id available (omdb/imdb_hint) and fallback disabled.")
+                    _lru_set(
+                        _WIKI_LOCAL_CACHE,
+                        key_post,
+                        _CACHE_MISS,
+                        max_items=_WIKI_LOCAL_CACHE_MAX,
+                    )
+                _dbg_ctx(
+                    "Lazy Wiki skipped: no imdb id available (omdb/imdb_hint) and fallback disabled."
+                )
             else:
                 wiki_item: Mapping[str, object] | None
                 try:
@@ -681,87 +1007,97 @@ def analyze_movie(
                             imdb_id=imdb_used_for_wiki,
                         )
                 except Exception as exc:  # pragma: no cover
-                    _dbg_ctx(f"Lazy Wiki call failed | lookup_key={lookup_key} exc={exc!r}")
+                    _dbg_ctx(
+                        f"Lazy Wiki call failed | lookup_key={lookup_key} exc={exc!r}"
+                    )
                     wiki_item = None
 
-                if isinstance(wiki_item, Mapping) and _wiki_item_is_usable(wiki_item):
-                    wiki_block = wiki_item.get("wiki")
-                    wikidata_block = wiki_item.get("wikidata")
-
-                    imdb_id_from_wiki: str | None = None
-                    imdb_cached = wiki_item.get("imdbID")
-                    if isinstance(imdb_cached, str) and imdb_cached.strip():
-                        imdb_id_from_wiki = imdb_cached.strip().lower()
-
-                    wikidata_id_from_wiki: str | None = None
-                    if isinstance(wikidata_block, Mapping):
-                        qid_val = wikidata_block.get("qid")
-                        if isinstance(qid_val, str) and qid_val.strip():
-                            wikidata_id_from_wiki = qid_val.strip()
-
-                    wikipedia_title_from_wiki: str | None = None
-                    source_language_from_wiki: str | None = None
-                    if isinstance(wiki_block, Mapping):
-                        wt = wiki_block.get("wikipedia_title")
-                        if isinstance(wt, str) and wt.strip():
-                            wikipedia_title_from_wiki = wt.strip()
-                        sl = wiki_block.get("source_language")
-                        if isinstance(sl, str) and sl.strip():
-                            source_language_from_wiki = sl.strip()
-
-                    wiki_lookup = _build_wiki_lookup_info(
+                if isinstance(wiki_item, Mapping):
+                    minimal_wiki, _ = _build_minimal_wiki_from_item(
+                        wiki_item=wiki_item,
                         title_for_fetch=co_title,
                         year_for_fetch=co_year,
-                        imdb_used=imdb_used_for_wiki or imdb_id_from_wiki,
+                        imdb_used_for_wiki=imdb_used_for_wiki,
                     )
 
-                    minimal_wiki = _build_minimal_wiki_block(
-                        imdb_id=(imdb_id_from_wiki or imdb_used_for_wiki),
-                        wikidata_id=wikidata_id_from_wiki,
-                        wikipedia_title=wikipedia_title_from_wiki,
-                        wiki_lookup=wiki_lookup,
-                        source_language=source_language_from_wiki,
-                    )
+                    if minimal_wiki is None:
+                        with _LOCAL_CACHE_LOCK:
+                            _lru_set(
+                                _WIKI_LOCAL_CACHE,
+                                key_post,
+                                _CACHE_MISS,
+                                max_items=_WIKI_LOCAL_CACHE_MAX,
+                            )
+                        _dbg_ctx(
+                            f"Lazy Wiki negative/None -> intra-run MISS cached | lookup_key={lookup_key}"
+                        )
+                    else:
+                        try:
+                            omdb_dict_for_wiki["__wiki"] = minimal_wiki
+                        except Exception:
+                            omdb_dict_for_wiki = dict(omdb_dict_for_wiki)
+                            omdb_dict_for_wiki["__wiki"] = minimal_wiki
 
-                    try:
-                        omdb_dict_for_wiki["__wiki"] = minimal_wiki
-                    except Exception:
-                        omdb_dict_for_wiki = dict(omdb_dict_for_wiki)
-                        omdb_dict_for_wiki["__wiki"] = minimal_wiki
+                        _persist_minimal_wiki_into_omdb_cache(
+                            title_for_fetch=co_title,
+                            year_for_fetch=co_year,
+                            imdb_id_for_cache=imdb_id_from_omdb,
+                            imdb_hint=imdb_hint,
+                            minimal_wiki=minimal_wiki,
+                            lookup_key=lookup_key,
+                        )
 
-                    _persist_minimal_wiki_into_omdb_cache(
-                        title_for_fetch=co_title,
-                        year_for_fetch=co_year,
-                        imdb_id_for_cache=imdb_id_from_omdb,
-                        imdb_hint=imdb_hint,
-                        minimal_wiki=minimal_wiki,
-                        lookup_key=lookup_key,
-                    )
+                        with _LOCAL_CACHE_LOCK:
+                            _lru_set(
+                                _OMDB_LOCAL_CACHE,
+                                key_post,
+                                dict(omdb_dict_for_wiki),
+                                max_items=_OMDB_LOCAL_CACHE_MAX,
+                            )
+                            _lru_set(
+                                _WIKI_LOCAL_CACHE,
+                                key_post,
+                                dict(minimal_wiki),
+                                max_items=_WIKI_LOCAL_CACHE_MAX,
+                            )
 
-                    with _LOCAL_CACHE_LOCK:
-                        _lru_set(_OMDB_LOCAL_CACHE, key_post, dict(omdb_dict_for_wiki), max_items=_OMDB_LOCAL_CACHE_MAX)
-                        _lru_set(_WIKI_LOCAL_CACHE, key_post, dict(minimal_wiki), max_items=_WIKI_LOCAL_CACHE_MAX)
-
-                    omdb_data = dict(omdb_dict_for_wiki)
-                    wiki_meta = dict(minimal_wiki)
-                    _dbg_ctx(f"Lazy Wiki success | lookup_key={lookup_key}")
+                        omdb_data = dict(omdb_dict_for_wiki)
+                        wiki_meta = dict(minimal_wiki)
+                        _dbg_ctx(f"Lazy Wiki success | lookup_key={lookup_key}")
                 else:
                     with _LOCAL_CACHE_LOCK:
-                        _lru_set(_WIKI_LOCAL_CACHE, key_post, _CACHE_MISS, max_items=_WIKI_LOCAL_CACHE_MAX)
-                    _dbg_ctx(f"Lazy Wiki negative/None -> intra-run MISS cached | lookup_key={lookup_key}")
+                        _lru_set(
+                            _WIKI_LOCAL_CACHE,
+                            key_post,
+                            _CACHE_MISS,
+                            max_items=_WIKI_LOCAL_CACHE_MAX,
+                        )
+                    _dbg_ctx(
+                        f"Lazy Wiki negative/None -> intra-run MISS cached | lookup_key={lookup_key}"
+                    )
 
     # 5) Sugerencias metadata (solo Plex)
-    omdb_dict: dict[str, object] = dict(omdb_data) if isinstance(omdb_data, dict) else {}
+    omdb_dict: dict[str, object] = (
+        dict(omdb_data) if isinstance(omdb_data, dict) else {}
+    )
     meta_sugg: dict[str, object] | None = None
 
     if movie_input.source == "plex" and source_movie is not None:
         try:
-            meta_candidate = generate_metadata_suggestions_row(movie_input, omdb_dict or None)
+            meta_candidate = generate_metadata_suggestions_row(
+                movie_input, omdb_dict or None
+            )
             if isinstance(meta_candidate, dict):
                 meta_sugg = meta_candidate
-                _append_log(logs, f"{movie_input.library} / {display_title} ({display_year})", tag="METADATA_SUGG")
+                _append_log(
+                    logs,
+                    f"{movie_input.library} / {display_title} ({display_year})",
+                    tag="METADATA_SUGG",
+                )
         except Exception as exc:  # pragma: no cover
-            _log_warning_always(f"generate_metadata_suggestions_row falló para {display_title!r}: {exc!r}")
+            _log_warning_always(
+                f"generate_metadata_suggestions_row falló para {display_title!r}: {exc!r}"
+            )
 
     misidentified_hint = base_row.get("misidentified_hint")
     if isinstance(misidentified_hint, str) and misidentified_hint.strip():
@@ -782,12 +1118,26 @@ def analyze_movie(
         trailer_raw = omdb_dict.get("Website")
         imdb_id_raw = omdb_dict.get("imdbID")
 
-        poster_url = poster_raw.strip() if isinstance(poster_raw, str) and poster_raw.strip() else None
-        trailer_url = trailer_raw.strip() if isinstance(trailer_raw, str) and trailer_raw.strip() else None
-        imdb_id = imdb_id_raw.strip().lower() if isinstance(imdb_id_raw, str) and imdb_id_raw.strip() else None
+        poster_url = (
+            poster_raw.strip()
+            if isinstance(poster_raw, str) and poster_raw.strip()
+            else None
+        )
+        trailer_url = (
+            trailer_raw.strip()
+            if isinstance(trailer_raw, str) and trailer_raw.strip()
+            else None
+        )
+        imdb_id = (
+            imdb_id_raw.strip().lower()
+            if isinstance(imdb_id_raw, str) and imdb_id_raw.strip()
+            else None
+        )
 
     if imdb_id is None and imdb_hint is not None:
         imdb_id = imdb_hint
+    if imdb_id is None and wiki_meta:
+        imdb_id = _extract_imdb_id_from_meta(wiki_meta) or imdb_id
 
     if omdb_dict and _should_include_omdb_json():
         try:
@@ -804,11 +1154,15 @@ def analyze_movie(
     row["year"] = display_year
 
     file_size_bytes = row.get("file_size_bytes")
-    row["file_size"] = file_size_bytes if isinstance(file_size_bytes, int) else movie_input.file_size_bytes
+    row["file_size"] = (
+        file_size_bytes
+        if isinstance(file_size_bytes, int)
+        else movie_input.file_size_bytes
+    )
 
     file_from_row = row.get("file")
     file_from_row_str = file_from_row if isinstance(file_from_row, str) else ""
-    row["file"] = (movie_input.file_path or file_from_row_str)
+    row["file"] = movie_input.file_path or file_from_row_str
 
     source_url_obj = movie_input.extra.get("source_url")
     row["source_url"] = source_url_obj if isinstance(source_url_obj, str) else ""
@@ -824,23 +1178,31 @@ def analyze_movie(
 
     wikidata_id_raw = wiki_meta.get("wikidata_id")
     wikidata_id: str | None = (
-        wikidata_id_raw.strip() if isinstance(wikidata_id_raw, str) and wikidata_id_raw.strip() else None
+        wikidata_id_raw.strip()
+        if isinstance(wikidata_id_raw, str) and wikidata_id_raw.strip()
+        else None
     )
     if wikidata_id is None:
         # compat con typo histórico en algunas caches (__wiki antiguo)
         wikadata_id_raw = wiki_meta.get("wikadata_id")
         wikidata_id = (
-            wikadata_id_raw.strip() if isinstance(wikadata_id_raw, str) and wikadata_id_raw.strip() else None
+            wikadata_id_raw.strip()
+            if isinstance(wikadata_id_raw, str) and wikadata_id_raw.strip()
+            else None
         )
 
     wikipedia_title_raw = wiki_meta.get("wikipedia_title")
     wikipedia_title: str | None = (
-        wikipedia_title_raw.strip() if isinstance(wikipedia_title_raw, str) and wikipedia_title_raw.strip() else None
+        wikipedia_title_raw.strip()
+        if isinstance(wikipedia_title_raw, str) and wikipedia_title_raw.strip()
+        else None
     )
 
     source_language_raw = wiki_meta.get("source_language")
     source_language: str | None = (
-        source_language_raw.strip() if isinstance(source_language_raw, str) and source_language_raw.strip() else None
+        source_language_raw.strip()
+        if isinstance(source_language_raw, str) and source_language_raw.strip()
+        else None
     )
 
     row["wikidata_id"] = wikidata_id

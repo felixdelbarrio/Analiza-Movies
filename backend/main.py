@@ -56,9 +56,17 @@ def _parse_args() -> argparse.Namespace:
     )
 
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--plex", action="store_true", help="Analizar Plex directamente (sin menú)")
-    mode.add_argument("--dlna", action="store_true", help="Analizar DLNA directamente (sin menú)")
-    mode.add_argument("--dashboard", action="store_true", help="Abrir solo el dashboard (sin análisis)")
+    mode.add_argument(
+        "--plex", action="store_true", help="Analizar Plex directamente (sin menú)"
+    )
+    mode.add_argument(
+        "--dlna", action="store_true", help="Analizar DLNA directamente (sin menú)"
+    )
+    mode.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Abrir solo el dashboard (sin análisis)",
+    )
 
     parser.add_argument(
         "--no-dashboard",
@@ -117,7 +125,9 @@ def _run_streamlit_dashboard() -> None:
     try:
         result = subprocess.run(cmd, check=False)
     except KeyboardInterrupt:
-        logger.info("\n[AnalizaMovies] Interrumpido por el usuario (Ctrl+C).", always=True)
+        logger.info(
+            "\n[AnalizaMovies] Interrumpido por el usuario (Ctrl+C).", always=True
+        )
         return
     except Exception as exc:  # noqa: BLE001
         logger.info(f"[AnalizaMovies] Error lanzando Streamlit: {exc!r}", always=True)
@@ -196,9 +206,13 @@ def _ask_source() -> Choice | None:
             return raw  # type: ignore[return-value]
 
         if has_reports:
-            logger.info("Opción no válida (usa 0, 1 ó 2, o Enter para cancelar).", always=True)
+            logger.info(
+                "Opción no válida (usa 0, 1 ó 2, o Enter para cancelar).", always=True
+            )
         else:
-            logger.info("Opción no válida (usa 1 ó 2, o Enter para cancelar).", always=True)
+            logger.info(
+                "Opción no válida (usa 1 ó 2, o Enter para cancelar).", always=True
+            )
 
 
 def start() -> None:
@@ -213,7 +227,10 @@ def start() -> None:
     args = _parse_args()
 
     if SILENT_MODE:
-        logger.progress("[AnalizaMovies] SILENT_MODE=True" + (" DEBUG_MODE=True" if DEBUG_MODE else ""))
+        logger.progress(
+            "[AnalizaMovies] SILENT_MODE=True"
+            + (" DEBUG_MODE=True" if DEBUG_MODE else "")
+        )
     elif DEBUG_MODE:
         logger.debug_ctx("ANALYZE", "SILENT_MODE=False DEBUG_MODE=True")
 
@@ -275,7 +292,9 @@ def start() -> None:
         _maybe_run_dashboard_after_analysis()
 
     except KeyboardInterrupt:
-        logger.info("\n[AnalizaMovies] Interrumpido por el usuario (Ctrl+C).", always=True)
+        logger.info(
+            "\n[AnalizaMovies] Interrumpido por el usuario (Ctrl+C).", always=True
+        )
     finally:
         logger.progress("[AnalizaMovies] Fin")
 
