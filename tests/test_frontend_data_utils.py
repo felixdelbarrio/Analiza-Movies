@@ -11,7 +11,7 @@ from frontend.data_utils import (
 
 def test_safe_json_loads_single():
     assert safe_json_loads_single({"a": 1}) == {"a": 1}
-    assert safe_json_loads_single("{\"a\": 1}") == {"a": 1}
+    assert safe_json_loads_single('{"a": 1}') == {"a": 1}
     assert safe_json_loads_single("not-json") is None
 
 

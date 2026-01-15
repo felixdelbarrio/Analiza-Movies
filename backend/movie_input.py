@@ -71,6 +71,14 @@ _ES_FUNCTION_WORD_RE: Final[re.Pattern[str]] = re.compile(
     r"\b(el|la|los|las|un|una|unos|unas|de|del|y|en|para|con|sin|al)\b",
     re.IGNORECASE,
 )
+_ES_COMMON_WORD_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b("
+    r"bienvenid[oa]s?|regreso|venganza|muerte|vida|noche|dia[s]?|"
+    r"hombre[s]?|mujer(?:es)?|senor(?:es)?|nino[s]?|nina[s]?|"
+    r"sangre|guerra|amor|mundo"
+    r")\b",
+    re.IGNORECASE,
+)
 
 # ---------- Inglés ----------
 _EN_HINT_RE: Final[re.Pattern[str]] = re.compile(
@@ -145,8 +153,12 @@ _ZH_HINT_RE: Final[re.Pattern[str]] = re.compile(
 )
 
 # Unicode blocks (solo para ayudas locales)
-_KANA_RE: Final[re.Pattern[str]] = re.compile(r"[\u3040-\u30FF\u31F0-\u31FF\uFF66-\uFF9F]")
-_HANGUL_RE: Final[re.Pattern[str]] = re.compile(r"[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]")
+_KANA_RE: Final[re.Pattern[str]] = re.compile(
+    r"[\u3040-\u30FF\u31F0-\u31FF\uFF66-\uFF9F]"
+)
+_HANGUL_RE: Final[re.Pattern[str]] = re.compile(
+    r"[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]"
+)
 _HAN_RE: Final[re.Pattern[str]] = re.compile(r"[\u4E00-\u9FFF]")
 _CJK_ANY_RE: Final[re.Pattern[str]] = re.compile(
     r"[\u3040-\u30FF\u31F0-\u31FF\uFF66-\uFF9F\u4E00-\u9FFF\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]"
@@ -268,7 +280,10 @@ def guess_spanish_from_title_or_path(title: str, file_path: str) -> bool:
         return True
 
     words = _cleanup_separators(haystack.lower())
-    return _lang_hits_ge(words, _ES_FUNCTION_WORD_RE)
+    if _lang_hits_ge(words, _ES_FUNCTION_WORD_RE):
+        return True
+
+    return bool(_ES_COMMON_WORD_RE.search(words))
 
 
 def guess_english_from_title_or_path(title: str, file_path: str) -> bool:
@@ -330,7 +345,11 @@ def guess_chinese_from_title_or_path(title: str, file_path: str) -> bool:
     if _ZH_HINT_RE.search(haystack):
         return True
 
-    if _HAN_RE.search(haystack) and not _KANA_RE.search(haystack) and not _HANGUL_RE.search(haystack):
+    if (
+        _HAN_RE.search(haystack)
+        and not _KANA_RE.search(haystack)
+        and not _HANGUL_RE.search(haystack)
+    ):
         return True
 
     return False

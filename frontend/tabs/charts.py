@@ -64,7 +64,9 @@ def _requires_columns(df: pd.DataFrame, cols: Iterable[str]) -> bool:
     return True
 
 
-def _chart(chart: alt.Chart | alt.LayerChart | alt.HConcatChart | alt.VConcatChart) -> None:
+def _chart(
+    chart: alt.Chart | alt.LayerChart | alt.HConcatChart | alt.VConcatChart,
+) -> None:
     """
     Wrapper para mostrar gráficos siempre a ancho completo.
     """
@@ -381,7 +383,9 @@ def render(df_all: pd.DataFrame) -> None:
 
         df_dir["director_list"] = df_dir["omdb_json"].apply(extract_directors)
         df_dir = df_dir.explode("director_list")
-        df_dir = df_dir[df_dir["director_list"].notna() & (df_dir["director_list"] != "")]
+        df_dir = df_dir[
+            df_dir["director_list"].notna() & (df_dir["director_list"] != "")
+        ]
 
         if df_dir.empty:
             st.info("No se encontraron directores en omdb_json.")

@@ -21,11 +21,18 @@ def build_exception_handler(settings: Settings):
 
         logger.exception(
             "unhandled_exception",
-            extra={"error_id": error_id, "request_id": req_id, "path": request.url.path},
+            extra={
+                "error_id": error_id,
+                "request_id": req_id,
+                "path": request.url.path,
+            },
         )
         metrics.inc("http_errors_5xx_total", 1)
 
-        payload: dict[str, Any] = {"detail": "Internal Server Error", "error_id": error_id}
+        payload: dict[str, Any] = {
+            "detail": "Internal Server Error",
+            "error_id": error_id,
+        }
         if isinstance(req_id, str) and req_id:
             payload["request_id"] = req_id
 

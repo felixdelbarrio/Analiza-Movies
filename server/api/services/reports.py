@@ -95,8 +95,7 @@ def df_to_page(
     records = cast(list[dict[str, Any]], raw_items)
 
     items: list[dict[str, Any]] = [
-        {k: _json_safe_value(v) for k, v in row.items()}
-        for row in records
+        {k: _json_safe_value(v) for k, v in row.items()} for row in records
     ]
 
     return {

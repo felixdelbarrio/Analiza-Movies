@@ -31,7 +31,11 @@ from dataclasses import dataclass
 
 from backend import logger
 from backend.title_utils import normalize_title_for_lookup
-from backend.omdb_client import extract_ratings_from_omdb, omdb_query_with_cache, patch_cached_omdb_record
+from backend.omdb_client import (
+    extract_ratings_from_omdb,
+    omdb_query_with_cache,
+    patch_cached_omdb_record,
+)
 
 
 # =============================================================================
@@ -82,7 +86,9 @@ class OmdbEnrichment:
 # =============================================================================
 
 
-def _extract_ratings_compat(data: Mapping[str, object]) -> tuple[float | None, int | None, int | None, int | None]:
+def _extract_ratings_compat(
+    data: Mapping[str, object],
+) -> tuple[float | None, int | None, int | None, int | None]:
     """
     Compatibilidad con extract_ratings_from_omdb:
       - viejo: (imdb_rating, imdb_votes, rt_score)
@@ -99,8 +105,12 @@ def _extract_ratings_compat(data: Mapping[str, object]) -> tuple[float | None, i
     mc_score: int | None = None
 
     if isinstance(out_obj, tuple):
-        if len(out_obj) >= 1 and (isinstance(out_obj[0], (int, float)) or out_obj[0] is None):
-            imdb_rating = float(out_obj[0]) if isinstance(out_obj[0], (int, float)) else None
+        if len(out_obj) >= 1 and (
+            isinstance(out_obj[0], (int, float)) or out_obj[0] is None
+        ):
+            imdb_rating = (
+                float(out_obj[0]) if isinstance(out_obj[0], (int, float)) else None
+            )
         if len(out_obj) >= 2 and (isinstance(out_obj[1], int) or out_obj[1] is None):
             imdb_votes = out_obj[1]
         if len(out_obj) >= 3 and (isinstance(out_obj[2], int) or out_obj[2] is None):
@@ -157,9 +167,14 @@ def enrich_with_omdb(
                 _dbg(f"OMDb Response=False: {err!r}")
             return None
 
-        imdb_rating, imdb_votes, rt_score, metacritic_score = _extract_ratings_compat(data)
+        imdb_rating, imdb_votes, rt_score, metacritic_score = _extract_ratings_compat(
+            data
+        )
         has_ratings = not (
-            imdb_rating is None and imdb_votes is None and rt_score is None and metacritic_score is None
+            imdb_rating is None
+            and imdb_votes is None
+            and rt_score is None
+            and metacritic_score is None
         )
 
         imdb_id_final = data.get("imdbID")
@@ -257,12 +272,18 @@ def writeback_omdb_wiki_block(
 ) -> bool:
     """Escribe en caché OMDb un bloque mínimo de wiki (en __wiki) asociado al record."""
     try:
-        imdb_norm = imdb_id.strip().lower() if isinstance(imdb_id, str) and imdb_id.strip() else None
+        imdb_norm = (
+            imdb_id.strip().lower()
+            if isinstance(imdb_id, str) and imdb_id.strip()
+            else None
+        )
 
         if not norm_title and not imdb_norm:
             return False
 
-        patch: dict[str, object] = {"__wiki": dict(wiki_block) if isinstance(wiki_block, Mapping) else None}
+        patch: dict[str, object] = {
+            "__wiki": dict(wiki_block) if isinstance(wiki_block, Mapping) else None
+        }
 
         return bool(
             patch_cached_omdb_record(

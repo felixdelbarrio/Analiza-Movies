@@ -25,7 +25,9 @@ def test_guess_language_from_title_or_path(monkeypatch):
     assert mi.guess_chinese_from_title_or_path("\u4e2d\u6587", "") is True
 
     monkeypatch.setattr(mi, "MOVIE_INPUT_LANG_SKIP_ENGLISH_IF_CJK", True)
-    assert mi.guess_english_from_title_or_path("The Movie \u65e5\u672c\u8a9e", "") is False
+    assert (
+        mi.guess_english_from_title_or_path("The Movie \u65e5\u672c\u8a9e", "") is False
+    )
 
 
 def test_detect_context_language_code_prefers_library_language():

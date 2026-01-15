@@ -116,10 +116,14 @@ def render(df_all: pd.DataFrame) -> None:
         )
 
     with col_f3:
-        min_imdb: float = st.slider("IMDb mínimo", 0.0, 10.0, 0.0, 0.1, key="min_imdb_advanced")
+        min_imdb: float = st.slider(
+            "IMDb mínimo", 0.0, 10.0, 0.0, 0.1, key="min_imdb_advanced"
+        )
 
     with col_f4:
-        min_votes: int = st.slider("IMDb votos mínimos", 0, 200_000, 0, 1_000, key="min_votes_advanced")
+        min_votes: int = st.slider(
+            "IMDb votos mínimos", 0, 200_000, 0, 1_000, key="min_votes_advanced"
+        )
 
     if lib_filter and "library" in df_view.columns:
         df_view = df_view[df_view["library"].isin(lib_filter)]
@@ -130,7 +134,9 @@ def render(df_all: pd.DataFrame) -> None:
     imdb_series = _ensure_numeric_column(df_view, "imdb_rating")
     votes_series = _ensure_numeric_column(df_view, "imdb_votes")
 
-    df_view = df_view[(imdb_series >= float(min_imdb)) & (votes_series >= int(min_votes))]
+    df_view = df_view[
+        (imdb_series >= float(min_imdb)) & (votes_series >= int(min_votes))
+    ]
 
     st.write(f"Resultados: {len(df_view)} película(s)")
 

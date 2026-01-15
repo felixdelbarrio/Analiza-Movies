@@ -59,7 +59,15 @@ COLLECTION_LAZY_WIKI_FORCE_OMDB_POST_CORE: bool = _get_env_bool(
     True,
 )
 
-COLLECTION_TRACE_ALSO_DEBUG_CTX: bool = _get_env_bool("COLLECTION_TRACE_ALSO_DEBUG_CTX", True)
+# Si True, el lazy-wiki se aplica a todo el catálogo (no solo DELETE/MAYBE/misidentified).
+COLLECTION_LAZY_WIKI_FOR_ALL: bool = _get_env_bool(
+    "COLLECTION_LAZY_WIKI_FOR_ALL",
+    False,
+)
+
+COLLECTION_TRACE_ALSO_DEBUG_CTX: bool = _get_env_bool(
+    "COLLECTION_TRACE_ALSO_DEBUG_CTX", True
+)
 
 # ============================================================
 # DLNA-only: política de Wiki vs. __wiki embebido en OMDb cache
@@ -79,7 +87,7 @@ DLNA_WIKI_EMBEDDED_MODE: str = _get_env_enum_str(
 )
 
 # Ventana de frescura (solo si DLNA_WIKI_EMBEDDED_MODE == "use_if_fresh")
-# Nota: requiere que el bloque minimal wiki persista timestamp (lo haremos en collection_analysis.py).
+# Nota: requiere timestamp en __wiki (persistido en collection_analysis.py).
 DLNA_WIKI_EMBEDDED_MAX_AGE_SECONDS: int = _cap_int(
     "DLNA_WIKI_EMBEDDED_MAX_AGE_SECONDS",
     _get_env_int("DLNA_WIKI_EMBEDDED_MAX_AGE_SECONDS", 14 * 24 * 60 * 60),
@@ -89,7 +97,9 @@ DLNA_WIKI_EMBEDDED_MAX_AGE_SECONDS: int = _cap_int(
 
 # Si True, en DLNA se permite intentar Wiki antes de OMDb cuando el título no está claro / no-inglés.
 # (Esto NO toca Plex/otros; se aplicará solo en el flujo DLNA de collection_analysis).
-DLNA_WIKI_PRE_OMDB_RESOLUTION: bool = _get_env_bool("DLNA_WIKI_PRE_OMDB_RESOLUTION", True)
+DLNA_WIKI_PRE_OMDB_RESOLUTION: bool = _get_env_bool(
+    "DLNA_WIKI_PRE_OMDB_RESOLUTION", True
+)
 
 # Si True, en DLNA se fuerza a que el lazy-wiki se ejecute incluso si hay __wiki embebido,
 # respetando DLNA_WIKI_EMBEDDED_MODE.

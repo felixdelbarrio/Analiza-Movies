@@ -30,6 +30,9 @@ report_*.html
 tmp*
 metadata_*.csv
 run_*.log
+backend/logs/
+frontend/logs/
+server/logs/
 
 # metadatos de empaquetado
 *.egg-info/

@@ -225,7 +225,12 @@ def compute_scoring(
         # ------------------------------------------------------------------
         # 0) Caso sin datos suficientes (caso típico lazy: todo None)
         # ------------------------------------------------------------------
-        if imdb_rating_f is None and imdb_votes_i is None and rt_score_i is None and meta_i is None:
+        if (
+            imdb_rating_f is None
+            and imdb_votes_i is None
+            and rt_score_i is None
+            and meta_i is None
+        ):
             return {
                 "decision": "UNKNOWN",
                 "reason": "Sin datos suficientes (IMDb/RT/Metacritic vacíos).",
@@ -234,7 +239,12 @@ def compute_scoring(
             }
 
         # Solo Metacritic => conservador (no decide)
-        if imdb_rating_f is None and imdb_votes_i is None and rt_score_i is None and meta_i is not None:
+        if (
+            imdb_rating_f is None
+            and imdb_votes_i is None
+            and rt_score_i is None
+            and meta_i is not None
+        ):
             return {
                 "decision": "UNKNOWN",
                 "reason": f"Solo hay Metacritic={meta_i}; sin IMDb/RT no es suficiente para decidir.",
@@ -323,7 +333,9 @@ def compute_scoring(
             and rt_score_i >= int(RT_KEEP_MIN_SCORE)
             and imdb_rating_f >= float(IMDB_KEEP_MIN_RATING_WITH_RT)
         ):
-            bayes_is_strong_delete = bayes_score is not None and float(bayes_score) <= bayes_delete_thr
+            bayes_is_strong_delete = (
+                bayes_score is not None and float(bayes_score) <= bayes_delete_thr
+            )
             if not bayes_is_strong_delete:
                 return {
                     "decision": "KEEP",
@@ -340,7 +352,11 @@ def compute_scoring(
         # ------------------------------------------------------------------
         # 3) RT muy baja: confirma DELETE o desempata MAYBE cerca del delete
         # ------------------------------------------------------------------
-        if rt_score_i is not None and rt_score_i <= int(RT_DELETE_MAX_SCORE) and bayes_score is not None:
+        if (
+            rt_score_i is not None
+            and rt_score_i <= int(RT_DELETE_MAX_SCORE)
+            and bayes_score is not None
+        ):
             if preliminary_decision == "DELETE":
                 base = (preliminary_reason or "").strip()
                 extra = (
@@ -354,7 +370,9 @@ def compute_scoring(
                     "inputs": inputs,
                 }
 
-            if preliminary_decision == "MAYBE" and float(bayes_score) <= (bayes_delete_thr + _RT_TIEBREAK_BAYES_MARGIN):
+            if preliminary_decision == "MAYBE" and float(bayes_score) <= (
+                bayes_delete_thr + _RT_TIEBREAK_BAYES_MARGIN
+            ):
                 return {
                     "decision": "DELETE",
                     "reason": (
@@ -368,7 +386,11 @@ def compute_scoring(
         # ------------------------------------------------------------------
         # 4) Sin bayes pero con IMDb: fallbacks clásicos (rating + votos)
         # ------------------------------------------------------------------
-        if bayes_score is None and imdb_rating_f is not None and imdb_votes_i is not None:
+        if (
+            bayes_score is None
+            and imdb_rating_f is not None
+            and imdb_votes_i is not None
+        ):
             dynamic_votes_needed = max(0, int(m_dynamic))
 
             if (
@@ -405,13 +427,21 @@ def compute_scoring(
         # 5) Si hay decisión preliminar por BAYES: devolverla (Meta solo refuerza reason)
         # ------------------------------------------------------------------
         if preliminary_decision is not None:
-            reason = (preliminary_reason or "Decisión derivada del score bayesiano.").strip()
+            reason = (
+                preliminary_reason or "Decisión derivada del score bayesiano."
+            ).strip()
 
             if meta_i is not None:
-                if preliminary_decision == "KEEP" and meta_i >= int(METACRITIC_KEEP_MIN_SCORE):
+                if preliminary_decision == "KEEP" and meta_i >= int(
+                    METACRITIC_KEEP_MIN_SCORE
+                ):
                     reason += f" La crítica también es favorable (Metacritic={meta_i})."
-                elif preliminary_decision == "DELETE" and meta_i <= int(METACRITIC_DELETE_MAX_SCORE):
-                    reason += f" La crítica también es muy negativa (Metacritic={meta_i})."
+                elif preliminary_decision == "DELETE" and meta_i <= int(
+                    METACRITIC_DELETE_MAX_SCORE
+                ):
+                    reason += (
+                        f" La crítica también es muy negativa (Metacritic={meta_i})."
+                    )
 
             return {
                 "decision": _decision_or_unknown(preliminary_decision),

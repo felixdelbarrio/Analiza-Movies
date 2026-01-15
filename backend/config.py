@@ -75,13 +75,37 @@ from backend.config_base import _log_config_debug, DEBUG_MODE, SILENT_MODE  # no
 
 
 def _dump_config_debug() -> None:
-    _log_config_debug("DEBUG_MODE", DEBUG_MODE, debug_mode=DEBUG_MODE, silent_mode=SILENT_MODE)
-    _log_config_debug("SILENT_MODE", SILENT_MODE, debug_mode=DEBUG_MODE, silent_mode=SILENT_MODE)
-    _log_config_debug("LOG_LEVEL", globals().get("LOG_LEVEL"), debug_mode=DEBUG_MODE, silent_mode=SILENT_MODE)
-    _log_config_debug("HTTP_DEBUG", globals().get("HTTP_DEBUG"), debug_mode=DEBUG_MODE, silent_mode=SILENT_MODE)
+    _log_config_debug(
+        "DEBUG_MODE", DEBUG_MODE, debug_mode=DEBUG_MODE, silent_mode=SILENT_MODE
+    )
+    _log_config_debug(
+        "SILENT_MODE", SILENT_MODE, debug_mode=DEBUG_MODE, silent_mode=SILENT_MODE
+    )
+    _log_config_debug(
+        "LOG_LEVEL",
+        globals().get("LOG_LEVEL"),
+        debug_mode=DEBUG_MODE,
+        silent_mode=SILENT_MODE,
+    )
+    _log_config_debug(
+        "HTTP_DEBUG",
+        globals().get("HTTP_DEBUG"),
+        debug_mode=DEBUG_MODE,
+        silent_mode=SILENT_MODE,
+    )
 
-    _log_config_debug("BASE_DIR", globals().get("BASE_DIR"), debug_mode=DEBUG_MODE, silent_mode=SILENT_MODE)
-    _log_config_debug("DATA_DIR", globals().get("DATA_DIR"), debug_mode=DEBUG_MODE, silent_mode=SILENT_MODE)
+    _log_config_debug(
+        "BASE_DIR",
+        globals().get("BASE_DIR"),
+        debug_mode=DEBUG_MODE,
+        silent_mode=SILENT_MODE,
+    )
+    _log_config_debug(
+        "DATA_DIR",
+        globals().get("DATA_DIR"),
+        debug_mode=DEBUG_MODE,
+        silent_mode=SILENT_MODE,
+    )
     _log_config_debug(
         "REPORTS_DIR",
         str(globals().get("REPORTS_DIR_PATH")),
@@ -103,7 +127,11 @@ def _dump_config_debug() -> None:
     )
     _log_config_debug(
         "LOGGER_FILE_PATH",
-        str(globals().get("LOGGER_FILE_PATH")) if globals().get("LOGGER_FILE_PATH") else None,
+        (
+            str(globals().get("LOGGER_FILE_PATH"))
+            if globals().get("LOGGER_FILE_PATH")
+            else None
+        ),
         debug_mode=DEBUG_MODE,
         silent_mode=SILENT_MODE,
     )

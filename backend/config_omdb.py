@@ -31,7 +31,9 @@ OMDB_API_KEY: str | None = _get_env_str("OMDB_API_KEY", None)
 # If not provided, it falls back to OMDB_API_KEY (legacy behavior).
 _raw_keys = (_get_env_str("OMDB_API_KEYS", "") or "").strip()
 if _raw_keys:
-    _parts = [p.strip() for p in _raw_keys.replace(";", ",").replace(" ", ",").split(",")]
+    _parts = [
+        p.strip() for p in _raw_keys.replace(";", ",").replace(" ", ",").split(",")
+    ]
     OMDB_API_KEYS: list[str] = [p for p in _parts if p]
 else:
     OMDB_API_KEYS = []
@@ -159,7 +161,10 @@ OMDB_HOT_MISS_TTL_SECONDS: float = _cap_float_min(
 # OMDb (HTTP client tuning)
 # ============================================================
 
-OMDB_BASE_URL: str = _get_env_str("OMDB_BASE_URL", "https://www.omdbapi.com/") or "https://www.omdbapi.com/"
+OMDB_BASE_URL: str = (
+    _get_env_str("OMDB_BASE_URL", "https://www.omdbapi.com/")
+    or "https://www.omdbapi.com/"
+)
 
 OMDB_HTTP_TIMEOUT_SECONDS: float = _cap_float_min(
     "OMDB_HTTP_TIMEOUT_SECONDS",
@@ -191,7 +196,10 @@ OMDB_DISABLE_AFTER_N_FAILURES: int = _cap_int(
     max_v=50,
 )
 
-OMDB_HTTP_USER_AGENT: str = _get_env_str("OMDB_HTTP_USER_AGENT", "Analiza-Movies/1.0 (local)") or "Analiza-Movies/1.0 (local)"
+OMDB_HTTP_USER_AGENT: str = (
+    _get_env_str("OMDB_HTTP_USER_AGENT", "Analiza-Movies/1.0 (local)")
+    or "Analiza-Movies/1.0 (local)"
+)
 
 # Jitter aplicado a sleeps (throttle/rate-limit) para desincronizar threads (0..0.5 recomendado).
 OMDB_JITTER_RATIO: float = _cap_float_min(
@@ -264,5 +272,9 @@ OMDB_METRICS_TOP_N: int = _cap_int(
     min_v=1,
     max_v=100,
 )
-OMDB_METRICS_LOG_ON_SILENT_DEBUG: bool = _get_env_bool("OMDB_METRICS_LOG_ON_SILENT_DEBUG", True)
-OMDB_METRICS_LOG_EVEN_IF_ZERO: bool = _get_env_bool("OMDB_METRICS_LOG_EVEN_IF_ZERO", False)
+OMDB_METRICS_LOG_ON_SILENT_DEBUG: bool = _get_env_bool(
+    "OMDB_METRICS_LOG_ON_SILENT_DEBUG", True
+)
+OMDB_METRICS_LOG_EVEN_IF_ZERO: bool = _get_env_bool(
+    "OMDB_METRICS_LOG_EVEN_IF_ZERO", False
+)

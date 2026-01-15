@@ -179,21 +179,37 @@ def _cfg_get_bool(name: str, default: bool) -> bool:
 # Knobs del core (desde config/config_core)
 # =============================================================================
 _METRICS_ENABLED: Final[bool] = _cfg_get_bool("ANALYZE_CORE_METRICS_ENABLED", True)
-_METRICS_LAZY_BIND_ENABLED: Final[bool] = _cfg_get_bool("ANALYZE_METRICS_LAZY_BIND_ENABLED", True)
+_METRICS_LAZY_BIND_ENABLED: Final[bool] = _cfg_get_bool(
+    "ANALYZE_METRICS_LAZY_BIND_ENABLED", True
+)
 
 _TRACE_LINE_MAX_CHARS: Final[int] = _cfg_get_int("COLLECTION_TRACE_LINE_MAX_CHARS", 220)
-_TRACE_REASON_MAX_CHARS: Final[int] = _cfg_get_int("ANALYZE_TRACE_REASON_MAX_CHARS", 140)
+_TRACE_REASON_MAX_CHARS: Final[int] = _cfg_get_int(
+    "ANALYZE_TRACE_REASON_MAX_CHARS", 140
+)
 
 # Inconsistencias (solo observación; NO cambia decisiones)
-_INCONS_DELETE_MIN_RATING: Final[float] = _cfg_get_float("ANALYZE_INCONSISTENCY_DELETE_IMDB_MIN_RATING", 7.5)
-_INCONS_DELETE_MIN_VOTES: Final[int] = _cfg_get_int("ANALYZE_INCONSISTENCY_DELETE_IMDB_MIN_VOTES", 10_000)
+_INCONS_DELETE_MIN_RATING: Final[float] = _cfg_get_float(
+    "ANALYZE_INCONSISTENCY_DELETE_IMDB_MIN_RATING", 7.5
+)
+_INCONS_DELETE_MIN_VOTES: Final[int] = _cfg_get_int(
+    "ANALYZE_INCONSISTENCY_DELETE_IMDB_MIN_VOTES", 10_000
+)
 
-_INCONS_KEEP_MAX_RATING: Final[float] = _cfg_get_float("ANALYZE_INCONSISTENCY_KEEP_IMDB_MAX_RATING", 4.5)
-_INCONS_KEEP_MIN_VOTES: Final[int] = _cfg_get_int("ANALYZE_INCONSISTENCY_KEEP_IMDB_MIN_VOTES", 25_000)
+_INCONS_KEEP_MAX_RATING: Final[float] = _cfg_get_float(
+    "ANALYZE_INCONSISTENCY_KEEP_IMDB_MAX_RATING", 4.5
+)
+_INCONS_KEEP_MIN_VOTES: Final[int] = _cfg_get_int(
+    "ANALYZE_INCONSISTENCY_KEEP_IMDB_MIN_VOTES", 25_000
+)
 
 # Fallback de lookup_title
-_LOOKUP_TITLE_FALLBACK_ENABLED: Final[bool] = _cfg_get_bool("ANALYZE_LOOKUP_TITLE_FALLBACK_ENABLED", True)
-_LOOKUP_TITLE_FALLBACK_MAX_CHARS: Final[int] = _cfg_get_int("ANALYZE_LOOKUP_TITLE_FALLBACK_MAX_CHARS", 180)
+_LOOKUP_TITLE_FALLBACK_ENABLED: Final[bool] = _cfg_get_bool(
+    "ANALYZE_LOOKUP_TITLE_FALLBACK_ENABLED", True
+)
+_LOOKUP_TITLE_FALLBACK_MAX_CHARS: Final[int] = _cfg_get_int(
+    "ANALYZE_LOOKUP_TITLE_FALLBACK_MAX_CHARS", 180
+)
 
 # Métrica heurística
 _STRONG_POTENTIAL_CONTRADICTION_ENABLED: Final[bool] = _cfg_get_bool(
@@ -243,10 +259,14 @@ def _metrics_bind_once() -> None:
 
         try:
             inc_obj = getattr(_rm, "inc", None) or getattr(_rm, "counter_inc", None)
-            obs_obj = getattr(_rm, "observe_seconds", None) or getattr(_rm, "timing", None)
+            obs_obj = getattr(_rm, "observe_seconds", None) or getattr(
+                _rm, "timing", None
+            )
 
             _METRICS_INC_FN = cast(_IncFn, inc_obj) if callable(inc_obj) else None
-            _METRICS_OBS_FN = cast(_ObserveSecondsFn, obs_obj) if callable(obs_obj) else None
+            _METRICS_OBS_FN = (
+                cast(_ObserveSecondsFn, obs_obj) if callable(obs_obj) else None
+            )
         except Exception:
             _METRICS_INC_FN = None
             _METRICS_OBS_FN = None
@@ -440,7 +460,9 @@ def _collapse_spaces(s: str) -> str:
 # =============================================================================
 # Lookup identity (NEW) + backwards-compatible lookup_title
 # =============================================================================
-def _get_lookup_identity(movie: MovieInput, *, trace: Callable[[str], None]) -> tuple[str, int | None, str | None]:
+def _get_lookup_identity(
+    movie: MovieInput, *, trace: Callable[[str], None]
+) -> tuple[str, int | None, str | None]:
     """
     Devuelve (lookup_title, lookup_year, imdb_id_hint_coalesced).
 
@@ -625,7 +647,9 @@ def _safe_detect_misidentified(
         )
     except Exception as exc:
         _m("misidentified.fail", 1)
-        trace(f"misidentified fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
+        trace(
+            f"misidentified fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}"
+        )
         return ""
 
     if isinstance(out_obj, str):
@@ -656,7 +680,9 @@ class _PhaseBResult:
     scoring: Mapping[str, object] | None
 
 
-def _coerce_ratings_tuple(out_obj: object) -> tuple[float | None, int | None, int | None, int | None]:
+def _coerce_ratings_tuple(
+    out_obj: object,
+) -> tuple[float | None, int | None, int | None, int | None]:
     imdb_rating: float | None = None
     imdb_votes: int | None = None
     rt_score: int | None = None
@@ -665,8 +691,12 @@ def _coerce_ratings_tuple(out_obj: object) -> tuple[float | None, int | None, in
     if not isinstance(out_obj, tuple):
         return None, None, None, None
 
-    if len(out_obj) >= 1 and (isinstance(out_obj[0], (int, float)) or out_obj[0] is None):
-        imdb_rating = float(out_obj[0]) if isinstance(out_obj[0], (int, float)) else None
+    if len(out_obj) >= 1 and (
+        isinstance(out_obj[0], (int, float)) or out_obj[0] is None
+    ):
+        imdb_rating = (
+            float(out_obj[0]) if isinstance(out_obj[0], (int, float)) else None
+        )
 
     if len(out_obj) >= 2 and (isinstance(out_obj[1], int) or out_obj[1] is None):
         imdb_votes = out_obj[1] if isinstance(out_obj[1], int) else None
@@ -754,7 +784,9 @@ def _run_phaseB_omdb(
     if omdb_data:
         try:
             out_obj: object = extract_ratings_from_omdb(omdb_data)
-            imdb_rating, imdb_votes, rt_score, metacritic_from_omdb = _coerce_ratings_tuple(out_obj)
+            imdb_rating, imdb_votes, rt_score, metacritic_from_omdb = (
+                _coerce_ratings_tuple(out_obj)
+            )
 
             if metacritic_used is None:
                 metacritic_used = metacritic_from_omdb
@@ -768,7 +800,12 @@ def _run_phaseB_omdb(
                 f"mc={_safe_str(metacritic_used, max_len=32)}"
             )
         except Exception as exc:
-            imdb_rating, imdb_votes, rt_score, metacritic_from_omdb = None, None, None, None
+            imdb_rating, imdb_votes, rt_score, metacritic_from_omdb = (
+                None,
+                None,
+                None,
+                None,
+            )
             _m("ratings.extract_fail", 1)
             trace(f"ratings fail | err={_safe_str(exc, max_len=_TRACE_LINE_MAX_CHARS)}")
 
@@ -818,7 +855,9 @@ def analyze_input_movie(
         lib = movie.library or ""
         title_raw = movie.title or ""
 
-        lookup_title, lookup_year, lookup_imdb = _get_lookup_identity(movie, trace=trace)
+        lookup_title, lookup_year, lookup_imdb = _get_lookup_identity(
+            movie, trace=trace
+        )
 
         trace(
             "start | "
@@ -862,12 +901,24 @@ def analyze_input_movie(
 
             if _STRONG_POTENTIAL_CONTRADICTION_ENABLED:
                 try:
-                    if decisionA == "DELETE" and isinstance(plex_rating, (int, float)) and float(plex_rating) >= 8.0:
+                    if (
+                        decisionA == "DELETE"
+                        and isinstance(plex_rating, (int, float))
+                        and float(plex_rating) >= 8.0
+                    ):
                         _m("strong_potential_contradiction_without_omdb", 1)
-                        trace(f"heuristic | strong contradiction (DELETE with high plex_rating={plex_rating})")
-                    if decisionA == "KEEP" and isinstance(plex_rating, (int, float)) and float(plex_rating) <= 2.0:
+                        trace(
+                            f"heuristic | strong contradiction (DELETE with high plex_rating={plex_rating})"
+                        )
+                    if (
+                        decisionA == "KEEP"
+                        and isinstance(plex_rating, (int, float))
+                        and float(plex_rating) <= 2.0
+                    ):
                         _m("strong_potential_contradiction_without_omdb", 1)
-                        trace(f"heuristic | strong contradiction (KEEP with low plex_rating={plex_rating})")
+                        trace(
+                            f"heuristic | strong contradiction (KEEP with low plex_rating={plex_rating})"
+                        )
                 except Exception:
                     pass
         else:
@@ -911,13 +962,19 @@ def analyze_input_movie(
         if omdb_data_map is not None:
             _m("misidentified.ran", 1)
 
-            detect_title = plex_title if isinstance(plex_title, str) and plex_title.strip() else title_raw
+            detect_title = (
+                plex_title
+                if isinstance(plex_title, str) and plex_title.strip()
+                else title_raw
+            )
             detect_year = plex_year if isinstance(plex_year, int) else movie.year
 
             misidentified_hint = _safe_detect_misidentified(
                 detect_title=detect_title,
                 detect_year=detect_year,
-                plex_imdb_id=movie.imdb_id_hint if isinstance(movie.imdb_id_hint, str) else None,
+                plex_imdb_id=(
+                    movie.imdb_id_hint if isinstance(movie.imdb_id_hint, str) else None
+                ),
                 omdb_data=omdb_data_map,
                 imdb_rating=imdb_rating,
                 imdb_votes=imdb_votes,
@@ -968,7 +1025,9 @@ def analyze_input_movie(
                 f"max_rating={_INCONS_KEEP_MAX_RATING} min_votes={_INCONS_KEEP_MIN_VOTES}"
             )
 
-        has_signals = any(v is not None for v in (imdb_rating, imdb_votes, rt_score, metacritic_final))
+        has_signals = any(
+            v is not None for v in (imdb_rating, imdb_votes, rt_score, metacritic_final)
+        )
         reason_code = _derive_reason_code(
             scoring=scoring_final,
             decision=decision_phaseB,
@@ -989,7 +1048,11 @@ def analyze_input_movie(
             "imdb_votes": imdb_votes,
             "plex_rating": plex_rating,
             "decision": _normalize_decision(decision_phaseB),
-            "reason": reason_final if isinstance(reason_final, str) and reason_final.strip() else _REASON_FALLBACK,
+            "reason": (
+                reason_final
+                if isinstance(reason_final, str) and reason_final.strip()
+                else _REASON_FALLBACK
+            ),
             "reason_code": reason_code,
             "misidentified_hint": misidentified_hint.strip(),
             "file": movie.file_path,

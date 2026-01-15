@@ -52,7 +52,11 @@ def test_request_id_middleware_sets_header(monkeypatch):
             captured["info"] = (msg, extra)
 
     monkeypatch.setattr(mod, "configure_logging", lambda settings: DummyLogger())
-    monkeypatch.setattr(mod.metrics, "inc", lambda name, value=1: captured["metrics"].append((name, value)))
+    monkeypatch.setattr(
+        mod.metrics,
+        "inc",
+        lambda name, value=1: captured["metrics"].append((name, value)),
+    )
 
     middleware = build_request_id_middleware(_settings())
 
@@ -81,7 +85,11 @@ def test_exception_handler_includes_request_id(monkeypatch):
             captured["exc"] = (msg, extra)
 
     monkeypatch.setattr(mod, "configure_logging", lambda settings: DummyLogger())
-    monkeypatch.setattr(mod.metrics, "inc", lambda name, value=1: captured["metrics"].append((name, value)))
+    monkeypatch.setattr(
+        mod.metrics,
+        "inc",
+        lambda name, value=1: captured["metrics"].append((name, value)),
+    )
 
     handler = build_exception_handler(_settings())
 

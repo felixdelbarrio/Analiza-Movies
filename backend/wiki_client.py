@@ -205,7 +205,9 @@ def _cap_int_runtime(value: int, *, min_v: int, max_v: int) -> int:
     return value
 
 
-def _cap_float_runtime(value: float, *, min_v: float, max_v: float | None = None) -> float:
+def _cap_float_runtime(
+    value: float, *, min_v: float, max_v: float | None = None
+) -> float:
     if value < min_v:
         return min_v
     if max_v is not None and value > max_v:
@@ -223,7 +225,9 @@ def _log_debug(msg: object) -> None:
     Wrapper defensivo para evitar que Pyright propague NoReturn desde stubs del logger.
     """
     try:
-        dbg = cast(Any, logger.debug_ctx)  # evita inferencias NoReturn / overloads raros
+        dbg = cast(
+            Any, logger.debug_ctx
+        )  # evita inferencias NoReturn / overloads raros
         dbg("WIKI", msg)
     except Exception:
         # best-effort: el cliente no debe romper por logging
@@ -330,8 +334,12 @@ _HTTP_TIMEOUT_SPARQL: Final[tuple[float, float]] = (
     max(1.0, float(WIKI_SPARQL_TIMEOUT_READ_SECONDS)),
 )
 
-_HTTP_POOL_MAXSIZE: Final[int] = _cap_int_runtime(int(WIKI_HTTP_MAX_CONCURRENCY), min_v=1, max_v=128)
-_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT: Final[float] = _cap_float_runtime(float(_HTTP_TIMEOUT) * 3.0, min_v=0.2, max_v=120.0)
+_HTTP_POOL_MAXSIZE: Final[int] = _cap_int_runtime(
+    int(WIKI_HTTP_MAX_CONCURRENCY), min_v=1, max_v=128
+)
+_HTTP_SEMAPHORE_ACQUIRE_TIMEOUT: Final[float] = _cap_float_runtime(
+    float(_HTTP_TIMEOUT) * 3.0, min_v=0.2, max_v=120.0
+)
 _HTTP_SEM = threading.BoundedSemaphore(_HTTP_POOL_MAXSIZE)
 
 
@@ -404,7 +412,9 @@ def _is_expired(fetched_at: int, ttl_s: int, now_epoch: int) -> bool:
     return (now_epoch - fetched_at) > ttl_s
 
 
-def _request_key_for_singleflight(*, imdb_norm: str | None, norm_title: str, norm_year: str) -> str:
+def _request_key_for_singleflight(
+    *, imdb_norm: str | None, norm_title: str, norm_year: str
+) -> str:
     if imdb_norm:
         return f"imdb:{imdb_norm}"
     return f"ty:{norm_title}|{norm_year}"
@@ -656,7 +666,9 @@ def _metrics_any_nonzero(snapshot: Mapping[str, int]) -> bool:
         return True
 
 
-def _format_metrics_top(snapshot: Mapping[str, int], top_n: int) -> list[tuple[str, int]]:
+def _format_metrics_top(
+    snapshot: Mapping[str, int], top_n: int
+) -> list[tuple[str, int]]:
     items: list[tuple[str, int]] = []
     for k, v in snapshot.items():
         try:
@@ -747,7 +759,9 @@ def _get_session() -> requests.Session:
         )
 
         retry_total = _cap_int_runtime(int(WIKI_HTTP_RETRY_TOTAL), min_v=0, max_v=10)
-        backoff = _cap_float_runtime(float(WIKI_HTTP_RETRY_BACKOFF_FACTOR), min_v=0.0, max_v=10.0)
+        backoff = _cap_float_runtime(
+            float(WIKI_HTTP_RETRY_BACKOFF_FACTOR), min_v=0.0, max_v=10.0
+        )
 
         retries = Retry(
             total=retry_total,
@@ -841,7 +855,9 @@ def _save_cache_file_atomic(cache: WikiCacheFile) -> None:
 
     temp_name: str | None = None
     try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(dirpath)) as tf:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", delete=False, dir=str(dirpath)
+        ) as tf:
             json.dump(cache, tf, **dump_kwargs)
             tf.flush()
             try:
@@ -1009,7 +1025,9 @@ def _load_cache_unlocked() -> WikiCacheFile:
             continue
         qid_val = v.get("qid")
         qid = _safe_str(qid_val) if qid_val is not None else None
-        imdb_qid[imdb] = _mk_imdb_qid_entry({"qid": qid, "fetched_at": fetched_at, "ttl_s": ttl_s})
+        imdb_qid[imdb] = _mk_imdb_qid_entry(
+            {"qid": qid, "fetched_at": fetched_at, "ttl_s": ttl_s}
+        )
 
     # is_film
     is_film: dict[str, IsFilmCacheEntry] = {}
@@ -1020,9 +1038,15 @@ def _load_cache_unlocked() -> WikiCacheFile:
         fetched_at = v.get("fetched_at")
         ttl_s = v.get("ttl_s")
         is_film_val = v.get("is_film")
-        if not isinstance(fetched_at, int) or not isinstance(ttl_s, int) or not isinstance(is_film_val, bool):
+        if (
+            not isinstance(fetched_at, int)
+            or not isinstance(ttl_s, int)
+            or not isinstance(is_film_val, bool)
+        ):
             continue
-        is_film[qid] = _mk_is_film_entry({"is_film": is_film_val, "fetched_at": fetched_at, "ttl_s": ttl_s})
+        is_film[qid] = _mk_is_film_entry(
+            {"is_film": is_film_val, "fetched_at": fetched_at, "ttl_s": ttl_s}
+        )
 
     # search_cache
     search_cache: dict[str, dict[str, Any]] = {}
@@ -1033,7 +1057,11 @@ def _load_cache_unlocked() -> WikiCacheFile:
             fa = v.get("fetched_at")
             ttl = v.get("ttl_s")
             titles = v.get("titles")
-            if not isinstance(fa, int) or not isinstance(ttl, int) or not isinstance(titles, list):
+            if (
+                not isinstance(fa, int)
+                or not isinstance(ttl, int)
+                or not isinstance(titles, list)
+            ):
                 continue
             search_cache[k] = {
                 "fetched_at": int(fa),
@@ -1049,7 +1077,9 @@ def _load_cache_unlocked() -> WikiCacheFile:
         {
             "schema": _SCHEMA_VERSION,
             "language": str(raw_obj.get("language") or WIKI_LANGUAGE),
-            "fallback_language": str(raw_obj.get("fallback_language") or WIKI_FALLBACK_LANGUAGE),
+            "fallback_language": str(
+                raw_obj.get("fallback_language") or WIKI_FALLBACK_LANGUAGE
+            ),
             "records": records,
             "index_imdb": index_imdb,
             "index_ty": index_ty,
@@ -1083,7 +1113,10 @@ def _maybe_flush_unlocked(force: bool) -> None:
 
     now = time.monotonic()
     if not force:
-        if _CACHE_DIRTY_WRITES < _FLUSH_MAX_DIRTY_WRITES and (now - _CACHE_LAST_FLUSH_TS) < _FLUSH_MAX_SECONDS:
+        if (
+            _CACHE_DIRTY_WRITES < _FLUSH_MAX_DIRTY_WRITES
+            and (now - _CACHE_LAST_FLUSH_TS) < _FLUSH_MAX_SECONDS
+        ):
             return
 
     try:
@@ -1123,6 +1156,7 @@ def _flush_cache_on_exit() -> None:
 
 atexit.register(_flush_cache_on_exit)
 
+
 # =============================================================================
 # Compaction / GC (SWR-aware)
 # =============================================================================
@@ -1155,7 +1189,9 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
                     continue
 
             d = dict(it)
-            d["imdbID"] = _norm_imdb(d.get("imdbID") if isinstance(d.get("imdbID"), str) else None)
+            d["imdbID"] = _norm_imdb(
+                d.get("imdbID") if isinstance(d.get("imdbID"), str) else None
+            )
             records[rid] = _mk_cache_item(d)
 
         if _COMPACT_MAX_RECORDS > 0 and len(records) > _COMPACT_MAX_RECORDS:
@@ -1177,10 +1213,19 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
             title = rec_item.get("Title")
             year = rec_item.get("Year")
 
-            if isinstance(title, str) and isinstance(year, str) and title.strip() and year.strip():
+            if (
+                isinstance(title, str)
+                and isinstance(year, str)
+                and title.strip()
+                and year.strip()
+            ):
                 index_ty[_ty_key(title, year)] = rec_rid
 
-            imdb = _norm_imdb(rec_item.get("imdbID") if isinstance(rec_item.get("imdbID"), str) else None)
+            imdb = _norm_imdb(
+                rec_item.get("imdbID")
+                if isinstance(rec_item.get("imdbID"), str)
+                else None
+            )
             if imdb:
                 index_imdb[imdb] = rec_rid
 
@@ -1191,7 +1236,9 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
         imdb_qid: dict[str, ImdbQidCacheEntry] = {}
         if isinstance(imdb_qid_obj, Mapping):
             for imdb_key_raw, qid_entry_raw in imdb_qid_obj.items():
-                imdb_key = _norm_imdb(imdb_key_raw if isinstance(imdb_key_raw, str) else None)
+                imdb_key = _norm_imdb(
+                    imdb_key_raw if isinstance(imdb_key_raw, str) else None
+                )
                 if not imdb_key or not isinstance(qid_entry_raw, Mapping):
                     continue
                 fetched_at = qid_entry_raw.get("fetched_at")
@@ -1286,12 +1333,18 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
         sc: dict[str, dict[str, Any]] = {}
         if isinstance(sc_obj, Mapping):
             for sc_key_raw, sc_entry_raw in sc_obj.items():
-                if not isinstance(sc_key_raw, str) or not isinstance(sc_entry_raw, Mapping):
+                if not isinstance(sc_key_raw, str) or not isinstance(
+                    sc_entry_raw, Mapping
+                ):
                     continue
                 fa = sc_entry_raw.get("fetched_at")
                 ttl = sc_entry_raw.get("ttl_s")
                 titles = sc_entry_raw.get("titles")
-                if not isinstance(fa, int) or not isinstance(ttl, int) or not isinstance(titles, list):
+                if (
+                    not isinstance(fa, int)
+                    or not isinstance(ttl, int)
+                    or not isinstance(titles, list)
+                ):
                     continue
                 if _is_expired(int(fa), int(ttl), now_epoch):
                     continue
@@ -1337,7 +1390,9 @@ def _compact_cache_unlocked(cache: WikiCacheFile, *, force: bool) -> None:
 # =============================================================================
 
 
-def _detect_language_chain_from_input(movie_input: MovieInputLangProto | None) -> list[str]:
+def _detect_language_chain_from_input(
+    movie_input: MovieInputLangProto | None,
+) -> list[str]:
     chain: list[str] = []
 
     if movie_input is not None:
@@ -1370,7 +1425,10 @@ def _detect_language_chain_from_input(movie_input: MovieInputLangProto | None) -
             except Exception:
                 pass
 
-    for cfg_lang in (_normalize_lang_code(WIKI_LANGUAGE), _normalize_lang_code(WIKI_FALLBACK_LANGUAGE)):
+    for cfg_lang in (
+        _normalize_lang_code(WIKI_LANGUAGE),
+        _normalize_lang_code(WIKI_FALLBACK_LANGUAGE),
+    ):
         if cfg_lang and cfg_lang not in chain:
             chain.append(cfg_lang)
 
@@ -1386,7 +1444,9 @@ def _detect_language_chain_from_input(movie_input: MovieInputLangProto | None) -
     return out
 
 
-def _best_wikipedia_languages_for_item(movie_input: MovieInputLangProto | None) -> tuple[str, str]:
+def _best_wikipedia_languages_for_item(
+    movie_input: MovieInputLangProto | None,
+) -> tuple[str, str]:
     chain = _detect_language_chain_from_input(movie_input)
     primary = chain[0] if chain else (_normalize_lang_code(WIKI_LANGUAGE) or "en")
 
@@ -1397,7 +1457,9 @@ def _best_wikipedia_languages_for_item(movie_input: MovieInputLangProto | None) 
             break
 
     if not fallback:
-        fallback = _normalize_lang_code(WIKI_FALLBACK_LANGUAGE) or ("en" if primary != "en" else "")
+        fallback = _normalize_lang_code(WIKI_FALLBACK_LANGUAGE) or (
+            "en" if primary != "en" else ""
+        )
 
     if fallback == primary:
         fallback = "en" if primary != "en" else ""
@@ -1434,7 +1496,9 @@ def _is_disambiguation_payload(payload: Mapping[str, Any] | None) -> bool:
     return bool(payload.get("__wiki_disambiguation__") is True)
 
 
-def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str, Any] | None:
+def _fetch_wikipedia_summary_by_title(
+    title: str, language: str
+) -> Mapping[str, Any] | None:
     _m_inc("wikipedia_summary_calls", 1)
 
     safe_title = quote(title.replace(" ", "_"), safe="")
@@ -1481,7 +1545,9 @@ def _fetch_wikipedia_summary_by_title(title: str, language: str) -> Mapping[str,
     return data
 
 
-def _wikipedia_search(*, query: str, language: str, limit: int = 8) -> list[dict[str, Any]]:
+def _wikipedia_search(
+    *, query: str, language: str, limit: int = 8
+) -> list[dict[str, Any]]:
     _m_inc("wikipedia_search_calls", 1)
 
     params: dict[str, str] = {
@@ -1541,7 +1607,9 @@ def _wikipedia_search(*, query: str, language: str, limit: int = 8) -> list[dict
     return out
 
 
-def _score_search_hit(*, hit_title: str, hit_snippet: str, wanted_title: str, year: int | None) -> float:
+def _score_search_hit(
+    *, hit_title: str, hit_snippet: str, wanted_title: str, year: int | None
+) -> float:
     score = 0.0
     want = _canon_cmp(wanted_title)
     got = _canon_cmp(hit_title)
@@ -1557,7 +1625,9 @@ def _score_search_hit(*, hit_title: str, hit_snippet: str, wanted_title: str, ye
             score += min(5.0, len(wt & gt) * 0.8)
 
     sn = _canon_cmp(hit_snippet)
-    if any(tok in sn for tok in ("pelicula", "película", "film", "movie", "largometraje")):
+    if any(
+        tok in sn for tok in ("pelicula", "película", "film", "movie", "largometraje")
+    ):
         score += 2.0
 
     if year is not None:
@@ -1573,7 +1643,9 @@ def _score_search_hit(*, hit_title: str, hit_snippet: str, wanted_title: str, ye
     return score
 
 
-def _rank_wikipedia_candidates(*, lookup_title: str, year: int | None, language: str) -> list[str]:
+def _rank_wikipedia_candidates(
+    *, lookup_title: str, year: int | None, language: str
+) -> list[str]:
     clean_title = " ".join(lookup_title.strip().split())
     year_s = str(year) if year is not None else ""
     cache_key = f"{language}|{_canon_cmp(clean_title)}|{year_s}"
@@ -1589,19 +1661,19 @@ def _rank_wikipedia_candidates(*, lookup_title: str, year: int | None, language:
                 fa = entry.get("fetched_at")
                 ttl = entry.get("ttl_s")
                 titles = entry.get("titles")
-                if isinstance(fa, int) and isinstance(ttl, int) and isinstance(titles, list):
+                if (
+                    isinstance(fa, int)
+                    and isinstance(ttl, int)
+                    and isinstance(titles, list)
+                ):
                     if not _is_expired(int(fa), int(ttl), now_epoch):
                         return [t for t in titles if isinstance(t, str)]
 
     queries: list[str] = []
+    token = "película" if language == "es" else "film"
     if year is not None:
-        queries.extend([f"{clean_title} {year} film", f"{clean_title} {year} movie"])
-        if language == "es":
-            queries.append(f"{clean_title} {year} película")
-
-    queries.extend([f"{clean_title} film", f"{clean_title} movie"])
-    if language == "es":
-        queries.append(f"{clean_title} película")
+        queries.append(f"{clean_title} {year} {token}")
+    queries.append(f"{clean_title} {token}")
     queries.append(clean_title)
 
     seen_q: set[str] = set()
@@ -1620,7 +1692,9 @@ def _rank_wikipedia_candidates(*, lookup_title: str, year: int | None, language:
                 continue
             snippet_raw = hit.get("snippet")
             hs = str(snippet_raw) if snippet_raw is not None else ""
-            s = _score_search_hit(hit_title=ht, hit_snippet=hs, wanted_title=clean_title, year=year)
+            s = _score_search_hit(
+                hit_title=ht, hit_snippet=hs, wanted_title=clean_title, year=year
+            )
             prev = scored.get(ht)
             if prev is None or s > prev:
                 scored[ht] = s
@@ -1634,28 +1708,15 @@ def _rank_wikipedia_candidates(*, lookup_title: str, year: int | None, language:
         if not isinstance(sc, dict):
             cache["search_cache"] = {}
             sc = cache["search_cache"]
-        sc[cache_key] = {"titles": out_titles[:32], "fetched_at": now_epoch, "ttl_s": int(_SEARCH_CAND_TTL_S)}
+        sc[cache_key] = {
+            "titles": out_titles[:32],
+            "fetched_at": now_epoch,
+            "ttl_s": int(_SEARCH_CAND_TTL_S),
+        }
         _mark_dirty_unlocked()
 
     return out_titles
 
-
-def _choose_wikipedia_summary_candidates(
-    *,
-    title_for_lookup: str,
-    year: int | None,
-    primary_language: str,
-    fallback_language: str,
-) -> list[tuple[str, str]]:
-    out: list[tuple[str, str]] = []
-    for t in _rank_wikipedia_candidates(lookup_title=title_for_lookup, year=year, language=primary_language)[:8]:
-        out.append((t, primary_language))
-
-    if fallback_language and fallback_language != primary_language:
-        for t in _rank_wikipedia_candidates(lookup_title=title_for_lookup, year=year, language=fallback_language)[:8]:
-            out.append((t, fallback_language))
-
-    return out
 
 # =============================================================================
 # Wikidata entity + labels
@@ -1742,20 +1803,59 @@ def _extract_qids_from_claims(entity: Mapping[str, Any], property_id: str) -> li
     return qids
 
 
+_IMDB_ID_RE = re.compile(r"^tt\\d{4,10}$", re.IGNORECASE)
+
+
+def _extract_imdb_id_from_claims(entity: Mapping[str, Any]) -> str | None:
+    claims_obj = entity.get("claims")
+    if not isinstance(claims_obj, Mapping):
+        return None
+
+    prop_claims = claims_obj.get("P345")
+    if not isinstance(prop_claims, list):
+        return None
+
+    for claim in prop_claims:
+        if not isinstance(claim, Mapping):
+            continue
+        mainsnak = claim.get("mainsnak")
+        if not isinstance(mainsnak, Mapping):
+            continue
+        datavalue = mainsnak.get("datavalue")
+        if not isinstance(datavalue, Mapping):
+            continue
+        value = datavalue.get("value")
+        if isinstance(value, str):
+            imdb_raw = value.strip()
+            if imdb_raw and _IMDB_ID_RE.match(imdb_raw):
+                return _norm_imdb(imdb_raw)
+        elif value is not None:
+            imdb_raw = str(value).strip()
+            if imdb_raw and _IMDB_ID_RE.match(imdb_raw):
+                return _norm_imdb(imdb_raw)
+    return None
+
+
 def _chunked(values: list[str], size: int) -> Iterable[list[str]]:
     step = max(1, size)
     for i in range(0, len(values), step):
         yield values[i : i + step]
 
 
-def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: str) -> dict[str, WikidataEntity]:
+def _fetch_wikidata_labels(
+    qids: list[str], language: str, fallback_language: str
+) -> dict[str, WikidataEntity]:
     if not qids:
         return {}
 
     _m_inc("wikidata_labels_calls", 1)
 
     out: dict[str, WikidataEntity] = {}
-    languages = f"{language}|{fallback_language}" if fallback_language and fallback_language != language else language
+    languages = (
+        f"{language}|{fallback_language}"
+        if fallback_language and fallback_language != language
+        else language
+    )
 
     for batch in _chunked(qids, 50):
         ids = "|".join(batch)
@@ -1827,7 +1927,11 @@ def _fetch_wikidata_labels(qids: list[str], language: str, fallback_language: st
             descriptions_obj = ent.get("descriptions")
             if isinstance(descriptions_obj, Mapping):
                 dp = descriptions_obj.get(language)
-                df = descriptions_obj.get(fallback_language) if fallback_language else None
+                df = (
+                    descriptions_obj.get(fallback_language)
+                    if fallback_language
+                    else None
+                )
                 if isinstance(dp, Mapping):
                     desc = _safe_str(dp.get("value"))
                 elif isinstance(df, Mapping):
@@ -1870,7 +1974,12 @@ def _wikidata_sparql(query: str) -> Mapping[str, Any] | None:
     _log_debug(f"wikidata.sparql -> len={len(query)}")
 
     try:
-        resp = _http_get(str(WIKI_WDQS_URL), params=params, timeout=_HTTP_TIMEOUT_SPARQL, breaker="wdqs")
+        resp = _http_get(
+            str(WIKI_WDQS_URL),
+            params=params,
+            timeout=_HTTP_TIMEOUT_SPARQL,
+            breaker="wdqs",
+        )
     except _CircuitBreakerOpen:
         return None
     except RequestException as exc:
@@ -1964,7 +2073,11 @@ def _is_film_without_sparql(
     if has_director and (has_cast or has_genre) and (has_date or has_duration):
         return True
 
-    if wiki_raw is not None and (not _is_disambiguation_payload(wiki_raw)) and _looks_like_film_from_wikipedia(wiki_raw, wiki_lang):
+    if (
+        wiki_raw is not None
+        and (not _is_disambiguation_payload(wiki_raw))
+        and _looks_like_film_from_wikipedia(wiki_raw, wiki_lang)
+    ):
         return True
 
     return False
@@ -1981,7 +2094,11 @@ def _is_film_cached_value(cache: WikiCacheFile, qid: str) -> bool | None:
     try:
         if not isinstance(cached, Mapping):
             return None
-        if _is_expired(int(cached.get("fetched_at", 0) or 0), int(cached.get("ttl_s", 0) or 0), now_epoch):
+        if _is_expired(
+            int(cached.get("fetched_at", 0) or 0),
+            int(cached.get("ttl_s", 0) or 0),
+            now_epoch,
+        ):
             return None
         return bool(cached.get("is_film") is True)
     except Exception:
@@ -2011,8 +2128,12 @@ def _is_film_cached(
     ):
         return bool(cached.get("is_film") is True)
 
-    ok = _is_film_without_sparql(wd_entity=wd_entity, wiki_raw=wiki_raw, wiki_lang=wiki_lang)
-    is_film_map[qid] = _mk_is_film_entry({"is_film": bool(ok), "fetched_at": now_epoch, "ttl_s": int(_TTL_IS_FILM_S)})
+    ok = _is_film_without_sparql(
+        wd_entity=wd_entity, wiki_raw=wiki_raw, wiki_lang=wiki_lang
+    )
+    is_film_map[qid] = _mk_is_film_entry(
+        {"is_film": bool(ok), "fetched_at": now_epoch, "ttl_s": int(_TTL_IS_FILM_S)}
+    )
     _mark_dirty_unlocked()
     # NO flush aquí (evita dependencia de lock)
     return ok
@@ -2023,7 +2144,9 @@ def _is_film_cached(
 # =============================================================================
 
 
-def _imdb_qid_cached_unlocked(cache: WikiCacheFile, imdb_norm: str) -> tuple[bool, str | None]:
+def _imdb_qid_cached_unlocked(
+    cache: WikiCacheFile, imdb_norm: str
+) -> tuple[bool, str | None]:
     """
     Devuelve (hit, qid).
     - hit=False si no existe o está expirado.
@@ -2040,7 +2163,11 @@ def _imdb_qid_cached_unlocked(cache: WikiCacheFile, imdb_norm: str) -> tuple[boo
     try:
         if not isinstance(cached, Mapping):
             return False, None
-        if _is_expired(int(cached.get("fetched_at", 0) or 0), int(cached.get("ttl_s", 0) or 0), now_epoch):
+        if _is_expired(
+            int(cached.get("fetched_at", 0) or 0),
+            int(cached.get("ttl_s", 0) or 0),
+            now_epoch,
+        ):
             return False, None
         qid_obj = cached.get("qid")
         qid = _safe_str(qid_obj) if qid_obj is not None else None
@@ -2049,14 +2176,19 @@ def _imdb_qid_cached_unlocked(cache: WikiCacheFile, imdb_norm: str) -> tuple[boo
         return False, None
 
 
-def _imdb_qid_store_unlocked(cache: WikiCacheFile, imdb_norm: str, qid: str | None, *, ttl_s: int) -> None:
+def _imdb_qid_store_unlocked(
+    cache: WikiCacheFile, imdb_norm: str, qid: str | None, *, ttl_s: int
+) -> None:
     imdb_qid_map = cache.get("imdb_qid")
     if not isinstance(imdb_qid_map, dict):
         cache["imdb_qid"] = {}
         imdb_qid_map = cache["imdb_qid"]
 
-    imdb_qid_map[imdb_norm] = _mk_imdb_qid_entry({"qid": qid, "fetched_at": _now_epoch(), "ttl_s": int(ttl_s)})
+    imdb_qid_map[imdb_norm] = _mk_imdb_qid_entry(
+        {"qid": qid, "fetched_at": _now_epoch(), "ttl_s": int(ttl_s)}
+    )
     _mark_dirty_unlocked()
+
 
 def _resolve_qid_by_imdb_id(imdb_norm: str) -> str | None:
     if not imdb_norm:
@@ -2100,7 +2232,9 @@ LIMIT 2
         if qid:
             _imdb_qid_store_unlocked(cache, imdb_norm, qid, ttl_s=int(_TTL_OK_S))
         else:
-            _imdb_qid_store_unlocked(cache, imdb_norm, None, ttl_s=int(_TTL_IMDB_QID_NEGATIVE_S))
+            _imdb_qid_store_unlocked(
+                cache, imdb_norm, None, ttl_s=int(_TTL_IMDB_QID_NEGATIVE_S)
+            )
 
     return qid
 
@@ -2115,17 +2249,22 @@ def _extract_sitelink_title(entity: Mapping[str, Any], language: str) -> str | N
     return _safe_str(sl.get("title"))
 
 
-def _pick_best_sitelink_title(entity: Mapping[str, Any], languages: list[str]) -> tuple[str | None, str]:
+def _pick_best_sitelink_title(
+    entity: Mapping[str, Any], languages: list[str]
+) -> tuple[str | None, str]:
     for lang in languages:
         title = _extract_sitelink_title(entity, lang)
         if title:
             return title, lang
-    return None, (languages[0] if languages else (_normalize_lang_code(WIKI_LANGUAGE) or "en"))
+    return None, (
+        languages[0] if languages else (_normalize_lang_code(WIKI_LANGUAGE) or "en")
+    )
 
 
 # =============================================================================
 # Cache lookup/store + SWR
 # =============================================================================
+
 
 def _get_cached_item(
     *,
@@ -2147,7 +2286,11 @@ def _get_cached_item(
     records_obj = cache.get("records")
     idx_imdb_obj = cache.get("index_imdb")
     idx_ty_obj = cache.get("index_ty")
-    if not isinstance(records_obj, dict) or not isinstance(idx_imdb_obj, dict) or not isinstance(idx_ty_obj, dict):
+    if (
+        not isinstance(records_obj, dict)
+        or not isinstance(idx_imdb_obj, dict)
+        or not isinstance(idx_ty_obj, dict)
+    ):
         return None, False
 
     # ⚠️ Importante para Pyright:
@@ -2179,6 +2322,16 @@ def _get_cached_item(
 
         return None, False
 
+    def _should_bypass_title_cache_for_imdb(item: WikiCacheItem) -> bool:
+        if not imdb_id:
+            return False
+        status = item.get("status")
+        if not isinstance(status, str) or status == "ok":
+            return False
+        imdb_raw = item.get("imdbID")
+        imdb_cached = _norm_imdb(imdb_raw) if isinstance(imdb_raw, str) else None
+        return (not imdb_cached) or (imdb_cached != imdb_id)
+
     # 1) IMDb index
     if imdb_id:
         rid = idx_imdb.get(imdb_id)
@@ -2192,7 +2345,7 @@ def _get_cached_item(
         rid2 = idx_ty.get(_ty_key(norm_title, norm_year))
         if isinstance(rid2, str):
             it2, stale2 = _pick(rid2)
-            if it2 is not None:
+            if it2 is not None and not _should_bypass_title_cache_for_imdb(it2):
                 return it2, stale2
         return None, False
 
@@ -2212,14 +2365,16 @@ def _get_cached_item(
 
         if found_rid:
             it3, stale3 = _pick(found_rid)
-            if it3 is not None:
+            if it3 is not None and not _should_bypass_title_cache_for_imdb(it3):
                 return it3, stale3
 
     return None, False
 
 
 def _rid_for_item(item: WikiCacheItem) -> str:
-    imdb = _norm_imdb(item.get("imdbID") if isinstance(item.get("imdbID"), str) else None)
+    imdb = _norm_imdb(
+        item.get("imdbID") if isinstance(item.get("imdbID"), str) else None
+    )
     if imdb:
         return f"imdb:{imdb}"
     title = item.get("Title")
@@ -2227,6 +2382,7 @@ def _rid_for_item(item: WikiCacheItem) -> str:
     t = title if isinstance(title, str) else ""
     y = year if isinstance(year, str) else ""
     return f"ty:{t}|{y}"
+
 
 def _store_item_unlocked(cache: WikiCacheFile, item: WikiCacheItem) -> None:
     """
@@ -2249,10 +2405,17 @@ def _store_item_unlocked(cache: WikiCacheFile, item: WikiCacheItem) -> None:
 
     title = item.get("Title")
     year = item.get("Year")
-    if isinstance(title, str) and isinstance(year, str) and title.strip() and year.strip():
+    if (
+        isinstance(title, str)
+        and isinstance(year, str)
+        and title.strip()
+        and year.strip()
+    ):
         idx_ty[_ty_key(title, year)] = rid
 
-    imdb = _norm_imdb(item.get("imdbID") if isinstance(item.get("imdbID"), str) else None)
+    imdb = _norm_imdb(
+        item.get("imdbID") if isinstance(item.get("imdbID"), str) else None
+    )
     if imdb:
         idx_imdb[imdb] = rid
 
@@ -2338,7 +2501,9 @@ def _build_ok_item_and_merge_entities(
     titles_obj = wiki_raw.get("titles")
     wikipedia_title: str | None = None
     if isinstance(titles_obj, Mapping):
-        wikipedia_title = _safe_str(titles_obj.get("normalized")) or _safe_str(titles_obj.get("canonical"))
+        wikipedia_title = _safe_str(titles_obj.get("normalized")) or _safe_str(
+            titles_obj.get("canonical")
+        )
 
     summary_text = str(wiki_raw.get("extract") or "")
     description_text = str(wiki_raw.get("description") or "")
@@ -2448,6 +2613,7 @@ def _build_ok_item_and_merge_entities(
 # Title/year path
 # =============================================================================
 
+
 def _try_title_year_path(
     *,
     lookup_title: str,
@@ -2470,109 +2636,135 @@ def _try_title_year_path(
       - Si norm_year está vacío, intenta extraer year desde Wikidata (P577).
       - Usa year_final al construir OK y negativos not_film.
     """
-    candidates = _choose_wikipedia_summary_candidates(
-        title_for_lookup=lookup_title,
-        year=year,
-        primary_language=primary,
-        fallback_language=fallback,
-    )
-    _log_debug(f"[title/year] candidates={len(candidates)} primary={primary} fallback={fallback}")
-
     disambig_seen = False
     any_non_disambig_summary = False
 
-    for cand_title, cand_lang in candidates:
-        wiki_raw = _fetch_wikipedia_summary_by_title(cand_title, cand_lang)
-        if wiki_raw is None:
-            continue
+    def _try_candidates(cands: list[str], cand_lang: str) -> WikiCacheItem | None:
+        nonlocal disambig_seen, any_non_disambig_summary
 
-        if _is_disambiguation_payload(wiki_raw):
-            disambig_seen = True
-            continue
+        for cand_title in cands:
+            wiki_raw = _fetch_wikipedia_summary_by_title(cand_title, cand_lang)
+            if wiki_raw is None:
+                continue
 
-        any_non_disambig_summary = True
+            if _is_disambiguation_payload(wiki_raw):
+                disambig_seen = True
+                continue
 
-        wikibase_item = _safe_str(wiki_raw.get("wikibase_item"))
-        if not wikibase_item:
-            continue
+            any_non_disambig_summary = True
 
-        # fast path: is_film cached value check (NO network)
-        with _CACHE_LOCK:
-            cache = _load_cache_unlocked()
-            cached_is_film = _is_film_cached_value(cache, wikibase_item)
+            wikibase_item = _safe_str(wiki_raw.get("wikibase_item"))
+            if not wikibase_item:
+                continue
 
-        if cached_is_film is False:
-            # Si ya sabemos que NO es film, cacheamos "not_film" y seguimos con otros candidatos.
-            # year_final: si no venía year, intentaremos rellenarlo al tener Wikibase item.
-            year_final_sc = norm_year
-            if not year_final_sc:
-                # no hacemos red aquí; solo con wd_entity. Pero aún no lo tenemos.
-                # Guardamos con norm_year (vacío) para evitar coste extra.
-                pass
+            # fast path: is_film cached value check (NO network)
+            with _CACHE_LOCK:
+                cache = _load_cache_unlocked()
+                cached_is_film = _is_film_cached_value(cache, wikibase_item)
+
+            if cached_is_film is False:
+                # Si ya sabemos que NO es film, cacheamos "not_film" y seguimos con otros candidatos.
+                # year_final: si no venía year, intentaremos rellenarlo al tener Wikibase item.
+                year_final_sc = norm_year
+                if not year_final_sc:
+                    # no hacemos red aquí; solo con wd_entity. Pero aún no lo tenemos.
+                    # Guardamos con norm_year (vacío) para evitar coste extra.
+                    pass
+
+                with _CACHE_LOCK:
+                    cache = _load_cache_unlocked()
+                    neg_nf_sc = _build_negative_item(
+                        norm_title=norm_title,
+                        norm_year=year_final_sc,
+                        imdb_id=imdb_id_for_store,
+                        status="not_film",
+                        wikibase_item=wikibase_item,
+                        primary_language=primary,
+                        fallback_language=fallback,
+                    )
+                    _store_item_unlocked(cache, neg_nf_sc)
+                continue
+
+            wd_entity = _fetch_wikidata_entity_json(wikibase_item)
+            if wd_entity is None:
+                continue
+
+            imdb_from_wd = _extract_imdb_id_from_claims(wd_entity)
+            imdb_for_store = imdb_id_for_store or imdb_from_wd
+
+            # FIX: year_final desde Wikidata si no venía year
+            year_final = norm_year
+            if not year_final:
+                year_from_wd = _extract_year_from_wd_entity(wd_entity)
+                if year_from_wd:
+                    year_final = year_from_wd
 
             with _CACHE_LOCK:
                 cache = _load_cache_unlocked()
-                neg_nf_sc = _build_negative_item(
-                    norm_title=norm_title,
-                    norm_year=year_final_sc,
-                    imdb_id=imdb_id_for_store,
-                    status="not_film",
-                    wikibase_item=wikibase_item,
-                    primary_language=primary,
-                    fallback_language=fallback,
-                )
-                _store_item_unlocked(cache, neg_nf_sc)
-            continue
 
-        wd_entity = _fetch_wikidata_entity_json(wikibase_item)
-        if wd_entity is None:
-            continue
+                # valida is_film (cacheable)
+                if not _is_film_cached(
+                    cache=cache,
+                    qid=wikibase_item,
+                    wd_entity=wd_entity,
+                    wiki_raw=wiki_raw,
+                    wiki_lang=cand_lang,
+                ):
+                    neg_nf = _build_negative_item(
+                        norm_title=norm_title,
+                        norm_year=year_final,  # <-- FIX: usar year_final
+                        imdb_id=imdb_for_store,
+                        status="not_film",
+                        wikibase_item=wikibase_item,
+                        primary_language=primary,
+                        fallback_language=fallback,
+                    )
+                    _store_item_unlocked(cache, neg_nf)
+                    continue
 
-        # FIX: year_final desde Wikidata si no venía year
-        year_final = norm_year
-        if not year_final:
-            year_from_wd = _extract_year_from_wd_entity(wd_entity)
-            if year_from_wd:
-                year_final = year_from_wd
-
-        with _CACHE_LOCK:
-            cache = _load_cache_unlocked()
-
-            # valida is_film (cacheable)
-            if not _is_film_cached(
-                cache=cache,
-                qid=wikibase_item,
-                wd_entity=wd_entity,
-                wiki_raw=wiki_raw,
-                wiki_lang=cand_lang,
-            ):
-                neg_nf = _build_negative_item(
+                # OK: construye item + entities labels
+                ok = _build_ok_item_and_merge_entities(
+                    cache=cache,
                     norm_title=norm_title,
                     norm_year=year_final,  # <-- FIX: usar year_final
-                    imdb_id=imdb_id_for_store,
-                    status="not_film",
+                    imdb_id=imdb_for_store,
+                    wiki_raw=wiki_raw,
+                    source_language=cand_lang,
                     wikibase_item=wikibase_item,
+                    wd_entity=wd_entity,
                     primary_language=primary,
                     fallback_language=fallback,
                 )
-                _store_item_unlocked(cache, neg_nf)
-                continue
+                _store_item_unlocked(cache, ok)
+                return ok
 
-            # OK: construye item + entities labels
-            ok = _build_ok_item_and_merge_entities(
-                cache=cache,
-                norm_title=norm_title,
-                norm_year=year_final,  # <-- FIX: usar year_final
-                imdb_id=imdb_id_for_store,
-                wiki_raw=wiki_raw,
-                source_language=cand_lang,
-                wikibase_item=wikibase_item,
-                wd_entity=wd_entity,
-                primary_language=primary,
-                fallback_language=fallback,
-            )
-            _store_item_unlocked(cache, ok)
-            return ok
+        return None
+
+    primary_candidates = _rank_wikipedia_candidates(
+        lookup_title=lookup_title,
+        year=year,
+        language=primary,
+    )[:8]
+    _log_debug(
+        f"[title/year] candidates={len(primary_candidates)} primary={primary} fallback={fallback}"
+    )
+
+    ok_primary = _try_candidates(primary_candidates, primary)
+    if ok_primary is not None:
+        return ok_primary
+
+    if fallback and fallback != primary:
+        fallback_candidates = _rank_wikipedia_candidates(
+            lookup_title=lookup_title,
+            year=year,
+            language=fallback,
+        )[:8]
+        _log_debug(
+            f"[title/year] fallback candidates={len(fallback_candidates)} fallback={fallback}"
+        )
+        ok_fallback = _try_candidates(fallback_candidates, fallback)
+        if ok_fallback is not None:
+            return ok_fallback
 
     # si TODOS los summaries fueron disambiguation (y ninguno no-disambig), guardamos status=disambiguation
     final_status: WikiItemStatus = "no_qid"
@@ -2644,7 +2836,9 @@ def _schedule_refresh_if_needed(
                 _REFRESH_IN_FLIGHT.discard(key)
 
     try:
-        threading.Thread(target=_worker, name=f"wiki-refresh:{key}", daemon=True).start()
+        threading.Thread(
+            target=_worker, name=f"wiki-refresh:{key}", daemon=True
+        ).start()
     except Exception as exc:
         _log_debug(f"refresh thread spawn failed: {exc!r}")
         with _REFRESH_IN_FLIGHT_LOCK:
@@ -2654,6 +2848,7 @@ def _schedule_refresh_if_needed(
 # =============================================================================
 # Core (single-flight + SWR)
 # =============================================================================
+
 
 def _get_wiki_impl(
     *,
@@ -2671,7 +2866,9 @@ def _get_wiki_impl(
     # Fallback defensivo si el normalizador deja el título vacío
     if not lookup_title:
         if raw_title:
-            _log_debug(f"normalize_title_for_lookup produced empty; fallback to raw_title={raw_title!r}")
+            _log_debug(
+                f"normalize_title_for_lookup produced empty; fallback to raw_title={raw_title!r}"
+            )
             lookup_title = raw_title
         else:
             _log_debug(f"empty lookup_title from title={title!r}")
@@ -2816,10 +3013,16 @@ def _get_wiki_impl(
 
             chain = _detect_language_chain_from_input(movie_input)
             sl_title, sl_lang = _pick_best_sitelink_title(wd_entity, chain)
-            wiki_raw = _fetch_wikipedia_summary_by_title(sl_title, sl_lang) if sl_title else None
+            wiki_raw = (
+                _fetch_wikipedia_summary_by_title(sl_title, sl_lang)
+                if sl_title
+                else None
+            )
 
             if wiki_raw is None or _is_disambiguation_payload(wiki_raw):
-                _log_debug("[imdb->qid] missing/ambiguous summary; trying title/year fallback")
+                _log_debug(
+                    "[imdb->qid] missing/ambiguous summary; trying title/year fallback"
+                )
                 _m_inc("path_title_search", 1)
                 return _try_title_year_path(
                     lookup_title=lookup_title,
@@ -2905,7 +3108,9 @@ def get_wiki(
     force_refresh: bool = False,
 ) -> WikiCacheItem | None:
     primary = _normalize_lang_code(WIKI_LANGUAGE) or "en"
-    fallback = _normalize_lang_code(WIKI_FALLBACK_LANGUAGE) or ("en" if primary != "en" else "")
+    fallback = _normalize_lang_code(WIKI_FALLBACK_LANGUAGE) or (
+        "en" if primary != "en" else ""
+    )
     return _get_wiki_impl(
         title=title,
         year=year,
@@ -2915,6 +3120,7 @@ def get_wiki(
         fallback=fallback,
         force_refresh=bool(force_refresh),
     )
+
 
 def get_wiki_for_input(
     *,

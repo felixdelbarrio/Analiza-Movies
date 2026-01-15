@@ -236,6 +236,7 @@ def _coalesce_plex_imdb_id(movie_input: MovieInput) -> str:
 # API pública
 # ============================================================================
 
+
 def generate_metadata_suggestions_row(
     movie_input: MovieInput,
     omdb_data: Mapping[str, object] | None,
@@ -319,8 +320,14 @@ def generate_metadata_suggestions_row(
     n_plex_year = _normalize_year(plex_year_obj)
     n_omdb_year = _normalize_year(omdb_year_obj)
 
-    title_diff = bool(plex_title and omdb_title and _titles_differ(plex_title, omdb_title))
-    year_diff = bool(n_plex_year is not None and n_omdb_year is not None and n_plex_year != n_omdb_year)
+    title_diff = bool(
+        plex_title and omdb_title and _titles_differ(plex_title, omdb_title)
+    )
+    year_diff = bool(
+        n_plex_year is not None
+        and n_omdb_year is not None
+        and n_plex_year != n_omdb_year
+    )
 
     if not title_diff and not year_diff:
         return None
@@ -345,7 +352,11 @@ def generate_metadata_suggestions_row(
         )
 
         # Fallback “loose” (títulos EN sin function-words).
-        if (not blocked) and (ctx_lang in ("es", "it", "fr")) and _is_ascii_like_title(omdb_title):
+        if (
+            (not blocked)
+            and (ctx_lang in ("es", "it", "fr"))
+            and _is_ascii_like_title(omdb_title)
+        ):
             blocked = True
 
         if blocked:
@@ -391,7 +402,9 @@ def generate_metadata_suggestions_row(
         "omdb_title": omdb_title_obj,
         "omdb_year": omdb_year_obj,
         "action": action,  # ✅ coherente con reporting.py
-        "suggestions_json": json.dumps(suggestions, ensure_ascii=False, separators=(",", ":")),
+        "suggestions_json": json.dumps(
+            suggestions, ensure_ascii=False, separators=(",", ":")
+        ),
     }
 
     logger.debug_ctx(

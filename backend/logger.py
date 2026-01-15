@@ -46,7 +46,9 @@ from typing_extensions import TypeAlias, Unpack
 # TIPOS: kwargs seguros para logging
 # ============================================================================
 
-_ExcInfoTuple: TypeAlias = tuple[type[BaseException], BaseException, TracebackType | None]
+_ExcInfoTuple: TypeAlias = tuple[
+    type[BaseException], BaseException, TracebackType | None
+]
 ExcInfo: TypeAlias = bool | _ExcInfoTuple | BaseException | None
 
 
@@ -64,7 +66,9 @@ def _filter_log_kwargs(kwargs: Mapping[str, object]) -> LogKwargs:
     out: LogKwargs = {}
 
     v = kwargs.get("exc_info")
-    if "exc_info" in kwargs and (v is None or isinstance(v, (bool, BaseException, tuple))):
+    if "exc_info" in kwargs and (
+        v is None or isinstance(v, (bool, BaseException, tuple))
+    ):
         out["exc_info"] = cast(ExcInfo, v)
 
     v = kwargs.get("stack_info")
@@ -304,7 +308,9 @@ def _ensure_file_handler(root: logging.Logger, *, level: int) -> None:
 
         fh = logging.FileHandler(path, mode="a", encoding="utf-8", delay=True)
         fh.setLevel(level)
-        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        fh.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
         setattr(fh, _FILE_HANDLER_TAG, True)
         root.addHandler(fh)
 
@@ -413,7 +419,9 @@ def progressf(fmt: str, *args: object) -> None:
 # ============================================================================
 
 
-def debug(msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]) -> None:
+def debug(
+    msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]
+) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
@@ -423,7 +431,9 @@ def debug(msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwa
         pass
 
 
-def info(msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]) -> None:
+def info(
+    msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]
+) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
@@ -433,7 +443,9 @@ def info(msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwar
         pass
 
 
-def warning(msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]) -> None:
+def warning(
+    msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]
+) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
@@ -443,7 +455,9 @@ def warning(msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogK
         pass
 
 
-def error(msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]) -> None:
+def error(
+    msg: str, *args: object, always: bool = False, **kwargs: Unpack[LogKwargs]
+) -> None:
     """ERROR siempre se emite (ignora SILENT_MODE)."""
     log = _ensure_configured()
     try:
@@ -483,7 +497,9 @@ def info_any(msg: str, *args: object, always: bool = False, **kwargs: object) ->
         pass
 
 
-def warning_any(msg: str, *args: object, always: bool = False, **kwargs: object) -> None:
+def warning_any(
+    msg: str, *args: object, always: bool = False, **kwargs: object
+) -> None:
     if not _should_log(always=always):
         return
     log = _ensure_configured()
@@ -522,7 +538,9 @@ _LOGS_TRUNCATED_SENTINEL: Final[str] = "[LOGS_TRUNCATED]"
 def logs_limit() -> int:
     if is_silent_mode():
         if is_debug_mode():
-            return _cfg_int("LOGGER_LOGS_MAX_SILENT_DEBUG", _DEFAULT_LOGS_MAX_SILENT_DEBUG)
+            return _cfg_int(
+                "LOGGER_LOGS_MAX_SILENT_DEBUG", _DEFAULT_LOGS_MAX_SILENT_DEBUG
+            )
         return _cfg_int("LOGGER_LOGS_MAX_SILENT", _DEFAULT_LOGS_MAX_SILENT)
     return _cfg_int("LOGGER_LOGS_MAX_NORMAL", _DEFAULT_LOGS_MAX_NORMAL)
 
