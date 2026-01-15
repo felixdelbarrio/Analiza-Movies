@@ -71,6 +71,14 @@ _ES_FUNCTION_WORD_RE: Final[re.Pattern[str]] = re.compile(
     r"\b(el|la|los|las|un|una|unos|unas|de|del|y|en|para|con|sin|al)\b",
     re.IGNORECASE,
 )
+_ES_COMMON_WORD_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b("
+    r"bienvenid[oa]s?|regreso|venganza|muerte|vida|noche|dia[s]?|"
+    r"hombre[s]?|mujer(?:es)?|senor(?:es)?|nino[s]?|nina[s]?|"
+    r"sangre|guerra|amor|mundo"
+    r")\b",
+    re.IGNORECASE,
+)
 
 # ---------- Inglés ----------
 _EN_HINT_RE: Final[re.Pattern[str]] = re.compile(
@@ -272,7 +280,10 @@ def guess_spanish_from_title_or_path(title: str, file_path: str) -> bool:
         return True
 
     words = _cleanup_separators(haystack.lower())
-    return _lang_hits_ge(words, _ES_FUNCTION_WORD_RE)
+    if _lang_hits_ge(words, _ES_FUNCTION_WORD_RE):
+        return True
+
+    return bool(_ES_COMMON_WORD_RE.search(words))
 
 
 def guess_english_from_title_or_path(title: str, file_path: str) -> bool:

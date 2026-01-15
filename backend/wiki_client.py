@@ -1670,14 +1670,10 @@ def _rank_wikipedia_candidates(
                         return [t for t in titles if isinstance(t, str)]
 
     queries: list[str] = []
+    token = "película" if language == "es" else "film"
     if year is not None:
-        queries.extend([f"{clean_title} {year} film", f"{clean_title} {year} movie"])
-        if language == "es":
-            queries.append(f"{clean_title} {year} película")
-
-    queries.extend([f"{clean_title} film", f"{clean_title} movie"])
-    if language == "es":
-        queries.append(f"{clean_title} película")
+        queries.append(f"{clean_title} {year} {token}")
+    queries.append(f"{clean_title} {token}")
     queries.append(clean_title)
 
     seen_q: set[str] = set()
@@ -1720,28 +1716,6 @@ def _rank_wikipedia_candidates(
         _mark_dirty_unlocked()
 
     return out_titles
-
-
-def _choose_wikipedia_summary_candidates(
-    *,
-    title_for_lookup: str,
-    year: int | None,
-    primary_language: str,
-    fallback_language: str,
-) -> list[tuple[str, str]]:
-    out: list[tuple[str, str]] = []
-    for t in _rank_wikipedia_candidates(
-        lookup_title=title_for_lookup, year=year, language=primary_language
-    )[:8]:
-        out.append((t, primary_language))
-
-    if fallback_language and fallback_language != primary_language:
-        for t in _rank_wikipedia_candidates(
-            lookup_title=title_for_lookup, year=year, language=fallback_language
-        )[:8]:
-            out.append((t, fallback_language))
-
-    return out
 
 
 # =============================================================================
@@ -2662,114 +2636,135 @@ def _try_title_year_path(
       - Si norm_year está vacío, intenta extraer year desde Wikidata (P577).
       - Usa year_final al construir OK y negativos not_film.
     """
-    candidates = _choose_wikipedia_summary_candidates(
-        title_for_lookup=lookup_title,
-        year=year,
-        primary_language=primary,
-        fallback_language=fallback,
-    )
-    _log_debug(
-        f"[title/year] candidates={len(candidates)} primary={primary} fallback={fallback}"
-    )
-
     disambig_seen = False
     any_non_disambig_summary = False
 
-    for cand_title, cand_lang in candidates:
-        wiki_raw = _fetch_wikipedia_summary_by_title(cand_title, cand_lang)
-        if wiki_raw is None:
-            continue
+    def _try_candidates(cands: list[str], cand_lang: str) -> WikiCacheItem | None:
+        nonlocal disambig_seen, any_non_disambig_summary
 
-        if _is_disambiguation_payload(wiki_raw):
-            disambig_seen = True
-            continue
+        for cand_title in cands:
+            wiki_raw = _fetch_wikipedia_summary_by_title(cand_title, cand_lang)
+            if wiki_raw is None:
+                continue
 
-        any_non_disambig_summary = True
+            if _is_disambiguation_payload(wiki_raw):
+                disambig_seen = True
+                continue
 
-        wikibase_item = _safe_str(wiki_raw.get("wikibase_item"))
-        if not wikibase_item:
-            continue
+            any_non_disambig_summary = True
 
-        # fast path: is_film cached value check (NO network)
-        with _CACHE_LOCK:
-            cache = _load_cache_unlocked()
-            cached_is_film = _is_film_cached_value(cache, wikibase_item)
+            wikibase_item = _safe_str(wiki_raw.get("wikibase_item"))
+            if not wikibase_item:
+                continue
 
-        if cached_is_film is False:
-            # Si ya sabemos que NO es film, cacheamos "not_film" y seguimos con otros candidatos.
-            # year_final: si no venía year, intentaremos rellenarlo al tener Wikibase item.
-            year_final_sc = norm_year
-            if not year_final_sc:
-                # no hacemos red aquí; solo con wd_entity. Pero aún no lo tenemos.
-                # Guardamos con norm_year (vacío) para evitar coste extra.
-                pass
+            # fast path: is_film cached value check (NO network)
+            with _CACHE_LOCK:
+                cache = _load_cache_unlocked()
+                cached_is_film = _is_film_cached_value(cache, wikibase_item)
+
+            if cached_is_film is False:
+                # Si ya sabemos que NO es film, cacheamos "not_film" y seguimos con otros candidatos.
+                # year_final: si no venía year, intentaremos rellenarlo al tener Wikibase item.
+                year_final_sc = norm_year
+                if not year_final_sc:
+                    # no hacemos red aquí; solo con wd_entity. Pero aún no lo tenemos.
+                    # Guardamos con norm_year (vacío) para evitar coste extra.
+                    pass
+
+                with _CACHE_LOCK:
+                    cache = _load_cache_unlocked()
+                    neg_nf_sc = _build_negative_item(
+                        norm_title=norm_title,
+                        norm_year=year_final_sc,
+                        imdb_id=imdb_id_for_store,
+                        status="not_film",
+                        wikibase_item=wikibase_item,
+                        primary_language=primary,
+                        fallback_language=fallback,
+                    )
+                    _store_item_unlocked(cache, neg_nf_sc)
+                continue
+
+            wd_entity = _fetch_wikidata_entity_json(wikibase_item)
+            if wd_entity is None:
+                continue
+
+            imdb_from_wd = _extract_imdb_id_from_claims(wd_entity)
+            imdb_for_store = imdb_id_for_store or imdb_from_wd
+
+            # FIX: year_final desde Wikidata si no venía year
+            year_final = norm_year
+            if not year_final:
+                year_from_wd = _extract_year_from_wd_entity(wd_entity)
+                if year_from_wd:
+                    year_final = year_from_wd
 
             with _CACHE_LOCK:
                 cache = _load_cache_unlocked()
-                neg_nf_sc = _build_negative_item(
-                    norm_title=norm_title,
-                    norm_year=year_final_sc,
-                    imdb_id=imdb_id_for_store,
-                    status="not_film",
-                    wikibase_item=wikibase_item,
-                    primary_language=primary,
-                    fallback_language=fallback,
-                )
-                _store_item_unlocked(cache, neg_nf_sc)
-            continue
 
-        wd_entity = _fetch_wikidata_entity_json(wikibase_item)
-        if wd_entity is None:
-            continue
+                # valida is_film (cacheable)
+                if not _is_film_cached(
+                    cache=cache,
+                    qid=wikibase_item,
+                    wd_entity=wd_entity,
+                    wiki_raw=wiki_raw,
+                    wiki_lang=cand_lang,
+                ):
+                    neg_nf = _build_negative_item(
+                        norm_title=norm_title,
+                        norm_year=year_final,  # <-- FIX: usar year_final
+                        imdb_id=imdb_for_store,
+                        status="not_film",
+                        wikibase_item=wikibase_item,
+                        primary_language=primary,
+                        fallback_language=fallback,
+                    )
+                    _store_item_unlocked(cache, neg_nf)
+                    continue
 
-        imdb_from_wd = _extract_imdb_id_from_claims(wd_entity)
-        imdb_for_store = imdb_id_for_store or imdb_from_wd
-
-        # FIX: year_final desde Wikidata si no venía year
-        year_final = norm_year
-        if not year_final:
-            year_from_wd = _extract_year_from_wd_entity(wd_entity)
-            if year_from_wd:
-                year_final = year_from_wd
-
-        with _CACHE_LOCK:
-            cache = _load_cache_unlocked()
-
-            # valida is_film (cacheable)
-            if not _is_film_cached(
-                cache=cache,
-                qid=wikibase_item,
-                wd_entity=wd_entity,
-                wiki_raw=wiki_raw,
-                wiki_lang=cand_lang,
-            ):
-                neg_nf = _build_negative_item(
+                # OK: construye item + entities labels
+                ok = _build_ok_item_and_merge_entities(
+                    cache=cache,
                     norm_title=norm_title,
                     norm_year=year_final,  # <-- FIX: usar year_final
                     imdb_id=imdb_for_store,
-                    status="not_film",
+                    wiki_raw=wiki_raw,
+                    source_language=cand_lang,
                     wikibase_item=wikibase_item,
+                    wd_entity=wd_entity,
                     primary_language=primary,
                     fallback_language=fallback,
                 )
-                _store_item_unlocked(cache, neg_nf)
-                continue
+                _store_item_unlocked(cache, ok)
+                return ok
 
-            # OK: construye item + entities labels
-            ok = _build_ok_item_and_merge_entities(
-                cache=cache,
-                norm_title=norm_title,
-                norm_year=year_final,  # <-- FIX: usar year_final
-                imdb_id=imdb_for_store,
-                wiki_raw=wiki_raw,
-                source_language=cand_lang,
-                wikibase_item=wikibase_item,
-                wd_entity=wd_entity,
-                primary_language=primary,
-                fallback_language=fallback,
-            )
-            _store_item_unlocked(cache, ok)
-            return ok
+        return None
+
+    primary_candidates = _rank_wikipedia_candidates(
+        lookup_title=lookup_title,
+        year=year,
+        language=primary,
+    )[:8]
+    _log_debug(
+        f"[title/year] candidates={len(primary_candidates)} primary={primary} fallback={fallback}"
+    )
+
+    ok_primary = _try_candidates(primary_candidates, primary)
+    if ok_primary is not None:
+        return ok_primary
+
+    if fallback and fallback != primary:
+        fallback_candidates = _rank_wikipedia_candidates(
+            lookup_title=lookup_title,
+            year=year,
+            language=fallback,
+        )[:8]
+        _log_debug(
+            f"[title/year] fallback candidates={len(fallback_candidates)} fallback={fallback}"
+        )
+        ok_fallback = _try_candidates(fallback_candidates, fallback)
+        if ok_fallback is not None:
+            return ok_fallback
 
     # si TODOS los summaries fueron disambiguation (y ninguno no-disambig), guardamos status=disambiguation
     final_status: WikiItemStatus = "no_qid"
