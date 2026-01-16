@@ -92,7 +92,10 @@ from backend.config_omdb import (
     OMDB_RATE_LIMIT_WAIT_SECONDS,
     OMDB_SINGLEFLIGHT_WAIT_SECONDS,
 )
-from backend.title_utils import normalize_title_for_lookup
+from backend.title_utils import (
+    generate_sequel_title_variants,
+    normalize_title_for_lookup,
+)
 
 # ============================================================
 # Optional: RunMetrics (best-effort) - tipado con Protocol
@@ -1680,6 +1683,157 @@ atexit.register(_flush_cache_on_exit)
 # CACHE LOOKUP POLICY (schema v4 + hot cache)
 # ============================================================
 
+_FALLBACK_IMDB_TITLE_SCORE_MIN: Final[float] = 0.5
+_FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_TITLE: Final[int] = 6
+_FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_QUERY: Final[int] = 2
+
+_FALLBACK_IMDB_INDEX: dict[str, set[str]] = {}
+_FALLBACK_IMDB_INDEX_RECORDS: int = 0
+
+
+def _invalidate_fallback_imdb_index_unlocked() -> None:
+    global _FALLBACK_IMDB_INDEX, _FALLBACK_IMDB_INDEX_RECORDS
+    _FALLBACK_IMDB_INDEX = {}
+    _FALLBACK_IMDB_INDEX_RECORDS = -1
+
+
+def _ensure_fallback_imdb_index_unlocked(
+    cache: OmdbCacheFile,
+) -> dict[str, set[str]] | None:
+    global _FALLBACK_IMDB_INDEX, _FALLBACK_IMDB_INDEX_RECORDS
+
+    records_obj: object = cache.get("records")
+    idx_imdb_obj: object = cache.get("index_imdb")
+    if not isinstance(records_obj, Mapping) or not isinstance(idx_imdb_obj, Mapping):
+        return None
+
+    records: dict[str, object] = cast(dict[str, object], records_obj)
+    idx_imdb: Mapping[str, object] = cast(Mapping[str, object], idx_imdb_obj)
+
+    rec_count = len(records)
+    if _FALLBACK_IMDB_INDEX and _FALLBACK_IMDB_INDEX_RECORDS == rec_count:
+        return _FALLBACK_IMDB_INDEX
+
+    index: dict[str, set[str]] = {}
+    for rid in idx_imdb.values():
+        if not isinstance(rid, str):
+            continue
+        raw = records.get(rid)
+        if not isinstance(raw, Mapping):
+            continue
+        title_raw = raw.get("Title")
+        if not isinstance(title_raw, str) or not title_raw.strip():
+            continue
+        title_norm = normalize_title_for_lookup(title_raw)
+        if not title_norm:
+            continue
+
+        tokens = sorted(_tokenize_norm_title(title_norm), key=len, reverse=True)
+        if _FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_TITLE > 0:
+            tokens = tokens[:_FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_TITLE]
+
+        for tok in tokens:
+            bucket = index.get(tok)
+            if bucket is None:
+                bucket = set()
+                index[tok] = bucket
+            bucket.add(rid)
+
+    _FALLBACK_IMDB_INDEX = index
+    _FALLBACK_IMDB_INDEX_RECORDS = rec_count
+    return _FALLBACK_IMDB_INDEX
+
+
+def _score_title_match(norm_title: str, cached_title: str) -> float:
+    if not norm_title or not cached_title:
+        return 0.0
+    if norm_title == cached_title:
+        return 1.0
+    if norm_title in cached_title or cached_title in norm_title:
+        return 0.9
+    ntoks = _tokenize_norm_title(norm_title)
+    ctoks = _tokenize_norm_title(cached_title)
+    if not ntoks or not ctoks:
+        return 0.0
+    inter = len(ntoks & ctoks)
+    union = len(ntoks | ctoks)
+    return (inter / union) if union > 0 else 0.0
+
+
+def _find_cached_imdb_fallback_unlocked(
+    *, cache: OmdbCacheFile, norm_title: str, norm_year: str
+) -> OmdbCacheItem | None:
+    if not norm_title:
+        return None
+
+    records_obj: object = cache.get("records")
+    idx_imdb_obj: object = cache.get("index_imdb")
+    if not isinstance(records_obj, Mapping) or not isinstance(idx_imdb_obj, Mapping):
+        return None
+
+    records: dict[str, object] = cast(dict[str, object], records_obj)
+    idx_imdb: Mapping[str, object] = cast(Mapping[str, object], idx_imdb_obj)
+
+    candidate_rids: Iterable[str] | None = None
+    index = _ensure_fallback_imdb_index_unlocked(cache)
+    if index is not None:
+        tokens = sorted(_tokenize_norm_title(norm_title), key=len, reverse=True)
+        if tokens and _FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_QUERY > 0:
+            tokens = tokens[:_FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_QUERY]
+        if tokens:
+            sets: list[set[str]] = []
+            for tok in tokens:
+                bucket = index.get(tok)
+                if bucket:
+                    sets.append(bucket)
+            if sets:
+                merged = set(sets[0])
+                for s in sets[1:]:
+                    merged &= s
+                if not merged and tokens:
+                    merged = set()
+                    for tok in tokens:
+                        bucket = index.get(tok)
+                        if bucket:
+                            merged.update(bucket)
+                if merged:
+                    candidate_rids = merged
+
+    now_epoch = _now_epoch()
+    best: OmdbCacheItem | None = None
+    best_score = 0.0
+
+    for rid in candidate_rids or idx_imdb.values():
+        if not isinstance(rid, str):
+            continue
+        raw = records.get(rid)
+        if not isinstance(raw, Mapping):
+            continue
+        item = cast(OmdbCacheItem, raw)
+        if _is_expired_item(item, now_epoch):
+            continue
+        status = item.get("status")
+        if status not in ("ok", "empty_ratings"):
+            continue
+        title_raw = item.get("Title")
+        if not isinstance(title_raw, str) or not title_raw.strip():
+            continue
+        year_raw = item.get("Year")
+        if norm_year and isinstance(year_raw, str) and year_raw.strip():
+            if year_raw.strip() != norm_year:
+                continue
+
+        title_norm = normalize_title_for_lookup(title_raw) or title_raw.strip()
+        score = _score_title_match(norm_title, title_norm)
+        if score > best_score:
+            best_score = score
+            best = item
+
+    if best is None or best_score < _FALLBACK_IMDB_TITLE_SCORE_MIN:
+        return None
+
+    return best
+
 
 def _get_cached_item_unlocked(
     *, norm_title: str, norm_year: str, imdb_id_hint: str | None
@@ -1709,6 +1863,13 @@ def _get_cached_item_unlocked(
                 if _is_expired_item(it2, now_epoch):
                     _m_inc("cache_expired_hits", 1)
                     return None
+                if imdb_id_hint is None and it2.get("status") == "not_found":
+                    alt = _find_cached_imdb_fallback_unlocked(
+                        cache=cache, norm_title=norm_title, norm_year=norm_year
+                    )
+                    if alt is not None:
+                        _m_inc("cache_fallback_imdb_hits", 1)
+                        return alt
                 return it2
 
     return None
@@ -1817,6 +1978,7 @@ def _cache_store_item(
             cache["index_imdb"][imdb_norm] = rid
 
         _m_inc("cache_store_writes", 1)
+        _invalidate_fallback_imdb_index_unlocked()
         _mark_dirty_unlocked()
         _maybe_flush_unlocked(force=False)
 
@@ -1952,6 +2114,7 @@ def patch_cached_omdb_record(
             cache["index_imdb"][imdb_now] = rid
 
         _m_inc("cache_patch_writes", 1)
+        _invalidate_fallback_imdb_index_unlocked()
         _mark_dirty_unlocked()
         _maybe_flush_unlocked(force=False)
 
@@ -2383,6 +2546,75 @@ def omdb_query_with_cache(
         if year is not None:
             params_t["y"] = str(year)
 
+        def _try_title_variants() -> dict[str, object] | None:
+            variants: list[str] = []
+            seen: set[str] = set()
+            for src in (title_for_omdb, norm_title):
+                if not src:
+                    continue
+                for variant in generate_sequel_title_variants(src):
+                    v = variant.strip()
+                    if not v:
+                        continue
+                    key = v.lower()
+                    if key == title_for_omdb.lower():
+                        continue
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    variants.append(v)
+
+            for variant in variants:
+                params_var: dict[str, object] = {
+                    "t": variant,
+                    "type": "movie",
+                    "plot": "short",
+                }
+                if year is not None:
+                    params_var["y"] = str(year)
+
+                data_var = _request_with_rate_limit(params_var)
+                if not isinstance(data_var, dict):
+                    continue
+
+                used_no_year_var = False
+                if year is not None and _is_movie_not_found(data_var):
+                    params_no_year = dict(params_var)
+                    params_no_year.pop("y", None)
+                    data_no_year = _request_with_rate_limit(params_no_year)
+                    if isinstance(data_no_year, dict):
+                        data_var = data_no_year
+                        used_no_year_var = True
+
+                if _is_movie_not_found(data_var):
+                    continue
+
+                if not _is_cacheable_omdb_payload(data_var):
+                    continue
+
+                imdb_final = _extract_imdb_id_from_omdb_record(data_var)
+                y_resp = extract_year_from_omdb(data_var)
+                year_str_var = year_str or (str(y_resp) if y_resp is not None else "")
+
+                prov_final = dict(prov_in)
+                prov_final["resolved_via"] = (
+                    "t_var_y"
+                    if (year is not None and not used_no_year_var)
+                    else "t_var"
+                )
+                _attach_provenance(data_var, prov_final)
+
+                norm_title_var = norm_title or normalize_title_for_lookup(variant)
+                _cache_store_item(
+                    norm_title=norm_title_var,
+                    norm_year=year_str_var,
+                    imdb_id=imdb_final,
+                    omdb_data=dict(data_var),
+                )
+                return dict(data_var)
+
+            return None
+
         data_t = _request_with_rate_limit(params_t)
         if not isinstance(data_t, dict):
             return None
@@ -2398,6 +2630,10 @@ def omdb_query_with_cache(
                 used_no_year = True
 
         if _is_movie_not_found(data_t):
+            data_variant = _try_title_variants()
+            if data_variant is not None:
+                return data_variant
+
             imdb_best = _search_candidates_imdb_id(
                 title_for_search=title_for_omdb, year=year
             )
