@@ -1684,6 +1684,7 @@ _FALLBACK_IMDB_TITLE_SCORE_MIN: Final[float] = 0.5
 _FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_TITLE: Final[int] = 6
 _FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_QUERY: Final[int] = 2
 
+<<<<<<< HEAD
 _FALLBACK_IMDB_INDEX: dict[str, set[str]] = {}
 _FALLBACK_IMDB_INDEX_RECORDS: int = 0
 
@@ -1831,6 +1832,8 @@ def _find_cached_imdb_fallback_unlocked(
 
     return best
 
+=======
+>>>>>>> origin/master
 def _get_cached_item_unlocked(
     *, norm_title: str, norm_year: str, imdb_id_hint: str | None
 ) -> OmdbCacheItem | None:
@@ -2624,10 +2627,13 @@ def omdb_query_with_cache(
                 used_no_year = True
 
         if _is_movie_not_found(data_t):
+<<<<<<< HEAD
             data_variant = _try_title_variants()
             if data_variant is not None:
                 return data_variant
 
+=======
+>>>>>>> origin/master
             imdb_best = _search_candidates_imdb_id(
                 title_for_search=title_for_omdb, year=year
             )
