@@ -1696,7 +1696,6 @@ def _rank_wikipedia_candidates(
                     if not _is_expired(int(fa), int(ttl), now_epoch):
                         return [t for t in titles if isinstance(t, str)]
 
-<<<<<<< HEAD
     def _queries_for_title(title_variant: str) -> list[str]:
         token = "película" if language == "es" else "film"
         queries: list[str] = []
@@ -1730,37 +1729,6 @@ def _rank_wikipedia_candidates(
                 if prev is None or s > prev:
                     scored[ht] = s
         return scored
-=======
-    queries: list[str] = []
-    token = "película" if language == "es" else "film"
-    if year is not None:
-        queries.append(f"{clean_title} {year} {token}")
-    queries.append(f"{clean_title} {token}")
-    queries.append(clean_title)
-
-    seen_q: set[str] = set()
-    deduped_queries: list[str] = []
-    for q in queries:
-        qq = q.strip()
-        if qq and qq not in seen_q:
-            seen_q.add(qq)
-            deduped_queries.append(qq)
-
-    scored: dict[str, float] = {}
-    for q in deduped_queries:
-        for hit in _wikipedia_search(query=q, language=language, limit=10):
-            ht = _safe_str(hit.get("title"))
-            if not ht:
-                continue
-            snippet_raw = hit.get("snippet")
-            hs = str(snippet_raw) if snippet_raw is not None else ""
-            s = _score_search_hit(
-                hit_title=ht, hit_snippet=hs, wanted_title=clean_title, year=year
-            )
-            prev = scored.get(ht)
-            if prev is None or s > prev:
-                scored[ht] = s
->>>>>>> origin/master
 
     scored = _run_queries(clean_title, clean_title)
     ranked = sorted(scored.items(), key=lambda kv: kv[1], reverse=True)
@@ -2337,7 +2305,6 @@ def _pick_best_sitelink_title(
 # =============================================================================
 
 
-<<<<<<< HEAD
 def _should_purge_title_mismatch(norm_title: str, item: WikiCacheItem) -> bool:
     if not norm_title:
         return False
@@ -2388,8 +2355,6 @@ def _purge_cached_record_unlocked(
     _m_inc("cache_title_mismatch_purged", 1)
     _mark_dirty_unlocked()
 
-=======
->>>>>>> origin/master
 def _get_cached_item(
     *,
     cache: WikiCacheFile,
@@ -2470,7 +2435,6 @@ def _get_cached_item(
         if isinstance(rid2, str):
             it2, stale2 = _pick(rid2)
             if it2 is not None and not _should_bypass_title_cache_for_imdb(it2):
-<<<<<<< HEAD
                 if _should_purge_title_mismatch(norm_title, it2):
                     wiki_title = None
                     wiki_block = it2.get("wiki")
@@ -2482,8 +2446,6 @@ def _get_cached_item(
                         f"lookup={norm_title!r} wiki_title={wiki_title!r}"
                     )
                     return None, False
-=======
->>>>>>> origin/master
                 return it2, stale2
         return None, False
 
@@ -2504,7 +2466,6 @@ def _get_cached_item(
         if found_rid:
             it3, stale3 = _pick(found_rid)
             if it3 is not None and not _should_bypass_title_cache_for_imdb(it3):
-<<<<<<< HEAD
                 if _should_purge_title_mismatch(norm_title, it3):
                     wiki_title = None
                     wiki_block = it3.get("wiki")
@@ -2516,8 +2477,6 @@ def _get_cached_item(
                         f"lookup={norm_title!r} wiki_title={wiki_title!r}"
                     )
                     return None, False
-=======
->>>>>>> origin/master
                 return it3, stale3
 
     return None, False
@@ -2795,11 +2754,8 @@ def _try_title_year_path(
         nonlocal disambig_seen, any_non_disambig_summary
 
         for cand_title in cands:
-<<<<<<< HEAD
             if not _titles_share_significant_tokens(lookup_title, cand_title):
                 continue
-=======
->>>>>>> origin/master
             wiki_raw = _fetch_wikipedia_summary_by_title(cand_title, cand_lang)
             if wiki_raw is None:
                 continue
