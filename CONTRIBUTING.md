@@ -15,3 +15,8 @@ Thanks for your interest in improving Analiza Movies.
 ## Issues
 - Provide steps to reproduce and expected vs. actual behavior.
 - Include logs or screenshots when helpful.
+
+## Support
+If you'd like to support ongoing maintenance:
+- GitHub Sponsors: https://github.com/sponsors/felixdelbarrio
+- PayPal: https://paypal.me/felixdelbarrio

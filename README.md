@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/ci.yml/badge.svg)](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/ci.yml)
 [![Typing](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/typing.yml/badge.svg)](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/typing.yml)
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-2ea44f.svg)](https://github.com/sponsors/felixdelbarrio)
 [![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://paypal.me/felixdelbarrio)
 
 > **EN / ES – Bilingual Documentation**  
@@ -32,7 +33,8 @@ It combines **automated analysis**, **intelligent scoring**, **interactive dashb
 ### 💖 Support
 
 If you find this project useful, you can support its development here:  
-➡️ https://paypal.me/felixdelbarrio
+- GitHub Sponsors: https://github.com/sponsors/felixdelbarrio  
+- PayPal: https://paypal.me/felixdelbarrio
 
 ---
 
@@ -111,7 +113,8 @@ Combina **análisis automático**, **scoring inteligente**, **dashboards interac
 ### 💖 Apóyame
 
 Si este proyecto te resulta útil, puedes apoyarlo aquí:  
-➡️ https://paypal.me/felixdelbarrio
+- GitHub Sponsors: https://github.com/sponsors/felixdelbarrio  
+- PayPal: https://paypal.me/felixdelbarrio
 
 ---
 
