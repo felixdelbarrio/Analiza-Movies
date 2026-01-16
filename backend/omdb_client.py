@@ -92,7 +92,10 @@ from backend.config_omdb import (
     OMDB_RATE_LIMIT_WAIT_SECONDS,
     OMDB_SINGLEFLIGHT_WAIT_SECONDS,
 )
-from backend.title_utils import generate_sequel_title_variants, normalize_title_for_lookup
+from backend.title_utils import (
+    generate_sequel_title_variants,
+    normalize_title_for_lookup,
+)
 
 # ============================================================
 # Optional: RunMetrics (best-effort) - tipado con Protocol
@@ -1727,7 +1730,7 @@ def _ensure_fallback_imdb_index_unlocked(
 
         tokens = sorted(_tokenize_norm_title(title_norm), key=len, reverse=True)
         if _FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_TITLE > 0:
-            tokens = tokens[: _FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_TITLE]
+            tokens = tokens[:_FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_TITLE]
 
         for tok in tokens:
             bucket = index.get(tok)
@@ -1776,7 +1779,7 @@ def _find_cached_imdb_fallback_unlocked(
     if index is not None:
         tokens = sorted(_tokenize_norm_title(norm_title), key=len, reverse=True)
         if tokens and _FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_QUERY > 0:
-            tokens = tokens[: _FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_QUERY]
+            tokens = tokens[:_FALLBACK_IMDB_INDEX_MAX_TOKENS_PER_QUERY]
         if tokens:
             sets: list[set[str]] = []
             for tok in tokens:
@@ -1800,7 +1803,7 @@ def _find_cached_imdb_fallback_unlocked(
     best: OmdbCacheItem | None = None
     best_score = 0.0
 
-    for rid in (candidate_rids or idx_imdb.values()):
+    for rid in candidate_rids or idx_imdb.values():
         if not isinstance(rid, str):
             continue
         raw = records.get(rid)
@@ -1830,6 +1833,7 @@ def _find_cached_imdb_fallback_unlocked(
         return None
 
     return best
+
 
 def _get_cached_item_unlocked(
     *, norm_title: str, norm_year: str, imdb_id_hint: str | None
@@ -2594,7 +2598,9 @@ def omdb_query_with_cache(
 
                 prov_final = dict(prov_in)
                 prov_final["resolved_via"] = (
-                    "t_var_y" if (year is not None and not used_no_year_var) else "t_var"
+                    "t_var_y"
+                    if (year is not None and not used_no_year_var)
+                    else "t_var"
                 )
                 _attach_provenance(data_var, prov_final)
 

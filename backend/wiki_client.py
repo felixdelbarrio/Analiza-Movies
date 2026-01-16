@@ -118,7 +118,10 @@ from backend.config_wiki import (
     WIKI_WIKIPEDIA_API_BASE_URL,
     WIKI_WIKIPEDIA_REST_BASE_URL,
 )
-from backend.title_utils import generate_sequel_title_variants, normalize_title_for_lookup
+from backend.title_utils import (
+    generate_sequel_title_variants,
+    normalize_title_for_lookup,
+)
 
 # --------------------------------------------------------------------------------------
 # Opcional: knob general en config.py (NO obligatorio).
@@ -2354,6 +2357,7 @@ def _purge_cached_record_unlocked(
 
     _m_inc("cache_title_mismatch_purged", 1)
     _mark_dirty_unlocked()
+
 
 def _get_cached_item(
     *,
