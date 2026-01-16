@@ -1831,7 +1831,6 @@ def _find_cached_imdb_fallback_unlocked(
 
     return best
 
-
 def _get_cached_item_unlocked(
     *, norm_title: str, norm_year: str, imdb_id_hint: str | None
 ) -> OmdbCacheItem | None:
