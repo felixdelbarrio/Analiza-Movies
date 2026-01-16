@@ -62,7 +62,6 @@ from frontend.front_api_client import (  # noqa: E402
     fetch_report_all_df,
     fetch_report_filtered_df,
 )
-from frontend.front_stats import compute_global_imdb_mean_from_df  # noqa: E402
 from frontend.summary import compute_summary  # noqa: E402
 from frontend.components import render_modal  # noqa: E402
 
@@ -373,7 +372,18 @@ _debug_banner(df_all=df_all, df_filtered=df_filtered)
 # 8) Resumen general (KPIs)
 # =============================================================================
 
-st.subheader("Resumen general")
+summary_header, summary_toggle = st.columns([4, 2], gap="small")
+with summary_header:
+    st.subheader("Resumen general")
+with summary_toggle:
+    _bool_switch(
+        "Señalética de color en tablas",
+        key="grid_colorize_rows",
+        value=bool(st.session_state.get("grid_colorize_rows", True)),
+        help=(
+            "Activa colores por decisión (DELETE/KEEP/MAYBE/UNKNOWN) en el texto de cada fila."
+        ),
+    )
 
 summary = compute_summary(df_all)
 
@@ -389,18 +399,11 @@ col4.metric(
     "MAYBE", format_count_size(summary["maybe_count"], summary["maybe_size_gb"])
 )
 
-imdb_mean_df = compute_global_imdb_mean_from_df(df_all)
+imdb_mean_df = summary.get("imdb_mean_df")
 if imdb_mean_df is not None and not pd.isna(imdb_mean_df):
     col5.metric("IMDb medio (analizado)", f"{imdb_mean_df:.2f}")
 else:
     col5.metric("IMDb medio (analizado)", "N/A")
-
-_bool_switch(
-    "Señalética de color en tablas",
-    key="grid_colorize_rows",
-    value=bool(st.session_state.get("grid_colorize_rows", True)),
-    help="Activa colores por decisión (DELETE/KEEP/MAYBE/UNKNOWN) en el texto de cada fila.",
-)
 
 st.markdown("---")
 
@@ -414,6 +417,16 @@ div[data-testid="stMultiSelect"] [data-baseweb="tag"] {
 }
 div[data-testid="stMultiSelect"] [data-baseweb="tag"] span {
   color: #e5e7eb !important;
+}
+.stDataFrame div[data-testid="stDataFrameToolbar"],
+div[data-testid="stDataFrameToolbar"] {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+div[data-testid="stDataFrameToolbar"] button,
+div[data-testid="stDataFrameToolbar"] [data-testid="stDataFrameToolbarButton"] {
+  opacity: 1 !important;
 }
 .ag-theme-alpine .ag-cell,
 .ag-theme-alpine-dark .ag-cell {

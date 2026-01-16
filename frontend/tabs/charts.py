@@ -20,7 +20,7 @@ Dependencias:
 
 from __future__ import annotations
 
-from typing import Final, Iterable
+from typing import Any, Callable, Final, Iterable, TypeVar, cast
 
 import altair as alt
 import pandas as pd
@@ -47,6 +47,75 @@ VIEW_OPTIONS: Final[list[str]] = [
     "Palabras más frecuentes en títulos DELETE/MAYBE",
     "Distribución por scoring_rule",
 ]
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _cache_data_decorator() -> Callable[[_F], _F]:
+    cache_fn = getattr(st, "cache_data", None)
+    if callable(cache_fn):
+        return cast(Callable[[_F], _F], cache_fn(show_spinner=False))
+    cache_fn = getattr(st, "cache", None)
+    if callable(cache_fn):
+        return cast(Callable[[_F], _F], cache_fn)
+    return cast(Callable[[_F], _F], lambda f: f)
+
+
+@_cache_data_decorator()
+def _genres_agg(df: pd.DataFrame) -> pd.DataFrame:
+    df_gen = explode_genres_from_omdb_json(df)
+    if (
+        df_gen.empty
+        or "title" not in df_gen.columns
+        or "decision" not in df_gen.columns
+    ):
+        return pd.DataFrame(columns=["genre", "decision", "count"])
+
+    return (
+        df_gen.groupby(["genre", "decision"], dropna=False)["title"]
+        .count()
+        .reset_index()
+        .rename(columns={"title": "count"})
+    )
+
+
+@_cache_data_decorator()
+def _director_stats(df: pd.DataFrame) -> pd.DataFrame:
+    required = {"omdb_json", "imdb_rating", "title"}
+    if not required.issubset(df.columns):
+        return pd.DataFrame(columns=["director_list", "imdb_mean", "count"])
+
+    def extract_directors(raw: object) -> list[str]:
+        d = safe_json_loads_single(raw)
+        if not isinstance(d, dict):
+            return []
+        val = d.get("Director")
+        if not val:
+            return []
+        return [x.strip() for x in str(val).split(",") if x.strip()]
+
+    df_dir = df.loc[:, ["omdb_json", "imdb_rating", "title"]].copy()
+    df_dir["director_list"] = df_dir["omdb_json"].map(extract_directors)
+    df_dir = df_dir.explode("director_list", ignore_index=True)
+    df_dir = df_dir[df_dir["director_list"].notna() & (df_dir["director_list"] != "")]
+
+    if df_dir.empty:
+        return pd.DataFrame(columns=["director_list", "imdb_mean", "count"])
+
+    return (
+        df_dir.groupby("director_list", dropna=False)
+        .agg(
+            imdb_mean=("imdb_rating", "mean"),
+            count=("title", "count"),
+        )
+        .reset_index()
+    )
+
+
+@_cache_data_decorator()
+def _word_counts(df: pd.DataFrame, decisions: tuple[str, ...]) -> pd.DataFrame:
+    return build_word_counts(df, decisions)
 
 
 def _requires_columns(df: pd.DataFrame, cols: Iterable[str]) -> bool:
@@ -86,7 +155,7 @@ def render(df_all: pd.DataFrame) -> None:
         st.info("No hay datos para mostrar gráficos.")
         return
 
-    df_g = df_all.copy()
+    df_g = df_all
 
     # Default: "Ratings IMDb vs RT"
     default_view = "Ratings IMDb vs RT"
@@ -263,18 +332,11 @@ def render(df_all: pd.DataFrame) -> None:
 
     # 6) Distribución por género (OMDb)
     elif view == "Distribución por género (OMDb)":
-        df_gen = explode_genres_from_omdb_json(df_g)
+        agg = _genres_agg(df_g)
 
-        if df_gen.empty:
+        if agg.empty:
             st.info("No hay datos de género en omdb_json.")
             return
-
-        agg = (
-            df_gen.groupby(["genre", "decision"], dropna=False)["title"]
-            .count()
-            .reset_index()
-            .rename(columns={"title": "count"})
-        )
 
         top_n = st.slider("Top N géneros", 5, 50, 20)
         top_genres = (
@@ -366,41 +428,12 @@ def render(df_all: pd.DataFrame) -> None:
 
     # 9) Ranking de directores
     elif view == "Ranking de directores":
-        if "omdb_json" not in df_g.columns:
-            st.info("No existe información OMDb JSON (omdb_json).")
-            return
-
-        df_dir = df_g.copy()
-
-        def extract_directors(raw: object) -> list[str]:
-            d = safe_json_loads_single(raw)
-            if not isinstance(d, dict):
-                return []
-            val = d.get("Director")
-            if not val:
-                return []
-            return [x.strip() for x in str(val).split(",") if x.strip()]
-
-        df_dir["director_list"] = df_dir["omdb_json"].apply(extract_directors)
-        df_dir = df_dir.explode("director_list")
-        df_dir = df_dir[
-            df_dir["director_list"].notna() & (df_dir["director_list"] != "")
-        ]
-
-        if df_dir.empty:
+        agg = _director_stats(df_g)
+        if agg.empty:
             st.info("No se encontraron directores en omdb_json.")
             return
 
         min_movies = st.slider("Mínimo nº de películas por director", 1, 10, 3)
-
-        agg = (
-            df_dir.groupby("director_list", dropna=False)
-            .agg(
-                imdb_mean=("imdb_rating", "mean"),
-                count=("title", "count"),
-            )
-            .reset_index()
-        )
         agg = agg[agg["count"] >= min_movies].sort_values("imdb_mean", ascending=False)
 
         if agg.empty:
@@ -423,7 +456,7 @@ def render(df_all: pd.DataFrame) -> None:
 
     # 10) Palabras más frecuentes en títulos DELETE/MAYBE
     elif view == "Palabras más frecuentes en títulos DELETE/MAYBE":
-        df_words = build_word_counts(df_g, ["DELETE", "MAYBE"])
+        df_words = _word_counts(df_g, ("DELETE", "MAYBE"))
 
         if df_words.empty:
             st.info("No hay datos suficientes para el análisis de palabras.")
