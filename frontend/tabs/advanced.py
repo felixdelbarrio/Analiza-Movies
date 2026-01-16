@@ -109,7 +109,7 @@ def render(df_all: pd.DataFrame) -> None:
         st.info("No hay datos para búsqueda avanzada.")
         return
 
-    df_view = df_all.copy()
+    df_view = df_all
 
     title_query = ""
     year_range: tuple[int, int] | None = None
@@ -272,9 +272,7 @@ def render(df_all: pd.DataFrame) -> None:
     if title_query and "title" in df_view.columns:
         title_series = df_view["title"].fillna("").astype(str)
         df_view = df_view[
-            title_series.str.contains(
-                title_query, case=False, regex=False, na=False
-            )
+            title_series.str.contains(title_query, case=False, regex=False, na=False)
         ]
 
     df_view = _apply_range_filter(df_view, "year", year_range, year_default)

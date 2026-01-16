@@ -27,15 +27,6 @@ from frontend.components import aggrid_with_row_click, render_detail_card
 TITLE_TEXT: Final[str] = "### Duplicadas por IMDb ID"
 
 
-def _normalize_imdb_id(value: object) -> str | None:
-    if value is None:
-        return None
-    s = str(value).strip().lower()
-    if not s or s in {"nan", "none"}:
-        return None
-    return s
-
-
 def _filter_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     """
     Devuelve solo filas con imdb_id duplicado (mismo ID repetido).
@@ -43,10 +34,16 @@ def _filter_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     if "imdb_id" not in df.columns:
         return df.iloc[0:0].copy()
 
-    df_view = df.copy()
-    imdb_norm = df_view["imdb_id"].apply(_normalize_imdb_id)
-    df_view["_imdb_norm"] = imdb_norm
-    df_view = df_view[df_view["_imdb_norm"].notna()].copy()
+    imdb_norm = (
+        df["imdb_id"]
+        .astype("string")
+        .str.strip()
+        .str.lower()
+        .replace({"nan": pd.NA, "none": pd.NA, "": pd.NA})
+    )
+    mask = imdb_norm.notna()
+    df_view = df.loc[mask].copy()
+    df_view["_imdb_norm"] = imdb_norm.loc[mask].values
 
     if df_view.empty:
         return df_view

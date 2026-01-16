@@ -279,11 +279,12 @@ def _apply_text_search(df: pd.DataFrame, query: str) -> pd.DataFrame:
     if not query:
         return df
 
-    df_str = df.astype("string").fillna("")
+    df_str = df.astype("string", copy=False)
     mask = df_str.apply(
         lambda col: col.str.contains(query, case=False, regex=False, na=False)
     )
-    return df[mask.any(axis=1)]
+    mask_any = mask.any(axis=1)
+    return cast(pd.DataFrame, df.loc[mask_any])
 
 
 def render_grid_toolbar(
@@ -357,8 +358,8 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseBut
                 if is_open:
                     st.session_state[search_key] = ""
 
-        current_query = str(st.session_state.get(search_key, "") or "")
-        df_view = _apply_text_search(df, current_query)
+        search_query = str(st.session_state.get(search_key, "") or "")
+        df_view = _apply_text_search(df, search_query)
 
         with col_download:
             csv_export = df_view.to_csv(index=False).encode("utf-8")
@@ -372,16 +373,12 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseBut
             )
 
     if bool(st.session_state.get(search_open_key, False)):
-        search_query = st.text_input(
+        st.text_input(
             search_label,
             key=search_key,
             placeholder=search_placeholder,
             label_visibility="collapsed",
         )
-    else:
-        search_query = str(st.session_state.get(search_key, "") or "")
-
-    df_view = _apply_text_search(df, search_query)
 
     if search_query:
         left_slot.caption(f"Filas: {len(df_view)} / {total_rows}")

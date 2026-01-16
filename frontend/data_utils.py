@@ -19,13 +19,13 @@ Principios
 
 from __future__ import annotations
 
-from collections import Counter
 import json
 import re
 from typing import Any, cast, Iterable
 
 import altair as alt
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 
 
 # ============================================================================
@@ -171,7 +171,7 @@ def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     for col in _NUMERIC_COLS:
-        if col in df.columns:
+        if col in df.columns and not is_numeric_dtype(df[col]):
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     if "file_size" in df.columns:
@@ -183,14 +183,8 @@ def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
         decade = (year_num // 10) * 10
         df["decade"] = decade
 
-        def _format_decade(val: object) -> str | None:
-            if val is None or pd.isna(cast(Any, val)):
-                return None
-            if not isinstance(val, (int, float)):
-                return None
-            return f"{int(val)}s"
-
-        df["decade_label"] = df["decade"].apply(_format_decade)
+        decade_int = decade.astype("Int64")
+        df["decade_label"] = decade_int.astype("string") + "s"
 
     return df
 
@@ -214,7 +208,7 @@ def explode_genres_from_omdb_json(df: pd.DataFrame) -> pd.DataFrame:
     if "omdb_json" not in df.columns:
         return pd.DataFrame(columns=[*df.columns, "genre"])
 
-    df_g = df.copy().reset_index(drop=True)
+    df_g = df.copy()
 
     def _extract_genres(raw: object) -> list[str]:
         data = safe_json_loads_single(raw)
@@ -225,8 +219,8 @@ def explode_genres_from_omdb_json(df: pd.DataFrame) -> pd.DataFrame:
             return []
         return [x.strip() for x in str(g).split(",") if x.strip()]
 
-    df_g["genre_list"] = df_g["omdb_json"].apply(_extract_genres)
-    df_g = df_g.explode("genre_list").reset_index(drop=True)
+    df_g["genre_list"] = df_g["omdb_json"].map(_extract_genres)
+    df_g = df_g.explode("genre_list", ignore_index=True)
     df_g = df_g.rename(columns={"genre_list": "genre"})
 
     mask = (df_g["genre"].notna() & (df_g["genre"] != "")).astype(bool)
@@ -291,35 +285,29 @@ def build_word_counts(df: pd.DataFrame, decisions: Iterable[str]) -> pd.DataFram
     if df2.empty:
         return pd.DataFrame(columns=["word", "decision", "count"])
 
-    rows: list[dict[str, object]] = []
-
-    for dec, sub in df2.groupby("decision"):
-        dec_str = str(dec)
-        words: list[str] = []
-
-        for title_obj in sub["title"].dropna():
-            title = str(title_obj)
-            t_clean = _WORD_SPLIT_RE.sub(" ", title)
-            for w in t_clean.split():
-                w_norm = w.strip().lower()
-                if len(w_norm) <= 2:
-                    continue
-                if w_norm in _STOPWORDS:
-                    continue
-                words.append(w_norm)
-
-        if not words:
-            continue
-
-        counts = Counter(words)
-        for word, count in counts.items():
-            rows.append({"word": word, "decision": dec_str, "count": int(count)})
-
-    if not rows:
+    df2 = df2.loc[:, ["decision", "title"]].copy()
+    df2["decision"] = df2["decision"].astype(str)
+    titles = df2["title"].fillna("").astype(str).str.lower()
+    titles = titles.str.replace(_WORD_SPLIT_RE, " ", regex=True)
+    df2["word"] = titles.str.split()
+    df2 = df2.explode("word", ignore_index=True)
+    if df2.empty:
         return pd.DataFrame(columns=["word", "decision", "count"])
 
-    out = pd.DataFrame(rows)
-    return out.sort_values("count", ascending=False, ignore_index=True)
+    df2["word"] = df2["word"].astype("string").str.strip()
+    df2 = df2[df2["word"].notna() & (df2["word"].str.len() > 2)]
+    if _STOPWORDS:
+        df2 = df2[~df2["word"].isin(_STOPWORDS)]
+    if df2.empty:
+        return pd.DataFrame(columns=["word", "decision", "count"])
+
+    out = (
+        df2.groupby(["word", "decision"], dropna=False)
+        .size()
+        .reset_index(name="count")
+        .sort_values("count", ascending=False, ignore_index=True)
+    )
+    return out
 
 
 # ============================================================================

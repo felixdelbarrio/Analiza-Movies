@@ -62,7 +62,6 @@ from frontend.front_api_client import (  # noqa: E402
     fetch_report_all_df,
     fetch_report_filtered_df,
 )
-from frontend.front_stats import compute_global_imdb_mean_from_df  # noqa: E402
 from frontend.summary import compute_summary  # noqa: E402
 from frontend.components import render_modal  # noqa: E402
 
@@ -400,7 +399,7 @@ col4.metric(
     "MAYBE", format_count_size(summary["maybe_count"], summary["maybe_size_gb"])
 )
 
-imdb_mean_df = compute_global_imdb_mean_from_df(df_all)
+imdb_mean_df = summary.get("imdb_mean_df")
 if imdb_mean_df is not None and not pd.isna(imdb_mean_df):
     col5.metric("IMDb medio (analizado)", f"{imdb_mean_df:.2f}")
 else:

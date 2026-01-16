@@ -294,7 +294,7 @@ def render(
         f"- DELETE_REQUIRE_CONFIRM = `{delete_require_confirm}`"
     )
 
-    df_view = df_filtered.copy()
+    df_view = df_filtered
 
     st.write("Filtra las peliculas que quieras borrar y seleccionalas en la tabla:")
 
@@ -430,9 +430,7 @@ def render(
         if header:
             col_def["headerName"] = header
         if col == "file_size_gb":
-            col_def["valueFormatter"] = (
-                "value != null ? value.toFixed(2) + ' GB' : ''"
-            )
+            col_def["valueFormatter"] = "value != null ? value.toFixed(2) + ' GB' : ''"
         if col == "imdb_votes":
             col_def["valueFormatter"] = (
                 "value != null ? Math.round(Number(value)).toLocaleString() : ''"
