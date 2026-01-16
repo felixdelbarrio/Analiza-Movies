@@ -32,6 +32,7 @@ import pandas as pd
 import streamlit as st
 from st_aggrid import GridOptionsBuilder, JsCode
 
+from frontend.components import render_grid_toolbar
 from frontend.data_utils import add_derived_columns
 
 Row = Mapping[str, Any]
@@ -344,7 +345,7 @@ def render(
         "title",
         "year",
         "library",
-        "file_size",
+        "file_size_gb",
         "imdb_rating",
         "metacritic_score",
         "rt_score",
@@ -354,6 +355,18 @@ def render(
     visible_cols = [c for c in desired_order if c in df_view.columns]
     ordered_cols = visible_cols + [c for c in df_view.columns if c not in visible_cols]
     df_view = df_view[ordered_cols]
+
+    df_view, search_query, grid_height = render_grid_toolbar(
+        df_view,
+        key_suffix="delete",
+        download_filename="delete_table.csv",
+    )
+    if df_view.empty:
+        if search_query.strip():
+            st.info("No hay filas que coincidan con la búsqueda.")
+        else:
+            st.info("No hay filas para mostrar.")
+        return
 
     gb = GridOptionsBuilder.from_dataframe(df_view)
     gb.configure_selection(selection_mode="multiple", use_checkbox=True)
@@ -393,7 +406,7 @@ def render(
         "title": "Title",
         "year": "Year",
         "library": "Library",
-        "file_size": "Size",
+        "file_size_gb": "Size",
         "imdb_rating": "IMDb",
         "imdb_votes": "Votes",
         "metacritic_score": "Metacritic",
@@ -404,7 +417,7 @@ def render(
     auto_size_cols = {
         "year",
         "library",
-        "file_size",
+        "file_size_gb",
         "imdb_rating",
         "imdb_votes",
         "rt_score",
@@ -416,10 +429,9 @@ def render(
         header = header_names.get(col)
         if header:
             col_def["headerName"] = header
-        if col == "file_size":
+        if col == "file_size_gb":
             col_def["valueFormatter"] = (
-                "value != null && value !== '' ? "
-                "(Number(value) / (1024*1024*1024)).toFixed(2) + ' GB' : ''"
+                "value != null ? value.toFixed(2) + ' GB' : ''"
             )
         if col == "imdb_votes":
             col_def["valueFormatter"] = (
@@ -429,7 +441,7 @@ def render(
             col_def.update({"minWidth": 70, "suppressSizeToFit": True})
         if col == "year":
             col_def.update({"minWidth": 60, "maxWidth": 70, "suppressSizeToFit": True})
-        if col in {"file_size", "imdb_rating", "imdb_votes", "rt_score"}:
+        if col in {"file_size_gb", "imdb_rating", "imdb_votes", "rt_score"}:
             col_def.update({"minWidth": 60, "maxWidth": 80, "suppressSizeToFit": True})
         if col == "metacritic_score":
             col_def.update({"minWidth": 70, "maxWidth": 90, "suppressSizeToFit": True})
@@ -468,7 +480,7 @@ def render(
             col_def["cellStyle"] = {"justifyContent": "flex-start", "textAlign": "left"}
         if col == "file":
             col_def["cellStyle"] = {"justifyContent": "flex-start", "textAlign": "left"}
-        if col in {"year", "file_size", "imdb_rating", "imdb_votes", "rt_score"}:
+        if col in {"year", "file_size_gb", "imdb_rating", "imdb_votes", "rt_score"}:
             col_def["cellStyle"] = {"justifyContent": "flex-end", "textAlign": "right"}
         if col == "reason":
             col_def["cellStyle"] = {"justifyContent": "flex-start", "textAlign": "left"}
@@ -480,7 +492,7 @@ function(params) {
   if (!params || !params.api || !params.columnApi) {
     return;
   }
-  const cols = ['year','file_size','imdb_rating','imdb_votes','rt_score'];
+  const cols = ['year','file_size_gb','imdb_rating','imdb_votes','rt_score'];
   setTimeout(function() {
     params.columnApi.autoSizeColumns(cols, true);
     params.api.sizeColumnsToFit();
@@ -518,7 +530,7 @@ function(params) {
         gridOptions=grid_options,
         update_on=["selectionChanged"],
         enable_enterprise_modules=False,
-        height=500,
+        height=grid_height,
         allow_unsafe_jscode=True,
         key=f"aggrid_delete_{int(colorize_rows)}",
     )

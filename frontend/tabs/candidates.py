@@ -127,6 +127,7 @@ def render(df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
             df_view,
             "filtered",
             visible_order=["title", "year", "library", "file_size_gb", "file"],
+            auto_select_first=True,
         )
 
     with col_detail:

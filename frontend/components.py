@@ -274,6 +274,125 @@ def _normalize_row_to_dict(row: Any) -> Optional[RowDict]:
     return None
 
 
+def _apply_text_search(df: pd.DataFrame, query: str) -> pd.DataFrame:
+    query = query.strip()
+    if not query:
+        return df
+
+    df_str = df.astype("string").fillna("")
+    mask = df_str.apply(
+        lambda col: col.str.contains(query, case=False, regex=False, na=False)
+    )
+    return df[mask.any(axis=1)]
+
+
+def render_grid_toolbar(
+    df: pd.DataFrame,
+    *,
+    key_suffix: str,
+    download_filename: str,
+    search_label: str = "Buscar",
+    search_placeholder: str = "Buscar en todas las columnas",
+) -> tuple[pd.DataFrame, str, int]:
+    total_rows = len(df)
+
+    search_key = f"grid_search_{key_suffix}"
+    search_open_key = f"grid_search_open_{key_suffix}"
+
+    safe_suffix = re.sub(r"[^a-zA-Z0-9_-]", "-", key_suffix)
+    anchor_id = f"grid-toolbar-{safe_suffix}"
+    st.markdown(
+        f"""
+<div id="{anchor_id}" style="display:none;"></div>
+<style>
+div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="stBaseButton-secondary"],
+div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseButton-secondary"] {{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  min-width: 0 !important;
+  height: auto !important;
+  border-radius: 0 !important;
+}}
+div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="stBaseButton-secondary"] > div,
+div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseButton-secondary"] > div {{
+  padding: 0 !important;
+}}
+div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="stBaseButton-secondary"] span,
+div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseButton-secondary"] span {{
+  font-size: 1.1rem;
+  line-height: 1;
+}}
+div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="stBaseButton-secondary"]:hover,
+div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseButton-secondary"]:hover {{
+  filter: brightness(1.1);
+  background: transparent !important;
+}}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+    if search_open_key not in st.session_state:
+        st.session_state[search_open_key] = False
+
+    col_left, col_right = st.columns([10, 1])
+
+    with col_left:
+        left_slot = st.empty()
+
+    with col_right:
+        col_search, col_download = _columns_with_gap([1, 1], gap="small")
+
+        with col_search:
+            if st.button(
+                "🔍",
+                help=search_label,
+                key=f"grid_search_btn_{key_suffix}",
+                type="secondary",
+            ):
+                is_open = bool(st.session_state.get(search_open_key, False))
+                st.session_state[search_open_key] = not is_open
+                if is_open:
+                    st.session_state[search_key] = ""
+
+        current_query = str(st.session_state.get(search_key, "") or "")
+        df_view = _apply_text_search(df, current_query)
+
+        with col_download:
+            csv_export = df_view.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇️",
+                data=csv_export,
+                file_name=download_filename,
+                mime="text/csv",
+                key=f"grid_download_{key_suffix}",
+                help="Descargar CSV",
+            )
+
+    if bool(st.session_state.get(search_open_key, False)):
+        search_query = st.text_input(
+            search_label,
+            key=search_key,
+            placeholder=search_placeholder,
+            label_visibility="collapsed",
+        )
+    else:
+        search_query = str(st.session_state.get(search_key, "") or "")
+
+    df_view = _apply_text_search(df, search_query)
+
+    if search_query:
+        left_slot.caption(f"Filas: {len(df_view)} / {total_rows}")
+    else:
+        left_slot.caption(f"Filas: {total_rows}")
+
+    grid_height = 520
+
+    return df_view, search_query, grid_height
+
+
 # ============================================================================
 # Tabla principal con selección de fila
 # ============================================================================
@@ -285,6 +404,7 @@ def aggrid_with_row_click(
     *,
     visible_order: Sequence[str] | None = None,
     auto_select_first: bool = False,
+    show_toolbar: bool = True,
 ) -> Optional[dict[str, Any]]:
     """
     Muestra un AgGrid con selección de una sola fila.
@@ -307,9 +427,24 @@ def aggrid_with_row_click(
     desired_order = list(visible_order) if visible_order else default_order
     visible_cols = [c for c in desired_order if c in df.columns]
     ordered_cols = visible_cols + [c for c in df.columns if c not in visible_cols]
-    df = df[ordered_cols]
+    df_view = df[ordered_cols]
 
-    gb = GridOptionsBuilder.from_dataframe(df)
+    search_query = ""
+    grid_height = 520
+    if show_toolbar:
+        df_view, search_query, grid_height = render_grid_toolbar(
+            df_view,
+            key_suffix=key_suffix,
+            download_filename=f"{key_suffix}_table.csv",
+        )
+        if df_view.empty:
+            if search_query.strip():
+                st.info("No hay filas que coincidan con la búsqueda.")
+            else:
+                st.info("No hay datos para mostrar.")
+            return None
+
+    gb = GridOptionsBuilder.from_dataframe(df_view)
     gb.configure_selection(selection_mode="single", use_checkbox=False)
     gb.configure_grid_options(
         domLayout="normal",
@@ -326,7 +461,8 @@ def aggrid_with_row_click(
         },
     )
 
-    if bool(st.session_state.get("grid_colorize_rows", True)):
+    colorize_rows = bool(st.session_state.get("grid_colorize_rows", True))
+    if colorize_rows:
         gb.configure_grid_options(getRowStyle=_DECISION_ROW_STYLE)
 
     select_first_js = ""
@@ -392,7 +528,7 @@ function(params) {
     }
     wrap_cols = {"title", "reason", "file"}
 
-    for col in df.columns:
+    for col in df_view.columns:
         col_def: dict[str, Any] = {}
         header = header_names.get(col)
         if header:
@@ -457,7 +593,7 @@ function(params) {
         if col_def:
             gb.configure_column(col, **col_def)
 
-    for col in df.columns:
+    for col in df_view.columns:
         if col not in visible_cols:
             gb.configure_column(col, hide=True)
 
@@ -467,13 +603,12 @@ function(params) {
 
     aggrid_fn = cast(AgGridCallable, getattr(st_aggrid_mod, "AgGrid"))
 
-    colorize_rows = bool(st.session_state.get("grid_colorize_rows", True))
     grid_response = aggrid_fn(
-        df.copy(),
+        df_view.copy(),
         gridOptions=grid_options,
         update_on=["selectionChanged"],
         enable_enterprise_modules=False,
-        height=520,
+        height=grid_height,
         allow_unsafe_jscode=True,
         key=f"aggrid_{key_suffix}_{int(colorize_rows)}",
     )
@@ -482,6 +617,10 @@ function(params) {
     selected_rows = _normalize_selected_rows(selected_raw)
 
     if not selected_rows:
+        if auto_select_first:
+            first_row = _normalize_row_to_dict(df_view.iloc[0])
+            if first_row is not None:
+                return dict(first_row)
         return None
 
     return dict(selected_rows[0])

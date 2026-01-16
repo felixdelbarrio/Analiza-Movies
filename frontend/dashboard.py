@@ -373,7 +373,18 @@ _debug_banner(df_all=df_all, df_filtered=df_filtered)
 # 8) Resumen general (KPIs)
 # =============================================================================
 
-st.subheader("Resumen general")
+summary_header, summary_toggle = st.columns([4, 2], gap="small")
+with summary_header:
+    st.subheader("Resumen general")
+with summary_toggle:
+    _bool_switch(
+        "Señalética de color en tablas",
+        key="grid_colorize_rows",
+        value=bool(st.session_state.get("grid_colorize_rows", True)),
+        help=(
+            "Activa colores por decisión (DELETE/KEEP/MAYBE/UNKNOWN) en el texto de cada fila."
+        ),
+    )
 
 summary = compute_summary(df_all)
 
@@ -395,13 +406,6 @@ if imdb_mean_df is not None and not pd.isna(imdb_mean_df):
 else:
     col5.metric("IMDb medio (analizado)", "N/A")
 
-_bool_switch(
-    "Señalética de color en tablas",
-    key="grid_colorize_rows",
-    value=bool(st.session_state.get("grid_colorize_rows", True)),
-    help="Activa colores por decisión (DELETE/KEEP/MAYBE/UNKNOWN) en el texto de cada fila.",
-)
-
 st.markdown("---")
 
 # Consistencia visual: tags de multiselect con fondo neutro (evita rojo fijo).
@@ -414,6 +418,16 @@ div[data-testid="stMultiSelect"] [data-baseweb="tag"] {
 }
 div[data-testid="stMultiSelect"] [data-baseweb="tag"] span {
   color: #e5e7eb !important;
+}
+.stDataFrame div[data-testid="stDataFrameToolbar"],
+div[data-testid="stDataFrameToolbar"] {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+div[data-testid="stDataFrameToolbar"] button,
+div[data-testid="stDataFrameToolbar"] [data-testid="stDataFrameToolbarButton"] {
+  opacity: 1 !important;
 }
 .ag-theme-alpine .ag-cell,
 .ag-theme-alpine-dark .ag-cell {
