@@ -2358,7 +2358,6 @@ def _purge_cached_record_unlocked(
     _m_inc("cache_title_mismatch_purged", 1)
     _mark_dirty_unlocked()
 
-
 def _get_cached_item(
     *,
     cache: WikiCacheFile,
