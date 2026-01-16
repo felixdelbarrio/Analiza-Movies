@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 
 from frontend.config_front_artifacts import REPORT_ALL_PATH
 
@@ -20,7 +21,10 @@ def compute_global_imdb_mean_from_df(df_all: pd.DataFrame) -> float | None:
     if "imdb_rating" not in df_all.columns:
         return None
 
-    ratings = pd.to_numeric(df_all["imdb_rating"], errors="coerce").dropna()
+    ratings = df_all["imdb_rating"]
+    if not is_numeric_dtype(ratings):
+        ratings = pd.to_numeric(ratings, errors="coerce")
+    ratings = ratings.dropna()
     if ratings.empty:
         return None
     return float(ratings.mean())
