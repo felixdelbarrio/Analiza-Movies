@@ -379,8 +379,12 @@ _debug_banner(df_all=df_all, df_filtered=df_filtered)
 def _render_config_container(body: Callable[[], None]) -> bool:
     dialog = getattr(st, "dialog", None)
     if callable(dialog):
+        dialog_fn = cast(
+            Callable[[str], Callable[[Callable[[], None]], Callable[[], None]]],
+            dialog,
+        )
 
-        @dialog("Configuracion")
+        @dialog_fn("Configuracion")
         def _dlg() -> None:
             body()
 
