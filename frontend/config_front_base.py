@@ -126,6 +126,9 @@ def _sanitize_filename_component(value: str) -> str:
 
 FRONT_DEBUG: bool = _get_env_bool("FRONT_DEBUG", False)
 
+# Señaletica de color en tablas
+FRONT_GRID_COLORIZE: bool = _get_env_bool("FRONT_GRID_COLORIZE", True)
+
 # ---------------------------------------------------------------------
 # Logging (frontend) - usa .env.front
 # ---------------------------------------------------------------------
@@ -210,6 +213,26 @@ FRONT_API_CACHE_TTL_S: int = _get_env_int("FRONT_API_CACHE_TTL_S", 60)
 
 PLEX_BASEURL: str | None = _get_env_str("PLEX_BASEURL", None)
 PLEX_PORT: int = _get_env_int("PLEX_PORT", 32400)
+
+
+def save_front_grid_colorize(value: bool) -> None:
+    payload = "true" if value else "false"
+    lines: list[str] = []
+    if _ENV_FRONT_PATH.exists():
+        lines = _ENV_FRONT_PATH.read_text(encoding="utf-8").splitlines()
+    out: list[str] = []
+    found = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("FRONT_GRID_COLORIZE="):
+            out.append(f"FRONT_GRID_COLORIZE={payload}")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        out.append(f"FRONT_GRID_COLORIZE={payload}")
+    _ENV_FRONT_PATH.write_text("\n".join(out) + "\n", encoding="utf-8")
+
 
 # ---------------------------------------------------------------------
 # Paths: data/ y reports/ (defaults alineados con tu estructura actual)

@@ -19,9 +19,7 @@ def _settings(level: str = "INFO") -> Settings:
 
 
 def _reset_logger_cache() -> None:
-    logging_config._LOGGER_FILE_PATH_CACHED = (
-        logging_config._LOGGER_FILE_PATH_SENTINEL
-    )
+    logging_config._LOGGER_FILE_PATH_CACHED = logging_config._LOGGER_FILE_PATH_SENTINEL
 
 
 def test_sanitize_filename_component():

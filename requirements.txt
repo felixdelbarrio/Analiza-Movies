@@ -4,3 +4,5 @@
 
 # Optional extras:
 # -e .[viz]
+# PNG export (Altair):
+#   -r requirements-png.txt

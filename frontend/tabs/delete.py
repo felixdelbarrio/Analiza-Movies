@@ -302,16 +302,9 @@ def render(
 
     with col_f1:
         if "library" in df_view.columns:
-            libs = (
-                df_view["library"]
-                .dropna()
-                .astype(str)
-                .map(str.strip)
-                .replace({"": None})
-                .dropna()
-                .unique()
-                .tolist()
-            )
+            series = df_view["library"].dropna().astype(str).map(str.strip)
+            series = series.mask(series == "", pd.NA).dropna()
+            libs = series.unique().tolist()
             libs.sort()
         else:
             libs = []

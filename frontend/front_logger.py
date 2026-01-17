@@ -23,6 +23,16 @@ from frontend.config_front_base import (
 _FILE_LOCK = threading.Lock()
 
 
+def _should_print(always: bool) -> bool:
+    return bool(always or FRONT_DEBUG)
+
+
+def _log(level: str, msg: str, *, always: bool = False) -> None:
+    if _should_print(always):
+        print(str(msg))
+    _append_to_file(level, str(msg))
+
+
 def _append_to_file(level: str, msg: str) -> None:
     if not LOGGER_FILE_ENABLED:
         return
@@ -40,14 +50,25 @@ def _append_to_file(level: str, msg: str) -> None:
         pass
 
 
-def log_warning(msg: str) -> None:
-    if FRONT_DEBUG:
-        # stdout/stderr (visible al ejecutar streamlit)
-        print(str(msg))
-    _append_to_file("WARN", str(msg))
+def log_warning(msg: str, *, always: bool = False) -> None:
+    _log("WARN", msg, always=always)
 
 
-def log_info(msg: str) -> None:
-    if FRONT_DEBUG:
-        print(str(msg))
-    _append_to_file("INFO", str(msg))
+def log_info(msg: str, *, always: bool = False) -> None:
+    _log("INFO", msg, always=always)
+
+
+def warning(msg: str, *, always: bool = False) -> None:
+    _log("WARN", msg, always=always)
+
+
+def info(msg: str, *, always: bool = False) -> None:
+    _log("INFO", msg, always=always)
+
+
+def error(msg: str, *, always: bool = False) -> None:
+    _log("ERROR", msg, always=always)
+
+
+def progress(msg: str, *, always: bool = False) -> None:
+    _log("PROGRESS", msg, always=always)
