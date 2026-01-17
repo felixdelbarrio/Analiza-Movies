@@ -34,6 +34,7 @@ from frontend.data_utils import (
 )
 from frontend.config_front_charts import (
     get_dashboard_views,
+    get_show_chart_thresholds,
     get_show_numeric_filters,
 )
 
@@ -958,6 +959,7 @@ def render(df_all: pd.DataFrame) -> None:
     export_csv = True
 
     show_numeric_filters = get_show_numeric_filters()
+    show_chart_thresholds = get_show_chart_thresholds()
 
     with st.expander("Filtros", expanded=False):
         st.caption("Si los filtros estan vacios, se muestran todos los datos.")
@@ -1049,6 +1051,7 @@ def render(df_all: pd.DataFrame) -> None:
                         key="charts_compare_libs",
                     )
 
+        if show_chart_thresholds:
             st.markdown("**Umbrales**")
             imdb_ref = st.slider(
                 "Referencia IMDb", 1.0, 9.0, IMDB_REFERENCE, 0.1, key="charts_imdb_ref"

@@ -28,9 +28,10 @@ Nota importante (Pyright/Pylance)
 
 from __future__ import annotations
 
+import html
 import json
-import os
 import re
+from urllib.parse import quote
 from collections.abc import Hashable, Iterable, Mapping, MutableMapping, Sequence
 from typing import Any, Callable, Literal, Optional, Protocol, TypeVar, cast
 
@@ -39,7 +40,6 @@ import streamlit as st
 from st_aggrid import GridOptionsBuilder, JsCode
 
 from frontend.config_front_artifacts import OMDB_CACHE_PATH, WIKI_CACHE_PATH
-from frontend.config_front_base import PLEX_BASEURL, PLEX_PORT
 from frontend.data_utils import safe_json_loads_single
 
 RowDict = dict[str, Any]
@@ -274,16 +274,145 @@ def _normalize_row_to_dict(row: Any) -> Optional[RowDict]:
     return None
 
 
+def _value_contains_query(value: Any, query_lc: str) -> bool:
+    if value is None:
+        return False
+    try:
+        return query_lc in str(value).lower()
+    except Exception:
+        return False
+
+
+def _json_contains_terms(value: Any, terms_lc: Sequence[str]) -> bool:
+    if not terms_lc:
+        return False
+    pending = set(terms_lc)
+    stack: list[Any] = [value]
+    while stack:
+        current = stack.pop()
+        if current is None:
+            continue
+        if isinstance(current, Mapping):
+            for k, v in current.items():
+                if k is not None:
+                    k_lc = str(k).lower()
+                    pending = {t for t in pending if t not in k_lc}
+                    if not pending:
+                        return True
+                stack.append(v)
+            continue
+        if isinstance(current, (list, tuple, set)):
+            stack.extend(list(current))
+            continue
+        try:
+            current_lc = str(current).lower()
+        except Exception:
+            continue
+        pending = {t for t in pending if t not in current_lc}
+        if not pending:
+            return True
+    return False
+
+
+def _row_matches_detail_json(
+    row: Mapping[str, Any] | pd.Series[Any], terms_lc: Sequence[str]
+) -> bool:
+    row_dict = _normalize_row_to_dict(row)
+    if row_dict is None:
+        return False
+
+    raw_json = row_dict.get("omdb_json")
+    parsed = safe_json_loads_single(raw_json)
+    if parsed is not None and _json_contains_terms(parsed, terms_lc):
+        return True
+    if parsed is None and raw_json is not None:
+        try:
+            raw_lc = str(raw_json).lower()
+        except Exception:
+            raw_lc = ""
+        if raw_lc and all(term in raw_lc for term in terms_lc):
+            return True
+
+    imdb_id = row_dict.get("imdb_id")
+    if imdb_id is None or _pd_isna(imdb_id):
+        imdb_id = row_dict.get("imdbID")
+        if imdb_id is not None and _pd_isna(imdb_id):
+            imdb_id = None
+    title = row_dict.get("title")
+    if title is not None and _pd_isna(title):
+        title = None
+    year = row_dict.get("year")
+    if year is not None and _pd_isna(year):
+        year = None
+
+    omdb_dict = _get_omdb_record(imdb_id=imdb_id, title=title, year=year)
+    if omdb_dict is not None and _json_contains_terms(omdb_dict, terms_lc):
+        return True
+
+    wiki_summary, _ = _get_wiki_summary(imdb_id=imdb_id, title=title, year=year)
+    if wiki_summary and all(term in wiki_summary.lower() for term in terms_lc):
+        return True
+
+    return False
+
+
+def _df_signature_for_search(df: pd.DataFrame) -> int:
+    try:
+        idx_hash = pd.util.hash_pandas_object(df.index, index=False).sum()
+    except Exception:
+        idx_hash = len(df)
+    cols_sig = hash(tuple(df.columns))
+    return hash((cols_sig, int(idx_hash)))
+
+
+def _get_detail_search_cache() -> dict[tuple[str, int], list[Any]]:
+    cache = st.session_state.get("grid_detail_search_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+        st.session_state["grid_detail_search_cache"] = cache
+    return cache
+
+
 def _apply_text_search(df: pd.DataFrame, query: str) -> pd.DataFrame:
     query = query.strip()
     if not query:
         return df
 
+    terms = [t for t in query.split() if t]
+    if not terms:
+        return df
+
     df_str = df.astype("string", copy=False)
-    mask = df_str.apply(
-        lambda col: col.str.contains(query, case=False, regex=False, na=False)
-    )
-    mask_any = mask.any(axis=1)
+    mask_any = pd.Series(True, index=df.index)
+    for term in terms:
+        mask = df_str.apply(
+            lambda col, t=term: col.str.contains(t, case=False, regex=False, na=False)
+        )
+        mask_any = mask_any & mask.any(axis=1)
+    terms_lc = [t.lower() for t in terms]
+
+    if not mask_any.all():
+        needs_detail = (
+            "omdb_json" in df.columns
+            or "imdb_id" in df.columns
+            or "imdbID" in df.columns
+            or "title" in df.columns
+        )
+        if needs_detail:
+            signature = _df_signature_for_search(df)
+            cache = _get_detail_search_cache()
+            cache_key = (" ".join(terms_lc), signature)
+            cached_indices = cache.get(cache_key)
+            if cached_indices is None:
+                matched_indices: list[Any] = []
+                for idx, row in df.loc[~mask_any].iterrows():
+                    if _row_matches_detail_json(row, terms_lc):
+                        matched_indices.append(idx)
+                cache[cache_key] = matched_indices
+                cached_indices = matched_indices
+            if cached_indices:
+                detail_mask = df.index.isin(cached_indices)
+                mask_any = mask_any | detail_mask
     return cast(pd.DataFrame, df.loc[mask_any])
 
 
@@ -292,13 +421,14 @@ def render_grid_toolbar(
     *,
     key_suffix: str,
     download_filename: str,
-    search_label: str = "Buscar",
-    search_placeholder: str = "Buscar en todas las columnas",
+    search_label: str = "Busqueda avanzada",
+    search_placeholder: str = "Busqueda avanzada",
+    search_help: str = (
+        "Simple: Actor | Doble: Actor 2006 | Multiple: Actor 2006 Director Genero"
+    ),
+    show_search: bool = True,
 ) -> tuple[pd.DataFrame, str, int]:
     total_rows = len(df)
-
-    search_key = f"grid_search_{key_suffix}"
-    search_open_key = f"grid_search_open_{key_suffix}"
 
     safe_suffix = re.sub(r"[^a-zA-Z0-9_-]", "-", key_suffix)
     anchor_id = f"grid-toolbar-{safe_suffix}"
@@ -335,7 +465,12 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseBut
         unsafe_allow_html=True,
     )
 
-    if search_open_key not in st.session_state:
+    search_query = ""
+    df_view = df
+
+    search_key = f"grid_search_{key_suffix}"
+    search_open_key = f"grid_search_open_{key_suffix}"
+    if show_search and search_open_key not in st.session_state:
         st.session_state[search_open_key] = False
 
     col_left, col_right = st.columns([10, 1])
@@ -344,22 +479,27 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseBut
         left_slot = st.empty()
 
     with col_right:
-        col_search, col_download = _columns_with_gap([1, 1], gap="small")
+        col_search: Any = None
+        if show_search:
+            col_search, col_download = _columns_with_gap([1, 1], gap="small")
+        else:
+            col_download = _columns_with_gap([1], gap="small")[0]
 
-        with col_search:
-            if st.button(
-                "🔍",
-                help=search_label,
-                key=f"grid_search_btn_{key_suffix}",
-                type="secondary",
-            ):
-                is_open = bool(st.session_state.get(search_open_key, False))
-                st.session_state[search_open_key] = not is_open
-                if is_open:
-                    st.session_state[search_key] = ""
+        if show_search and col_search is not None:
+            with col_search:
+                if st.button(
+                    "🔍",
+                    help=search_label,
+                    key=f"grid_search_btn_{key_suffix}",
+                    type="secondary",
+                ):
+                    is_open = bool(st.session_state.get(search_open_key, False))
+                    st.session_state[search_open_key] = not is_open
+                    if is_open:
+                        st.session_state[search_key] = ""
 
-        search_query = str(st.session_state.get(search_key, "") or "")
-        df_view = _apply_text_search(df, search_query)
+            search_query = str(st.session_state.get(search_key, "") or "")
+            df_view = _apply_text_search(df, search_query)
 
         with col_download:
             csv_export = df_view.to_csv(index=False).encode("utf-8")
@@ -372,12 +512,13 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseBut
                 help="Descargar CSV",
             )
 
-    if bool(st.session_state.get(search_open_key, False)):
+    if show_search and bool(st.session_state.get(search_open_key, False)):
         st.text_input(
             search_label,
             key=search_key,
             placeholder=search_placeholder,
             label_visibility="collapsed",
+            help=search_help,
         )
 
     if search_query:
@@ -684,49 +825,46 @@ def _is_nonempty_str(value: Any) -> bool:
     """True si value es string “usable” (no '', 'nan', 'none')."""
     if value is None:
         return False
+    if _pd_isna(value):
+        return False
     s = str(value).strip()
     if not s:
         return False
     lower = s.lower()
-    return lower not in ("nan", "none")
+    return lower not in ("nan", "none", "<na>")
 
 
-def _build_plex_url(rating_key: Any) -> str | None:
-    if rating_key in (None, ""):
+def _build_plex_url(guid: Any) -> str | None:
+    if guid in (None, ""):
         return None
-
-    plex_base = PLEX_BASEURL or ""
-    plex_port: int | None = int(PLEX_PORT) if PLEX_PORT else None
-    if not plex_base:
-        plex_base = (
-            os.getenv("PLEX_WEB_BASEURL")
-            or os.getenv("PLEX_BASEURL")
-            or os.getenv("BASEURL")
-            or ""
-        )
-
-    if not plex_base:
+    try:
+        guid_str = str(guid).strip()
+    except Exception:
         return None
-
-    base = plex_base.rstrip("/")
-    if "://" not in base:
-        base = f"http://{base}"
-
-    if plex_port:
-        try:
-            host_part = base.split("://", 1)[1]
-            if ":" not in host_part:
-                base = f"{base}:{plex_port}"
-        except Exception:
-            pass
-
-    return f"{base}/web/index.html#!/server/library/metadata/{rating_key}"
+    if not guid_str:
+        return None
+    return guid_str
 
 
 def _build_imdb_url(imdb_id: Any) -> str | None:
     if imdb_id in (None, ""):
         return None
     return f"https://www.imdb.com/title/{imdb_id}"
+
+
+def _build_detail_query(
+    *, imdb_id: Any, guid: Any, title: Any, year: Any
+) -> str | None:
+    params: list[str] = ["open_detail=1"]
+    if _is_nonempty_str(imdb_id) and not _pd_isna(imdb_id):
+        params.append(f"imdb_id={quote(str(imdb_id))}")
+    if _is_nonempty_str(guid) and not _pd_isna(guid):
+        params.append(f"guid={quote(str(guid))}")
+    if _is_nonempty_str(title):
+        params.append(f"title={quote(str(title))}")
+    if year not in (None, "") and not _pd_isna(year):
+        params.append(f"year={quote(str(year))}")
+    return "?" + "&".join(params)
 
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -954,8 +1092,6 @@ def _extract_summary_from_item(
 
 def render_detail_card(
     row: dict[str, Any] | pd.Series | Mapping[str, Any] | None,
-    show_modal_button: bool = True,
-    button_key_prefix: Optional[str] = None,
 ) -> None:
     if row is None:
         st.info("Haz click en una fila para ver su detalle.")
@@ -990,7 +1126,7 @@ def render_detail_card(
     file_path = row_dict.get("file")
     file_size = row_dict.get("file_size")
     trailer_url = row_dict.get("trailer_url")
-    rating_key = row_dict.get("rating_key")
+    plex_guid = row_dict.get("guid")
     imdb_id = row_dict.get("imdb_id")
 
     if omdb_dict is None:
@@ -1029,62 +1165,206 @@ def render_detail_card(
         summary_text = wiki_summary
         summary_label = f"Resumen (Wiki {wiki_lang})" if wiki_lang else "Resumen (Wiki)"
 
-    if show_modal_button:
-        col_left, col_right = _columns_with_gap([1, 2], gap="small")
-        poster_width = 260
-    else:
-        col_left, col_right = _columns_with_gap([1, 4], gap="small")
-        poster_width = 240
+    is_modal = bool(st.session_state.get("modal_open"))
+    poster_width = 240 if is_modal else 260
+    detail_anchor_id = "detail-card-modal" if is_modal else "detail-card-main"
+    imdb_url = _build_imdb_url(imdb_id)
+    plex_url = _build_plex_url(plex_guid)
 
-    with col_left:
-        if _is_nonempty_str(poster_url):
-            st.image(str(poster_url), width=poster_width)
-        else:
-            st.write("📷 Sin póster")
+    with st.container():
+        st.markdown(
+            f'<div id="{detail_anchor_id}" style="display:none;"></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"""
+<style>
+div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) {{
+  background: #11161f;
+  border: 1px solid #1f2430;
+  border-radius: 16px;
+  padding: 18px 20px 22px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+}}
+div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) img {{
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}}
+div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) h4.detail-title {{
+  margin: 0 0 0.5rem 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.85rem;
+  border-radius: 0.65rem;
+  background: #171b24;
+  border: 1px solid #262c38;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}}
+div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) h4.detail-title a {{
+  color: inherit;
+  text-decoration: none;
+}}
+div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) h4.detail-title a:hover {{
+  filter: brightness(1.08);
+}}
+div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) a.detail-action {{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.6rem;
+  background: #171b24;
+  border: 1px solid #262c38;
+  color: #e5e7eb !important;
+  text-decoration: none !important;
+  font-weight: 600;
+  width: 100%;
+}}
+div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) a.detail-action:hover {{
+  background: #202635;
+}}
+div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) hr {{
+  border: 0;
+  height: 1px;
+  background: #242a35;
+  margin: 1rem 0;
+}}
+div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) p {{
+  color: #d1d5db;
+  line-height: 1.55;
+  max-width: 62ch;
+  margin-left: auto;
+  margin-right: auto;
+}}
+div[data-testid="stVerticalBlock"]:has(#detail-card-modal) p {{
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
+}}
+div[data-testid="stVerticalBlock"]:has(#detail-card-modal) .summary-block {{
+  background: linear-gradient(180deg, rgba(22, 27, 38, 0.9), rgba(15, 20, 29, 0.95));
+  border: 1px solid #242b38;
+  border-radius: 14px;
+  padding: 18px 20px;
+  width: 100%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}}
+div[data-testid="stVerticalBlock"]:has(#detail-card-modal) .summary-block h4 {{
+  margin: 0 0 0.65rem 0;
+}}
+div[data-testid="stVerticalBlock"]:has(#detail-card-modal) .summary-block p {{
+  margin: 0;
+  line-height: 1.65;
+  font-size: 0.98rem;
+  color: #dbe2ea;
+}}
+div[data-testid="stVerticalBlock"]:has(#detail-card-modal) div[data-testid="stMetric"] {{
+  background: #141a24;
+  border: 1px solid #242b38;
+  border-radius: 12px;
+  padding: 10px 12px;
+  text-align: center;
+}}
+div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) [data-testid="stMetricLabel"] {{
+  color: #9ca3af;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}}
+div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) [data-testid="stMetricValue"] {{
+  font-size: 1.8rem;
+}}
+</style>
+""",
+            unsafe_allow_html=True,
+        )
 
-        imdb_url = _build_imdb_url(imdb_id)
-        if imdb_url:
-            st.markdown(f"[🎬 Ver en IMDb]({imdb_url})")
+        col_left, col_right = (
+            _columns_with_gap([1, 4], gap="small")
+            if is_modal
+            else _columns_with_gap([1, 2], gap="small")
+        )
 
-        plex_url = _build_plex_url(rating_key)
-        if plex_url:
-            st.markdown(f"[📺 Ver en Plex Web]({plex_url})")
+        with col_left:
+            if _is_nonempty_str(poster_url):
+                st.image(str(poster_url), width=poster_width)
+            else:
+                st.write("📷 Sin póster")
 
-        if show_modal_button:
-            key_suffix = button_key_prefix or "default"
-            button_key = f"open_modal_{key_suffix}"
-            if st.button("🪟 Abrir en ventana", key=button_key):
-                st.session_state["modal_row"] = row_dict
-                st.session_state["modal_open"] = True
-                _rerun()
+        with col_right:
+            header = str(title) + _safe_year_suffix(year)
+            safe_header = html.escape(header)
+            st.session_state["detail_row_last"] = row_dict
+            if is_modal:
+                st.markdown(
+                    f'<h4 class="detail-title">{safe_header}</h4>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                detail_query = _build_detail_query(
+                    imdb_id=imdb_id,
+                    guid=plex_guid,
+                    title=title,
+                    year=year,
+                )
+                if detail_query is None:
+                    st.markdown(
+                        f'<h4 class="detail-title">{safe_header}</h4>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f'<h4 class="detail-title"><a href="{detail_query}">{safe_header}</a></h4>',
+                        unsafe_allow_html=True,
+                    )
+            if library:
+                st.write(f"**Biblioteca:** {library}")
+            if year:
+                st.write(f"**Año:** {year}")
+            if actors:
+                st.write(f"**Actores:** {actors}")
 
-    with col_right:
-        header = str(title) + _safe_year_suffix(year)
+            m1, m2, m3 = st.columns(3)
+            m1.metric("IMDb", _safe_number_to_str(imdb_rating))
+            if is_modal:
+                m1.caption(f"Votos IMDb: {_safe_votes(imdb_votes)}")
 
-        st.markdown(f"### {header}")
-        if library:
-            st.write(f"**Biblioteca:** {library}")
-        if year:
-            st.write(f"**Año:** {year}")
-        if actors:
-            st.write(f"**Actores:** {actors}")
+            rt_str = _safe_number_to_str(rt_score)
+            m2.metric("RT", f"{rt_str}%" if rt_str != "N/A" else "N/A")
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric("IMDb", _safe_number_to_str(imdb_rating))
-        if not show_modal_button:
-            m1.caption(f"Votos IMDb: {_safe_votes(imdb_votes)}")
+            m3.metric("Metacritic", _safe_metacritic(metacritic))
 
-        rt_str = _safe_number_to_str(rt_score)
-        m2.metric("RT", f"{rt_str}%" if rt_str != "N/A" else "N/A")
-
-        m3.metric("Metacritic", _safe_metacritic(metacritic))
+            if imdb_url or plex_url:
+                action_cols = st.columns(2, gap="small")
+                with action_cols[0]:
+                    if imdb_url:
+                        st.markdown(
+                            f'<a class="detail-action" href="{imdb_url}">🎬 Ver en IMDb</a>',
+                            unsafe_allow_html=True,
+                        )
+                with action_cols[1]:
+                    if plex_url:
+                        st.markdown(
+                            f'<a class="detail-action" href="{plex_url}">📺 Ver en Plex</a>',
+                            unsafe_allow_html=True,
+                        )
 
         if _is_nonempty_str(summary_text):
             st.markdown("---")
-            st.write(f"#### {summary_label}")
-            st.write(str(summary_text))
+            if is_modal:
+                safe_label = html.escape(summary_label)
+                safe_text = html.escape(str(summary_text)).replace("\n", "<br/>")
+                st.markdown(
+                    f'<div class="summary-block"><h4>{safe_label}</h4>'
+                    f"<p>{safe_text}</p></div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.write(f"#### {summary_label}")
+                st.write(str(summary_text))
 
-        if not show_modal_button:
+        if is_modal:
             st.markdown("---")
             st.write("#### Información OMDb")
 
@@ -1184,4 +1464,4 @@ def render_modal() -> None:
             st.session_state["modal_row"] = None
             _rerun()
 
-    render_detail_card(row, show_modal_button=False)
+    render_detail_card(row)

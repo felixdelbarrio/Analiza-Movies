@@ -68,7 +68,11 @@ from frontend.summary import compute_summary  # noqa: E402
 from frontend.components import render_modal  # noqa: E402
 from frontend.config_front_charts import (  # noqa: E402
     get_dashboard_views,
+    get_show_chart_thresholds,
+    get_show_numeric_filters,
     save_dashboard_views,
+    save_show_chart_thresholds,
+    save_show_numeric_filters,
 )
 from frontend.tabs.charts import VIEW_OPTIONS  # noqa: E402
 
@@ -311,16 +315,89 @@ st.set_page_config(page_title="Movies Cleaner — Dashboard", layout="wide")
 _hide_streamlit_chrome()
 _init_modal_state()
 
-if not st.session_state.get("modal_open"):
-    st.title("🎬 Movies Cleaner — Dashboard")
+PENDING_DETAIL_KEY = "pending_open_detail_params"
 
-# =============================================================================
-# 6) Modal (front-only)
-# =============================================================================
 
-render_modal()
-if st.session_state.get("modal_open"):
-    st.stop()
+def _get_query_params() -> dict[str, list[str]]:
+    qp = getattr(st, "query_params", None)
+    if qp is not None:
+        out: dict[str, list[str]] = {}
+        for k, v in qp.items():
+            if isinstance(v, (list, tuple)):
+                out[k] = [str(item) for item in v]
+            else:
+                out[k] = [str(v)]
+        return out
+    return cast(dict[str, list[str]], st.experimental_get_query_params())
+
+
+def _clear_query_params() -> None:
+    qp = getattr(st, "query_params", None)
+    if qp is not None:
+        qp.clear()
+        return
+    st.experimental_set_query_params()
+
+
+def _first_param(params: dict[str, list[str]], key: str) -> str | None:
+    values = params.get(key)
+    if not values:
+        return None
+    value = str(values[0]).strip()
+    if not value:
+        return None
+    try:
+        from urllib.parse import unquote
+
+        value = unquote(value)
+    except Exception:
+        pass
+    return value or None
+
+
+def _find_row_for_modal(
+    df: pd.DataFrame, params: dict[str, list[str]]
+) -> dict[str, Any] | None:
+    imdb_id = _first_param(params, "imdb_id") or _first_param(params, "imdbID")
+    if imdb_id:
+        for col in ("imdb_id", "imdbID"):
+            if col in df.columns:
+                series = df[col].fillna("").astype(str)
+                match = df[series.str.casefold() == imdb_id.casefold()]
+                if not match.empty:
+                    return dict(match.iloc[0])
+
+    guid = _first_param(params, "guid")
+    if guid and "guid" in df.columns:
+        series = df["guid"].fillna("").astype(str)
+        match = df[series.str.casefold() == guid.casefold()]
+        if not match.empty:
+            return dict(match.iloc[0])
+
+    title = _first_param(params, "title")
+    if title and "title" in df.columns:
+        title_series = df["title"].fillna("").astype(str)
+        mask = title_series.str.casefold() == title.casefold()
+        year = _first_param(params, "year")
+        if year and "year" in df.columns:
+            try:
+                year_num = float(year)
+            except ValueError:
+                year_num = None
+            if year_num is not None:
+                year_series = pd.to_numeric(df["year"], errors="coerce")
+                mask = mask & (year_series == year_num)
+        match = df[mask]
+        if not match.empty:
+            return dict(match.iloc[0])
+
+    return None
+
+
+params = _get_query_params()
+if params.get("open_detail"):
+    st.session_state[PENDING_DETAIL_KEY] = params
+    _clear_query_params()
 
 # =============================================================================
 # 7) Carga de datos (SIN FALLBACK): FRONT_MODE = api | disk
@@ -375,9 +452,22 @@ df_all = cast(pd.DataFrame, df_all_any)
 
 _debug_banner(df_all=df_all, df_filtered=df_filtered)
 
+pending_params = st.session_state.pop(PENDING_DETAIL_KEY, None)
+if pending_params:
+    modal_row = _find_row_for_modal(df_all, pending_params)
+    if modal_row is None:
+        modal_row = st.session_state.get("detail_row_last")
+    if modal_row is not None:
+        st.session_state["modal_row"] = modal_row
+        st.session_state["modal_open"] = True
+
+render_modal()
+if st.session_state.get("modal_open"):
+    st.stop()
+
 
 def _render_config_container(body: Callable[[], None]) -> bool:
-    dialog = getattr(st, "dialog", None)
+    dialog: Any = getattr(st, "dialog", None)
     if callable(dialog):
         dialog_fn = cast(
             Callable[[str], Callable[[Callable[[], None]], Callable[[], None]]],
@@ -398,25 +488,55 @@ def _render_config_container(body: Callable[[], None]) -> bool:
 if "grid_colorize_rows" not in st.session_state:
     st.session_state["grid_colorize_rows"] = FRONT_GRID_COLORIZE
 
-config_cols = st.columns([5, 1])
-with config_cols[1]:
-    if st.button("Configuracion"):
-        st.session_state["config_open"] = True
+CONFIG_COLORIZE_KEY = "config_colorize"
+CONFIG_SHOW_NUMERIC_KEY = "config_show_numeric_filters"
+CONFIG_SHOW_THRESHOLDS_KEY = "config_show_chart_thresholds"
+CONFIG_VIEWS_KEY = "config_dashboard_views"
+CONFIG_EDITING_KEY = "config_editing"
+CONFIG_RESET_KEY = "config_reset_pending"
+CONFIG_DEFAULTS_KEY = "config_defaults"
 
 if st.session_state.get("config_open"):
+    available_dashboard = [v for v in VIEW_OPTIONS if v != "Dashboard"]
+
+    def _load_config_defaults() -> dict[str, object]:
+        return {
+            CONFIG_COLORIZE_KEY: bool(
+                st.session_state.get("grid_colorize_rows", FRONT_GRID_COLORIZE)
+            ),
+            CONFIG_SHOW_NUMERIC_KEY: get_show_numeric_filters(),
+            CONFIG_SHOW_THRESHOLDS_KEY: get_show_chart_thresholds(),
+            CONFIG_VIEWS_KEY: get_dashboard_views(available_dashboard),
+        }
+
+    if st.session_state.get(CONFIG_RESET_KEY, False) or not st.session_state.get(
+        CONFIG_EDITING_KEY, False
+    ):
+        defaults = _load_config_defaults()
+        st.session_state[CONFIG_DEFAULTS_KEY] = defaults
+        for key, value in defaults.items():
+            st.session_state.setdefault(key, value)
+        st.session_state[CONFIG_EDITING_KEY] = True
+        st.session_state[CONFIG_RESET_KEY] = False
 
     def _config_body() -> None:
         st.subheader("Preferencias")
         colorize = st.checkbox(
             "Señalética de color en tablas",
-            value=bool(st.session_state.get("grid_colorize_rows", True)),
+            key=CONFIG_COLORIZE_KEY,
         )
-        available_dashboard = [v for v in VIEW_OPTIONS if v != "Dashboard"]
-        default_dashboard = get_dashboard_views(available_dashboard)
+        show_numeric_filters = st.checkbox(
+            "Mostrar filtros numéricos",
+            key=CONFIG_SHOW_NUMERIC_KEY,
+        )
+        show_chart_thresholds = st.checkbox(
+            "Mostrar umbrales en gráficos",
+            key=CONFIG_SHOW_THRESHOLDS_KEY,
+        )
         exec_views = st.multiselect(
             "Graficos dashboard (max 3)",
             available_dashboard,
-            default=default_dashboard,
+            key=CONFIG_VIEWS_KEY,
         )
         save_cols = st.columns(2)
         with save_cols[0]:
@@ -426,47 +546,134 @@ if st.session_state.get("config_open"):
                     return
                 save_front_grid_colorize(colorize)
                 save_dashboard_views(exec_views)
+                save_show_numeric_filters(show_numeric_filters)
+                save_show_chart_thresholds(show_chart_thresholds)
                 st.session_state["grid_colorize_rows"] = colorize
                 st.session_state["config_open"] = False
+                st.session_state[CONFIG_EDITING_KEY] = False
+                st.session_state[CONFIG_RESET_KEY] = False
+                st.session_state.pop(CONFIG_DEFAULTS_KEY, None)
                 st.success("Configuracion guardada.")
                 st.rerun()
         with save_cols[1]:
             if st.button("Cancelar"):
                 st.session_state["config_open"] = False
+                st.session_state[CONFIG_EDITING_KEY] = False
+                st.session_state[CONFIG_RESET_KEY] = True
+                st.session_state.pop(CONFIG_DEFAULTS_KEY, None)
 
     used_dialog = _render_config_container(_config_body)
     if used_dialog and st.session_state.get("config_open"):
         st.session_state["config_open"] = False
+        st.session_state[CONFIG_EDITING_KEY] = False
+        st.session_state[CONFIG_RESET_KEY] = True
+        st.session_state.pop(CONFIG_DEFAULTS_KEY, None)
 
 # =============================================================================
 # 8) Resumen general (KPIs)
 # =============================================================================
 
-summary_header = st.columns([1], gap="small")[0]
-with summary_header:
+with st.container():
+    st.markdown(
+        """
+<div id="summary-card-anchor"></div>
+<style>
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) {
+  background: linear-gradient(180deg, #121826 0%, #0f141d 100%);
+  border: 1px solid #1f2532;
+  border-radius: 18px;
+  padding: 24px 26px 22px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) h1 {
+  margin: 0;
+  font-size: 2.1rem;
+}
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) h3 {
+  margin: 0 0 0.9rem 0;
+}
+div[data-testid="stVerticalBlock"]:has(#config-top-anchor) {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  height: 100%;
+  padding-top: 0.25rem;
+}
+div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="stBaseButton-secondary"],
+div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="baseButton-secondary"] {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  min-width: 0 !important;
+  height: auto !important;
+}
+div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="stBaseButton-secondary"] span,
+div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="baseButton-secondary"] span {
+  color: inherit !important;
+  font-size: 0.95rem;
+  font-weight: 700;
+  padding: 0.35rem 0.75rem;
+  border-radius: 0.6rem;
+  background: #171b24;
+  border: 1px solid #262c38;
+}
+div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="stBaseButton-secondary"]:hover span,
+div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="baseButton-secondary"]:hover span {
+  color: #f3f4f6 !important;
+  background: #202635;
+}
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) [data-testid="stMetric"] {
+  background: #111722;
+  border: 1px solid #202737;
+  border-radius: 12px;
+  padding: 0.65rem 0.75rem;
+}
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) [data-testid="stMetricLabel"] {
+  color: #9ca3af;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+}
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) [data-testid="stMetricValue"] {
+  font-size: 1.6rem;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+    top_cols = st.columns([10, 2], gap="small")
+    with top_cols[0]:
+        st.title("🎬 Movies Cleaner — Dashboard")
+    with top_cols[1]:
+        st.markdown('<div id="config-top-anchor"></div>', unsafe_allow_html=True)
+        if st.button("Configuracion", key="config_link_top", type="secondary"):
+            st.session_state["config_open"] = True
     st.subheader("Resumen general")
 
-summary = compute_summary(df_all)
+    summary = compute_summary(df_all)
 
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric(
-    "Películas", format_count_size(summary["total_count"], summary["total_size_gb"])
-)
-col2.metric("KEEP", format_count_size(summary["keep_count"], summary["keep_size_gb"]))
-col3.metric(
-    "DELETE", format_count_size(summary["delete_count"], summary["delete_size_gb"])
-)
-col4.metric(
-    "MAYBE", format_count_size(summary["maybe_count"], summary["maybe_size_gb"])
-)
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric(
+        "Películas", format_count_size(summary["total_count"], summary["total_size_gb"])
+    )
+    col2.metric(
+        "KEEP", format_count_size(summary["keep_count"], summary["keep_size_gb"])
+    )
+    col3.metric(
+        "DELETE", format_count_size(summary["delete_count"], summary["delete_size_gb"])
+    )
+    col4.metric(
+        "MAYBE", format_count_size(summary["maybe_count"], summary["maybe_size_gb"])
+    )
 
-imdb_mean_df = summary.get("imdb_mean_df")
-if imdb_mean_df is not None and not pd.isna(imdb_mean_df):
-    col5.metric("IMDb medio (analizado)", f"{imdb_mean_df:.2f}")
-else:
-    col5.metric("IMDb medio (analizado)", "N/A")
+    imdb_mean_df = summary.get("imdb_mean_df")
+    if imdb_mean_df is not None and not pd.isna(imdb_mean_df):
+        col5.metric("IMDb medio (analizado)", f"{imdb_mean_df:.2f}")
+    else:
+        col5.metric("IMDb medio (analizado)", "N/A")
 
-st.markdown("---")
+st.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
 
 # Consistencia visual: tags de multiselect con fondo neutro (evita rojo fijo).
 st.markdown(
@@ -507,11 +714,29 @@ div[data-testid="stDataFrameToolbar"] [data-testid="stDataFrameToolbarButton"] {
 # 9) Pestañas (tabs)
 # =============================================================================
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+st.markdown(
+    """
+<div id="tabs-row-anchor"></div>
+<style>
+div[data-testid="stVerticalBlock"]:has(#tabs-row-anchor) {
+  margin-top: 0.2rem;
+  background: #0f141d;
+  border: 1px solid #1f2532;
+  border-radius: 14px;
+  padding: 0.35rem 0.6rem 0.1rem;
+}
+div[data-testid="stVerticalBlock"]:has(#tabs-row-anchor) div[data-testid="stTabs"] {
+  padding-top: 0.2rem;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
     [
         "📚 Todas",
         "📊 Gráficos",
-        "🔎 Búsqueda avanzada",
         "⚠️ Candidatas",
         "🔁 Duplicadas",
         "🧠 Metadata",
@@ -537,16 +762,6 @@ with tab2:
         render_fn(df_all)
 
 with tab3:
-    advanced_mod = _import_tabs_module("advanced")
-    render_fn = (
-        getattr(advanced_mod, "render", None) if advanced_mod is not None else None
-    )
-    if not callable(render_fn):
-        _ui_error("No existe frontend.tabs.advanced.render(df_all)")
-    else:
-        render_fn(df_all)
-
-with tab4:
     delete_mod = _import_tabs_module("delete")
     render_fn = getattr(delete_mod, "render", None) if delete_mod is not None else None
     if not callable(render_fn):
@@ -554,14 +769,14 @@ with tab4:
     else:
         render_fn(df_filtered, DELETE_DRY_RUN, DELETE_REQUIRE_CONFIRM)
 
-with tab5:
+with tab4:
     candidates_mod = _import_tabs_module("candidates")
     if candidates_mod is None:
         _ui_error("No existe el módulo frontend.tabs.candidates")
     else:
         _call_candidates_render(candidates_mod, df_all=df_all, df_filtered=df_filtered)
 
-with tab6:
+with tab5:
     metadata_mod = _import_tabs_module("metadata")
     if metadata_mod is None:
         _ui_error("No existe frontend.tabs.metadata")
