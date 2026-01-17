@@ -468,11 +468,10 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseBut
     search_query = ""
     df_view = df
 
-    if show_search:
-        search_key = f"grid_search_{key_suffix}"
-        search_open_key = f"grid_search_open_{key_suffix}"
-        if search_open_key not in st.session_state:
-            st.session_state[search_open_key] = False
+    search_key = f"grid_search_{key_suffix}"
+    search_open_key = f"grid_search_open_{key_suffix}"
+    if show_search and search_open_key not in st.session_state:
+        st.session_state[search_open_key] = False
 
     col_left, col_right = st.columns([10, 1])
 
@@ -480,12 +479,13 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseBut
         left_slot = st.empty()
 
     with col_right:
+        col_search: Any = None
         if show_search:
             col_search, col_download = _columns_with_gap([1, 1], gap="small")
         else:
             col_download = _columns_with_gap([1], gap="small")[0]
 
-        if show_search:
+        if show_search and col_search is not None:
             with col_search:
                 if st.button(
                     "🔍",
