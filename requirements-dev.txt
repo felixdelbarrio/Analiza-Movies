@@ -1,2 +1,5 @@
 # Dev install (editable) with tooling/test deps from setup.py:extras_require[dev]
 -e .[dev]
+
+# PNG export for charts (Altair)
+# -r requirements-png.txt

@@ -1,5 +1,5 @@
 """
-backend/report_loader.py
+frontend/report_loader.py
 
 Carga y prepara los CSVs generados por el pipeline (Plex/DLNA) para el dashboard.
 
@@ -33,7 +33,7 @@ from typing import Final, TYPE_CHECKING
 
 import pandas as pd
 
-from backend import logger as _logger
+from frontend import front_logger as _logger
 from frontend.data_utils import add_derived_columns
 
 if TYPE_CHECKING:

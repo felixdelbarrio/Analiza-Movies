@@ -50,16 +50,9 @@ def _render_df_body(df_meta: pd.DataFrame) -> None:
 
     if "library" in df_meta.columns:
         with col_f1:
-            libraries = (
-                df_meta["library"]
-                .astype("string")
-                .fillna("")
-                .map(str.strip)
-                .replace({"": None})
-                .dropna()
-                .unique()
-                .tolist()
-            )
+            series = df_meta["library"].astype("string").fillna("").map(str.strip)
+            series = series.mask(series == "", pd.NA).dropna()
+            libraries = series.unique().tolist()
             libraries.sort()
             library_filter = st.multiselect(
                 "Biblioteca (library)",
@@ -71,16 +64,9 @@ def _render_df_body(df_meta: pd.DataFrame) -> None:
 
     if "action" in df_meta.columns:
         with col_f2:
-            actions = (
-                df_meta["action"]
-                .astype("string")
-                .fillna("")
-                .map(str.strip)
-                .replace({"": None})
-                .dropna()
-                .unique()
-                .tolist()
-            )
+            series = df_meta["action"].astype("string").fillna("").map(str.strip)
+            series = series.mask(series == "", pd.NA).dropna()
+            actions = series.unique().tolist()
             actions.sort()
             action_filter = st.multiselect(
                 "Acción sugerida",
