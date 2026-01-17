@@ -353,6 +353,7 @@ def render(
         df_view,
         key_suffix="delete",
         download_filename="delete_table.csv",
+        show_search=False,
     )
     if df_view.empty:
         if search_query.strip():
