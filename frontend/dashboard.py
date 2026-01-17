@@ -328,7 +328,7 @@ def _get_query_params() -> dict[str, list[str]]:
             else:
                 out[k] = [str(v)]
         return out
-    return st.experimental_get_query_params()
+    return cast(dict[str, list[str]], st.experimental_get_query_params())
 
 
 def _clear_query_params() -> None:
