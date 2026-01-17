@@ -120,8 +120,9 @@ def render(df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
             "filtered",
             visible_order=["title", "year", "library", "file_size_gb", "file"],
             auto_select_first=True,
+            show_toolbar=False,
         )
 
     with col_detail:
         # prefix distinto para evitar colisiones con pestañas (all/advanced/etc.)
-        render_detail_card(selected_row, button_key_prefix="candidates")
+        render_detail_card(selected_row)
