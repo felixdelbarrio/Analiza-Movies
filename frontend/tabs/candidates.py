@@ -34,13 +34,8 @@ def _filter_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     if "imdb_id" not in df.columns:
         return df.iloc[0:0].copy()
 
-    imdb_norm = (
-        df["imdb_id"]
-        .astype("string")
-        .str.strip()
-        .str.lower()
-        .replace({"nan": pd.NA, "none": pd.NA, "": pd.NA})
-    )
+    imdb_norm = df["imdb_id"].astype("string").str.strip().str.lower()
+    imdb_norm = imdb_norm.mask(imdb_norm.isin(["nan", "none", ""]), pd.NA)
     mask = imdb_norm.notna()
     df_view = df.loc[mask].copy()
     df_view["_imdb_norm"] = imdb_norm.loc[mask].values

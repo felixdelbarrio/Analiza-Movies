@@ -1,6 +1,6 @@
 import pandas as pd
 
-from backend.report_loader import load_reports
+from frontend.report_loader import load_reports
 
 
 def test_load_reports_adds_derived_columns_and_strips_thumb(tmp_path):

@@ -57,13 +57,16 @@ venv:
 # Runtime install: setup.py / install_requires es la fuente de verdad
 install: venv
 	@$(PIP) install -q -r requirements.txt
+	@test ! -f requirements-png.txt || $(PIP) install -q -r requirements-png.txt
 
 # Dev install: incluye extras dev (mypy/pyright/stubs/black/ruff/pytest)
 dev: venv
 	@$(PIP) install -q -r requirements-dev.txt
+	@test ! -f requirements-png.txt || $(PIP) install -q -r requirements-png.txt
 
 reinstall: venv
 	@$(PIP) install -q -r requirements-dev.txt
+	@test ! -f requirements-png.txt || $(PIP) install -q -r requirements-png.txt
 
 # -------------------------------------------------
 # Targets principales

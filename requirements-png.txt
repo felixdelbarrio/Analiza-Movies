@@ -1,0 +1,2 @@
+# Optional dependency for Altair PNG export
+vl-convert-python

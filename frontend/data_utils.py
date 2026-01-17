@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, cast, Iterable
 
 import altair as alt
@@ -194,6 +196,156 @@ def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
 # ============================================================================
 
 
+def _split_genre_value(value: object) -> list[str]:
+    if value is None:
+        return []
+    s = str(value).strip()
+    if not s or s.upper() == "N/A":
+        return []
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+
+def _split_director_value(value: object) -> list[str]:
+    if value is None:
+        return []
+    s = str(value).strip()
+    if not s or s.upper() == "N/A":
+        return []
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+
+@lru_cache(maxsize=1)
+def _load_omdb_cache_records() -> tuple[dict[str, object], dict[str, object]]:
+    path = Path(__file__).resolve().parent.parent / "data" / "omdb_cache.json"
+    if not path.exists():
+        return {}, {}
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}, {}
+
+    records = data.get("records")
+    index_imdb = data.get("index_imdb")
+    if not isinstance(records, dict) or not isinstance(index_imdb, dict):
+        return {}, {}
+
+    return records, index_imdb
+
+
+@lru_cache(maxsize=1)
+def _load_omdb_cache_genres() -> dict[str, list[str]]:
+    records, index_imdb = _load_omdb_cache_records()
+    if not records:
+        return {}
+
+    out: dict[str, list[str]] = {}
+
+    for imdb_id, record_key in index_imdb.items():
+        if not isinstance(imdb_id, str) or not isinstance(record_key, str):
+            continue
+        rec = records.get(record_key)
+        if not isinstance(rec, dict):
+            continue
+        omdb = rec.get("omdb")
+        if not isinstance(omdb, dict):
+            continue
+        genres = _split_genre_value(omdb.get("Genre"))
+        if genres:
+            out[imdb_id.lower()] = genres
+
+    for record_key, rec in records.items():
+        if (
+            not isinstance(record_key, str)
+            or not record_key.startswith("imdb:")
+            or not isinstance(rec, dict)
+        ):
+            continue
+        imdb_id = record_key.split(":", 1)[1].lower()
+        if not imdb_id or imdb_id in out:
+            continue
+        omdb = rec.get("omdb")
+        if not isinstance(omdb, dict):
+            continue
+        genres = _split_genre_value(omdb.get("Genre"))
+        if genres:
+            out[imdb_id] = genres
+
+    return out
+
+
+def _genres_from_cache(imdb_id: object, cache: dict[str, list[str]]) -> list[str]:
+    if not isinstance(imdb_id, str):
+        return []
+    key = imdb_id.strip().lower()
+    if not key:
+        return []
+    return cache.get(key, [])
+
+
+@lru_cache(maxsize=1)
+def _load_omdb_cache_directors() -> dict[str, list[str]]:
+    records, index_imdb = _load_omdb_cache_records()
+    if not records:
+        return {}
+
+    out: dict[str, list[str]] = {}
+
+    for imdb_id, record_key in index_imdb.items():
+        if not isinstance(imdb_id, str) or not isinstance(record_key, str):
+            continue
+        rec = records.get(record_key)
+        if not isinstance(rec, dict):
+            continue
+        omdb = rec.get("omdb")
+        if not isinstance(omdb, dict):
+            continue
+        directors = _split_director_value(omdb.get("Director"))
+        if directors:
+            out[imdb_id.lower()] = directors
+
+    for record_key, rec in records.items():
+        if (
+            not isinstance(record_key, str)
+            or not record_key.startswith("imdb:")
+            or not isinstance(rec, dict)
+        ):
+            continue
+        imdb_id = record_key.split(":", 1)[1].lower()
+        if not imdb_id or imdb_id in out:
+            continue
+        omdb = rec.get("omdb")
+        if not isinstance(omdb, dict):
+            continue
+        directors = _split_director_value(omdb.get("Director"))
+        if directors:
+            out[imdb_id] = directors
+
+    return out
+
+
+def _directors_from_cache(imdb_id: object, cache: dict[str, list[str]]) -> list[str]:
+    if not isinstance(imdb_id, str):
+        return []
+    key = imdb_id.strip().lower()
+    if not key:
+        return []
+    return cache.get(key, [])
+
+
+def directors_from_omdb_json_or_cache(omdb_raw: object, imdb_id: object) -> list[str]:
+    data = safe_json_loads_single(omdb_raw)
+    if isinstance(data, dict):
+        directors = _split_director_value(data.get("Director"))
+        if directors:
+            return directors
+
+    cache = _load_omdb_cache_directors()
+    if not cache:
+        return []
+    return _directors_from_cache(imdb_id, cache)
+
+
 def explode_genres_from_omdb_json(df: pd.DataFrame) -> pd.DataFrame:
     """
     Construye un DataFrame “exploded” por género usando la columna omdb_json.
@@ -201,11 +353,12 @@ def explode_genres_from_omdb_json(df: pd.DataFrame) -> pd.DataFrame:
     - Si no existe la columna omdb_json, devuelve un DataFrame vacío con
       las mismas columnas + 'genre'.
     - Si omdb_json no es parseable o no tiene 'Genre', se ignora esa fila.
+    - Si omdb_json no aporta datos, intenta usar data/omdb_cache.json por imdb_id.
 
     Returns:
         DataFrame con una fila por (película, género) y columna 'genre'.
     """
-    if "omdb_json" not in df.columns:
+    if "omdb_json" not in df.columns and "imdb_id" not in df.columns:
         return pd.DataFrame(columns=[*df.columns, "genre"])
 
     df_g = df.copy()
@@ -214,12 +367,20 @@ def explode_genres_from_omdb_json(df: pd.DataFrame) -> pd.DataFrame:
         data = safe_json_loads_single(raw)
         if not isinstance(data, dict):
             return []
-        g = data.get("Genre")
-        if not g:
-            return []
-        return [x.strip() for x in str(g).split(",") if x.strip()]
+        return _split_genre_value(data.get("Genre"))
 
-    df_g["genre_list"] = df_g["omdb_json"].map(_extract_genres)
+    if "omdb_json" in df_g.columns:
+        df_g["genre_list"] = df_g["omdb_json"].map(_extract_genres)
+    else:
+        df_g["genre_list"] = [[] for _ in range(len(df_g))]
+
+    if "imdb_id" in df_g.columns:
+        cache = _load_omdb_cache_genres()
+        if cache:
+            df_g["genre_list"] = [
+                genres if genres else _genres_from_cache(imdb_id, cache)
+                for genres, imdb_id in zip(df_g["genre_list"], df_g["imdb_id"])
+            ]
     df_g = df_g.explode("genre_list", ignore_index=True)
     df_g = df_g.rename(columns={"genre_list": "genre"})
 

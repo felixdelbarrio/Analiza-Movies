@@ -48,16 +48,9 @@ def _safe_unique_sorted(df: pd.DataFrame, col: str) -> list[str]:
     if col not in df.columns:
         return []
 
-    raw: list[Any] = (
-        df[col]
-        .dropna()
-        .astype(str)
-        .map(str.strip)
-        .replace({"": None})
-        .dropna()
-        .unique()
-        .tolist()
-    )
+    series = df[col].dropna().astype(str).map(str.strip)
+    series = series.mask(series == "", pd.NA).dropna()
+    raw: list[Any] = series.unique().tolist()
 
     out: list[str] = []
     for v in raw:

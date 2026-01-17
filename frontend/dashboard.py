@@ -54,6 +54,8 @@ from frontend.config_front_base import (  # noqa: E402
     FRONT_API_TIMEOUT_S,
     FRONT_DEBUG,
     FRONT_MODE,
+    FRONT_GRID_COLORIZE,
+    save_front_grid_colorize,
 )
 from frontend.data_utils import add_derived_columns, format_count_size  # noqa: E402
 from frontend.front_api_client import (  # noqa: E402
@@ -64,6 +66,11 @@ from frontend.front_api_client import (  # noqa: E402
 )
 from frontend.summary import compute_summary  # noqa: E402
 from frontend.components import render_modal  # noqa: E402
+from frontend.config_front_charts import (  # noqa: E402
+    get_dashboard_views,
+    save_dashboard_views,
+)
+from frontend.tabs.charts import VIEW_OPTIONS  # noqa: E402
 
 # =============================================================================
 # 3) Opciones globales
@@ -368,22 +375,76 @@ df_all = cast(pd.DataFrame, df_all_any)
 
 _debug_banner(df_all=df_all, df_filtered=df_filtered)
 
+
+def _render_config_container(body: Callable[[], None]) -> bool:
+    dialog = getattr(st, "dialog", None)
+    if callable(dialog):
+        dialog_fn = cast(
+            Callable[[str], Callable[[Callable[[], None]], Callable[[], None]]],
+            dialog,
+        )
+
+        @dialog_fn("Configuracion")
+        def _dlg() -> None:
+            body()
+
+        _dlg()
+        return True
+    with st.expander("Configuracion", expanded=True):
+        body()
+    return False
+
+
+if "grid_colorize_rows" not in st.session_state:
+    st.session_state["grid_colorize_rows"] = FRONT_GRID_COLORIZE
+
+config_cols = st.columns([5, 1])
+with config_cols[1]:
+    if st.button("Configuracion"):
+        st.session_state["config_open"] = True
+
+if st.session_state.get("config_open"):
+
+    def _config_body() -> None:
+        st.subheader("Preferencias")
+        colorize = st.checkbox(
+            "Señalética de color en tablas",
+            value=bool(st.session_state.get("grid_colorize_rows", True)),
+        )
+        available_dashboard = [v for v in VIEW_OPTIONS if v != "Dashboard"]
+        default_dashboard = get_dashboard_views(available_dashboard)
+        exec_views = st.multiselect(
+            "Graficos dashboard (max 3)",
+            available_dashboard,
+            default=default_dashboard,
+        )
+        save_cols = st.columns(2)
+        with save_cols[0]:
+            if st.button("Guardar"):
+                if len(exec_views) > 3:
+                    st.error("Selecciona un maximo de 3 graficos.")
+                    return
+                save_front_grid_colorize(colorize)
+                save_dashboard_views(exec_views)
+                st.session_state["grid_colorize_rows"] = colorize
+                st.session_state["config_open"] = False
+                st.success("Configuracion guardada.")
+                st.rerun()
+        with save_cols[1]:
+            if st.button("Cancelar"):
+                st.session_state["config_open"] = False
+
+    used_dialog = _render_config_container(_config_body)
+    if used_dialog and st.session_state.get("config_open"):
+        st.session_state["config_open"] = False
+
 # =============================================================================
 # 8) Resumen general (KPIs)
 # =============================================================================
 
-summary_header, summary_toggle = st.columns([4, 2], gap="small")
+summary_header = st.columns([1], gap="small")[0]
 with summary_header:
     st.subheader("Resumen general")
-with summary_toggle:
-    _bool_switch(
-        "Señalética de color en tablas",
-        key="grid_colorize_rows",
-        value=bool(st.session_state.get("grid_colorize_rows", True)),
-        help=(
-            "Activa colores por decisión (DELETE/KEEP/MAYBE/UNKNOWN) en el texto de cada fila."
-        ),
-    )
 
 summary = compute_summary(df_all)
 
