@@ -4,7 +4,8 @@ on:
   pull_request:
     branches: [master]
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   enforce:
@@ -14,5 +15,16 @@ jobs:
         run: |
           if [ "${{ github.head_ref }}" != "develop" ]; then
             echo "ERROR: PRs to master must come from develop. Current head: ${{ github.head_ref }}"
+            exit 1
+          fi
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fail if master is not fully contained in develop
+        run: |
+          git fetch origin master develop
+          if ! git merge-base --is-ancestor origin/master origin/develop; then
+            echo "ERROR: master has commits not in develop. Merge master into develop before merging to master."
             exit 1
           fi
