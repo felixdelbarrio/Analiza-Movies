@@ -476,19 +476,31 @@ def build_word_counts(df: pd.DataFrame, decisions: Iterable[str]) -> pd.DataFram
 # ============================================================================
 
 
-def decision_color(field: str = "decision") -> alt.Color:
+def decision_color(
+    field: str = "decision",
+    *,
+    palette: dict[str, str] | None = None,
+) -> alt.Color:
     """
     Devuelve una escala de color fija por decisión para Altair.
 
     Nota:
     - Colores son constantes para mantener consistencia visual.
+    - Se puede pasar `palette` para personalizar colores por tema.
     """
+    fallback = {
+        "DELETE": "#e53935",
+        "KEEP": "#43a047",
+        "MAYBE": "#fbc02d",
+        "UNKNOWN": "#9e9e9e",
+    }
+    use = {**fallback, **(palette or {})}
     return alt.Color(
         f"{field}:N",
         title="Decisión",
         scale=alt.Scale(
             domain=["DELETE", "KEEP", "MAYBE", "UNKNOWN"],
-            range=["#e53935", "#43a047", "#fbc02d", "#9e9e9e"],
+            range=[use["DELETE"], use["KEEP"], use["MAYBE"], use["UNKNOWN"]],
         ),
     )
 

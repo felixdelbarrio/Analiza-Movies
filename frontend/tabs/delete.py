@@ -33,6 +33,11 @@ import streamlit as st
 from st_aggrid import GridOptionsBuilder, JsCode
 
 from frontend.components import render_grid_toolbar
+from frontend.config_front_theme import (
+    get_front_theme,
+    is_dark_theme,
+    normalize_theme_key,
+)
 from frontend.data_utils import add_derived_columns
 
 Row = Mapping[str, Any]
@@ -46,6 +51,13 @@ _DECISION_LABELS: dict[str, str] = {
     "KEEP": "🟩 KEEP",
     "UNKNOWN": "⬜ UNKNOWN",
 }
+
+
+def _decision_label(value: object) -> str:
+    label = _DECISION_LABELS.get(value) if isinstance(value, str) else None
+    if isinstance(label, str):
+        return label
+    return str(value)
 _DECISION_ROW_STYLE = JsCode(
     """
 function(params) {
@@ -75,6 +87,8 @@ class AgGridCallable(Protocol):
         gridOptions: Mapping[str, Any],
         update_on: Sequence[str],
         enable_enterprise_modules: bool,
+        theme: str | None = None,
+        custom_css: Mapping[str, Mapping[str, str]] | None = None,
         height: int,
         allow_unsafe_jscode: bool | None = None,
         key: str,
@@ -140,6 +154,90 @@ def _row_from_any(value: Any) -> dict[str, Any]:
         return {"value": as_dict_any}
 
     return {"value": value}
+
+
+def _aggrid_theme() -> str:
+    raw = st.session_state.get("front_theme")
+    fallback = get_front_theme()
+    key = normalize_theme_key(raw if isinstance(raw, str) else fallback)
+    return "alpine-dark" if is_dark_theme(key) else "alpine"
+
+
+def _current_theme_key() -> str:
+    raw = st.session_state.get("front_theme")
+    fallback = get_front_theme()
+    return normalize_theme_key(raw if isinstance(raw, str) else fallback)
+
+
+def _theme_tokens() -> dict[str, str]:
+    raw = st.session_state.get("front_theme_tokens")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        out[str(k)] = str(v)
+    return out
+
+
+def _aggrid_custom_css() -> dict[str, dict[str, str]]:
+    tokens = _theme_tokens()
+    if not tokens:
+        return {}
+
+    def _token(key: str, fallback: str) -> str:
+        return tokens.get(key, fallback)
+
+    bg = _token("card_bg", "#11161f")
+    header_bg = _token("button_bg", "#171b24")
+    border = _token("panel_border", "#1f2532")
+    text = _token("text_2", "#d1d5db")
+    text_strong = _token("text_1", "#f1f5f9")
+    row_alt = _token("metric_bg", "#111722")
+    hover = _token("tag_bg", "#2b2f36")
+    selected = _token("button_hover_bg", "#202635")
+
+    return {
+        ".ag-root-wrapper": {
+            "background-color": f"{bg} !important",
+            "border": f"1px solid {border} !important",
+            "border-radius": "12px",
+            "color": text,
+        },
+        ".ag-header": {
+            "background-color": f"{header_bg} !important",
+            "border-bottom": f"1px solid {border} !important",
+            "color": f"{text_strong} !important",
+        },
+        ".ag-header-cell, .ag-header-group-cell": {
+            "background-color": f"{header_bg} !important",
+            "color": f"{text_strong} !important",
+            "border-color": f"{border} !important",
+        },
+        ".ag-row": {
+            "background-color": f"{bg} !important",
+            "color": text,
+        },
+        ".ag-row-odd": {
+            "background-color": f"{row_alt} !important",
+        },
+        ".ag-row-hover": {
+            "background-color": f"{hover} !important",
+        },
+        ".ag-row-selected": {
+            "background-color": f"{selected} !important",
+        },
+        ".ag-cell": {
+            "border-color": f"{border} !important",
+            "color": "inherit !important",
+        },
+        ".ag-icon": {
+            "color": f"{text_strong} !important",
+            "fill": f"{text_strong} !important",
+        },
+        ".ag-paging-panel": {
+            "color": f"{text} !important",
+        },
+    }
 
 
 def _normalize_selected_rows(selected_raw: Any) -> list[dict[str, Any]]:
@@ -317,7 +415,7 @@ def render(
                 "Decision",
                 ["DELETE", "MAYBE"],
                 default=["DELETE", "MAYBE"],
-                format_func=lambda v: _DECISION_LABELS.get(v, v),
+                format_func=_decision_label,
                 key="dec_filter_delete",
             )
         else:
@@ -517,14 +615,17 @@ function(params) {
     grid_options = gb.build()
 
     colorize_rows = bool(st.session_state.get("grid_colorize_rows", True))
+    theme_key = _current_theme_key()
     grid_response = aggrid_fn(
         df_view.copy(),
         gridOptions=grid_options,
         update_on=["selectionChanged"],
         enable_enterprise_modules=False,
+        theme=_aggrid_theme(),
+        custom_css=_aggrid_custom_css(),
         height=grid_height,
         allow_unsafe_jscode=True,
-        key=f"aggrid_delete_{int(colorize_rows)}",
+        key=f"aggrid_delete_{int(colorize_rows)}_{theme_key}",
     )
 
     selected_rows = _normalize_selected_rows(grid_response.get("selected_rows"))

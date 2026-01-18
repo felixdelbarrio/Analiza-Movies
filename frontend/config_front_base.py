@@ -70,6 +70,25 @@ def _get_env_str(name: str, default: str | None = None) -> str | None:
     return default
 
 
+def _read_env_front() -> dict[str, str]:
+    if not _ENV_FRONT_PATH.exists():
+        return {}
+    return {k: v for k, v in dotenv_values(_ENV_FRONT_PATH).items() if v is not None}
+
+
+def _get_env_front_bool(name: str, default: bool) -> bool:
+    env = _read_env_front()
+    raw = _clean(env.get(name))
+    if raw is None:
+        return default
+    s = raw.lower()
+    if s in _TRUE_SET:
+        return True
+    if s in _FALSE_SET:
+        return False
+    return default
+
+
 def _get_env_bool(name: str, default: bool) -> bool:
     raw = _get_env_str(name, None)
     if raw is None:
@@ -128,6 +147,11 @@ FRONT_DEBUG: bool = _get_env_bool("FRONT_DEBUG", False)
 
 # Señaletica de color en tablas
 FRONT_GRID_COLORIZE: bool = _get_env_bool("FRONT_GRID_COLORIZE", True)
+
+
+def get_front_grid_colorize() -> bool:
+    return _get_env_front_bool("FRONT_GRID_COLORIZE", True)
+
 
 # ---------------------------------------------------------------------
 # Logging (frontend) - usa .env.front

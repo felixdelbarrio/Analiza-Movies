@@ -22,6 +22,8 @@ import os
 import pandas as pd
 import streamlit as st
 
+from frontend.components import aggrid_readonly
+
 DEFAULT_EXPORT_NAME = "metadata_suggestions_filtered.csv"
 
 
@@ -86,11 +88,7 @@ def _render_df_body(df_meta: pd.DataFrame) -> None:
 
     st.write(f"Filas: **{len(df_view)}**")
 
-    st.dataframe(
-        df_view,
-        width="stretch",
-        height=400,
-    )
+    aggrid_readonly(df_view, key_suffix="metadata", height=420)
 
     # -------------------------
     # Exportación
