@@ -1,0 +1,48 @@
+###############################################################################
+# MANIFEST.in
+# Archivos adicionales incluidos en el paquete distribuido
+###############################################################################
+
+# ---------------------------------------------------------------------------
+# Documentación y metadatos
+# ---------------------------------------------------------------------------
+include README.md
+include LICENSE
+include ARCHITECTURE.md
+include requirements.txt
+include setup.py
+
+# ---------------------------------------------------------------------------
+# Backend (paquete principal)
+# ---------------------------------------------------------------------------
+recursive-include backend *.py
+recursive-include backend py.typed
+
+# ---------------------------------------------------------------------------
+# Frontend (Streamlit)
+# ---------------------------------------------------------------------------
+recursive-include frontend *.py
+recursive-include frontend py.typed
+recursive-include frontend/templates *.html
+recursive-include frontend/static *.css *.js *.png *.jpg *.svg
+
+# ---------------------------------------------------------------------------
+# Server (FastAPI)
+# ---------------------------------------------------------------------------
+recursive-include server *.py
+recursive-include server py.typed
+recursive-include server/api py.typed
+
+
+# ---------------------------------------------------------------------------
+# Excluir basura, cachés y artefactos locales
+# ---------------------------------------------------------------------------
+exclude *.pyc
+exclude *.pyo
+exclude *~
+exclude *.log
+
+recursive-exclude * __pycache__ *.pyc *.pyo
+recursive-exclude *.egg-info *
+recursive-exclude reports *
+recursive-exclude tests *

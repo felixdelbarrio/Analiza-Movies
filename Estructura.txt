@@ -1,0 +1,210 @@
+.
+├── analiza_movies.egg-info
+│   ├── dependency_links.txt
+│   ├── entry_points.txt
+│   ├── PKG-INFO
+│   ├── requires.txt
+│   ├── SOURCES.txt
+│   └── top_level.txt
+├── ARCHITECTURE.md
+├── backend
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-314.pyc
+│   │   ├── analiza_dlna.cpython-314.pyc
+│   │   ├── analiza_plex.cpython-314.pyc
+│   │   ├── analyze_input_core.cpython-314.pyc
+│   │   ├── collection_analysis.cpython-314.pyc
+│   │   ├── config_base.cpython-314.pyc
+│   │   ├── config_collection.cpython-314.pyc
+│   │   ├── config_core.cpython-314.pyc
+│   │   ├── config_dlna.cpython-314.pyc
+│   │   ├── config_omdb.cpython-314.pyc
+│   │   ├── config_plex.cpython-314.pyc
+│   │   ├── config_reports.cpython-314.pyc
+│   │   ├── config_scoring.cpython-314.pyc
+│   │   ├── config_wiki.cpython-314.pyc
+│   │   ├── config.cpython-314.pyc
+│   │   ├── decision_logic.cpython-314.pyc
+│   │   ├── dlna_client.cpython-314.pyc
+│   │   ├── dlna_discovery.cpython-314.pyc
+│   │   ├── logger.cpython-314.pyc
+│   │   ├── main.cpython-314.pyc
+│   │   ├── metadata_fix.cpython-314.pyc
+│   │   ├── movie_input.cpython-314.pyc
+│   │   ├── omdb_client.cpython-314.pyc
+│   │   ├── plex_client.cpython-314.pyc
+│   │   ├── reporting.cpython-314.pyc
+│   │   ├── resilience.cpython-314.pyc
+│   │   ├── run_metrics.cpython-314.pyc
+│   │   ├── scoring.cpython-314.pyc
+│   │   ├── stats.cpython-314.pyc
+│   │   └── wiki_client.cpython-314.pyc
+│   ├── analiza_dlna.py
+│   ├── analiza_omdb.py
+│   ├── analiza_plex.py
+│   ├── analiza_wiki.py
+│   ├── analyze_input_core.py
+│   ├── collection_analysis.py
+│   ├── config_base.py
+│   ├── config_collection.py
+│   ├── config_core.py
+│   ├── config_dlna.py
+│   ├── config_omdb.py
+│   ├── config_plex.py
+│   ├── config_reports.py
+│   ├── config_scoring.py
+│   ├── config_wiki.py
+│   ├── config.py
+│   ├── decision_logic.py
+│   ├── dlna_client.py
+│   ├── dlna_discovery.py
+│   ├── logger.py
+│   ├── logs
+│   │   └── run_2025-12-29_15-09-09_65786.log
+│   ├── main.py
+│   ├── metadata_fix.py
+│   ├── movie_input.py
+│   ├── omdb_client.py
+│   ├── plex_client.py
+│   ├── py.typed
+│   ├── report_loader.py
+│   ├── reporting.py
+│   ├── resilience.py
+│   ├── run_metrics.py
+│   ├── scoring.py
+│   ├── stats.py
+│   └── wiki_client.py
+├── data
+│   ├── omdb_cache.json
+│   └── wiki_cache.json
+├── Estructura.txt
+├── frontend
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-314.pyc
+│   │   ├── components.cpython-314.pyc
+│   │   ├── config_front_artifacts.cpython-314.pyc
+│   │   ├── config_front_base.cpython-314.pyc
+│   │   ├── data_utils.cpython-314.pyc
+│   │   ├── delete_logic.cpython-314.pyc
+│   │   ├── front_api_client.cpython-314.pyc
+│   │   ├── front_logger.cpython-314.pyc
+│   │   ├── front_stats.cpython-314.pyc
+│   │   └── summary.cpython-314.pyc
+│   ├── components.py
+│   ├── config_front_artifacts.py
+│   ├── config_front_base.py
+│   ├── dashboard.py
+│   ├── data_utils.py
+│   ├── delete_logic.py
+│   ├── front_api_client.py
+│   ├── front_logger.py
+│   ├── front_stats.py
+│   ├── py.typed
+│   ├── summary.py
+│   ├── tabs
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-314.pyc
+│   │   │   ├── advanced.cpython-314.pyc
+│   │   │   ├── all_movies.cpython-314.pyc
+│   │   │   ├── candidates.cpython-314.pyc
+│   │   │   ├── charts.cpython-314.pyc
+│   │   │   ├── delete.cpython-314.pyc
+│   │   │   └── metadata.cpython-314.pyc
+│   │   ├── advanced.py
+│   │   ├── all_movies.py
+│   │   ├── candidates.py
+│   │   ├── charts.py
+│   │   ├── delete.py
+│   │   └── metadata.py
+│   └── templates
+│       └── filtered_report.html
+├── LICENSE
+├── Makefile
+├── MANIFEST.in
+├── mypy.ini
+├── py.typed
+├── pyrightconfig.json
+├── python
+├── README.md
+├── reports
+│   ├── metadata_fix.csv
+│   ├── report_all.csv
+│   └── report_filtered.csv
+├── requirements-dev.txt
+├── requirements.txt
+├── server
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-314.pyc
+│   │   ├── __main__.cpython-314.pyc
+│   │   └── am_api.cpython-314.pyc
+│   ├── am_api.py
+│   ├── api
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-314.pyc
+│   │   │   ├── app.cpython-314.pyc
+│   │   │   ├── deps.cpython-314.pyc
+│   │   │   ├── logging_config.cpython-314.pyc
+│   │   │   ├── paths.cpython-314.pyc
+│   │   │   └── settings.cpython-314.pyc
+│   │   ├── app.py
+│   │   ├── caching
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── __init__.cpython-314.pyc
+│   │   │   │   ├── file_cache.cpython-314.pyc
+│   │   │   │   └── http_cache.cpython-314.pyc
+│   │   │   ├── file_cache.py
+│   │   │   └── http_cache.py
+│   │   ├── deps.py
+│   │   ├── logging_config.py
+│   │   ├── middleware
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── __init__.cpython-314.pyc
+│   │   │   │   ├── errors.cpython-314.pyc
+│   │   │   │   └── request_id.cpython-314.pyc
+│   │   │   ├── errors.py
+│   │   │   └── request_id.py
+│   │   ├── paths.py
+│   │   ├── routers
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── __init__.cpython-314.pyc
+│   │   │   │   ├── consolidated.cpython-314.pyc
+│   │   │   │   ├── health.cpython-314.pyc
+│   │   │   │   ├── meta.cpython-314.pyc
+│   │   │   │   ├── omdb.cpython-314.pyc
+│   │   │   │   ├── reports.cpython-314.pyc
+│   │   │   │   └── wiki.cpython-314.pyc
+│   │   │   ├── consolidated.py
+│   │   │   ├── health.py
+│   │   │   ├── meta.py
+│   │   │   ├── omdb.py
+│   │   │   ├── reports.py
+│   │   │   └── wiki.py
+│   │   ├── services
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── __init__.cpython-314.pyc
+│   │   │   │   ├── consolidated.cpython-314.pyc
+│   │   │   │   ├── metrics.cpython-314.pyc
+│   │   │   │   ├── omdb.cpython-314.pyc
+│   │   │   │   ├── reports.cpython-314.pyc
+│   │   │   │   └── wiki.cpython-314.pyc
+│   │   │   ├── consolidated.py
+│   │   │   ├── metrics.py
+│   │   │   ├── omdb.py
+│   │   │   ├── py.typed
+│   │   │   ├── reports.py
+│   │   │   └── wiki.py
+│   │   └── settings.py
+│   └── readme.txt
+└── setup.py
+
+24 directories, 184 files

@@ -1,0 +1,39 @@
+# Ignorar variables de entorno
+.env
+.env.front
+.env.*.local
+
+# Ignorar entorno virtual
+venv/
+.venv/
+# python -m venv
+.python-version
+# Ignorar visual studio code
+.vscode/
+
+# Ignorar caches
+omdb_cache.json
+wiki_cache.json
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+.hypothesis/
+
+#Ignorar los reportes 
+report_*.csv
+report_*.html
+tmp*
+metadata_*.csv
+run_*.log
+backend/logs/
+frontend/logs/
+server/logs/
+
+# metadatos de empaquetado
+*.egg-info/
+*.egg

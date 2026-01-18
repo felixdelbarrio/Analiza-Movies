@@ -1,0 +1,8 @@
+# Runtime install (editable) for local/dev usage.
+# The canonical list of runtime deps lives in setup.py:install_requires.
+-e .
+
+# Optional extras:
+# -e .[viz]
+# PNG export (Altair):
+#   -r requirements-png.txt

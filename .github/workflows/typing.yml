@@ -1,0 +1,93 @@
+name: typing
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  typing-and-packaging:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build pyright==1.1.408 mypy
+
+      - name: Build sdist + wheel
+        run: |
+          python -m build
+
+      - name: Verify py.typed is present in wheel and sdist
+        run: |
+          python - <<'PY'
+          import sys
+          import zipfile
+          import tarfile
+          from pathlib import Path
+
+          dist = Path("dist")
+          wheels = sorted(dist.glob("*.whl"))
+          sdists = sorted(dist.glob("*.tar.gz"))
+
+          if not wheels:
+              print("ERROR: No wheel found in dist/")
+              sys.exit(1)
+          if not sdists:
+              print("ERROR: No sdist (.tar.gz) found in dist/")
+              sys.exit(1)
+
+          wheel_path = wheels[-1]
+          sdist_path = sdists[-1]
+
+          # Expect these (based on your project structure)
+          expected = [
+              "backend/py.typed",
+              "frontend/py.typed",
+              "server/api/services/py.typed",
+          ]
+
+          # Wheel check
+          with zipfile.ZipFile(wheel_path, "r") as z:
+              names = set(z.namelist())
+
+          missing_in_wheel = [p for p in expected if not any(n.endswith(p) for n in names)]
+          if missing_in_wheel:
+              print(f"ERROR: Missing in wheel {wheel_path}:")
+              for p in missing_in_wheel:
+                  print(" -", p)
+              sys.exit(1)
+
+          # sdist check
+          with tarfile.open(sdist_path, "r:gz") as t:
+              members = [m.name for m in t.getmembers()]
+
+          missing_in_sdist = [p for p in expected if not any(m.endswith(p) for m in members)]
+          if missing_in_sdist:
+              print(f"ERROR: Missing in sdist {sdist_path}:")
+              for p in missing_in_sdist:
+                  print(" -", p)
+              sys.exit(1)
+
+          print("OK: py.typed present in both wheel and sdist for all expected packages.")
+          PY
+
+      - name: Run Pyright
+        run: |
+          pyright -p pyrightconfig.json
+
+      - name: Run Mypy
+        run: |
+          mypy backend frontend server
