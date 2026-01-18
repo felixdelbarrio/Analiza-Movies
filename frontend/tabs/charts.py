@@ -32,6 +32,7 @@ from frontend.data_utils import (
     directors_from_omdb_json_or_cache,
     explode_genres_from_omdb_json,
 )
+from frontend.config_front_theme import get_front_theme, normalize_theme_key
 from frontend.config_front_charts import (
     get_dashboard_views,
     get_show_chart_thresholds,
@@ -59,6 +60,57 @@ RT_REFERENCE: Final[float] = 60.0
 METACRITIC_REFERENCE: Final[float] = 60.0
 
 _F = TypeVar("_F", bound=Callable[..., Any])
+AltChart = Any
+AltSelection = Any
+FONT_BODY: Final[str] = "Manrope"
+FONT_DISPLAY: Final[str] = "Libre Baskerville"
+
+_DECISION_PALETTES: Final[dict[str, dict[str, str]]] = {
+    "noir": {
+        "DELETE": "#e55b5b",
+        "KEEP": "#56b37a",
+        "MAYBE": "#e1b75b",
+        "UNKNOWN": "#9da3ad",
+    },
+    "ivory": {
+        "DELETE": "#b3473f",
+        "KEEP": "#3f7f5a",
+        "MAYBE": "#b0883a",
+        "UNKNOWN": "#8f7f70",
+    },
+    "sapphire": {
+        "DELETE": "#e46b78",
+        "KEEP": "#4fb08a",
+        "MAYBE": "#d7b365",
+        "UNKNOWN": "#9aa7bd",
+    },
+    "verdant": {
+        "DELETE": "#e06a63",
+        "KEEP": "#4da97a",
+        "MAYBE": "#d0b05c",
+        "UNKNOWN": "#9aa79f",
+    },
+    "bordeaux": {
+        "DELETE": "#e06477",
+        "KEEP": "#5aa985",
+        "MAYBE": "#d0a867",
+        "UNKNOWN": "#b5a0aa",
+    },
+}
+_CHART_ACCENTS: Final[dict[str, dict[str, str]]] = {
+    "noir": {"accent": "#8dd2ff", "accent_soft": "#5aa7d9"},
+    "ivory": {"accent": "#c9894c", "accent_soft": "#a56a3b"},
+    "sapphire": {"accent": "#8bbcff", "accent_soft": "#5b84d8"},
+    "verdant": {"accent": "#88d6b3", "accent_soft": "#4fa47b"},
+    "bordeaux": {"accent": "#e3a0b8", "accent_soft": "#b46a86"},
+}
+_BOXPLOT_GRADIENTS: Final[dict[str, tuple[str, str, str]]] = {
+    "noir": ("#1b2635", "#3a6ea8", "#8dd2ff"),
+    "ivory": ("#ead8c5", "#c9894c", "#7d4421"),
+    "sapphire": ("#1a2740", "#406fd1", "#9dd0ff"),
+    "verdant": ("#1a2621", "#3f8b6a", "#b0e0cc"),
+    "bordeaux": ("#24141d", "#7d3550", "#e0a0b6"),
+}
 
 
 def _cache_data_decorator() -> Callable[[_F], _F]:
@@ -69,6 +121,102 @@ def _cache_data_decorator() -> Callable[[_F], _F]:
     if callable(cache_fn):
         return cast(Callable[[_F], _F], cache_fn)
     return cast(Callable[[_F], _F], lambda f: f)
+
+
+def _current_theme_key() -> str:
+    raw = st.session_state.get("front_theme")
+    fallback = get_front_theme()
+    return normalize_theme_key(raw if isinstance(raw, str) else fallback)
+
+
+def _theme_tokens() -> dict[str, str]:
+    raw = st.session_state.get("front_theme_tokens")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        out[str(k)] = str(v)
+    return out
+
+
+def _token(tokens: dict[str, str], key: str, fallback: str) -> str:
+    return tokens.get(key, fallback)
+
+
+def _decision_palette() -> dict[str, str]:
+    theme_key = _current_theme_key()
+    return _DECISION_PALETTES.get(theme_key, _DECISION_PALETTES["noir"])
+
+
+def _decision_color(field: str = "decision") -> alt.Color:
+    return decision_color(field, palette=_decision_palette())
+
+
+def _boxplot_scale(tokens: dict[str, str]) -> alt.Scale:
+    theme_key = _current_theme_key()
+    gradient = _BOXPLOT_GRADIENTS.get(theme_key)
+    if gradient:
+        return alt.Scale(range=list(gradient))
+    start = _token(tokens, "metric_bg", "#111722")
+    end = _token(tokens, "text_2", "#d1d5db")
+    return alt.Scale(range=[start, end])
+
+
+def _chart_accents() -> dict[str, str]:
+    theme_key = _current_theme_key()
+    return _CHART_ACCENTS.get(theme_key, _CHART_ACCENTS["noir"])
+
+
+def _apply_chart_theme(chart: AltChart) -> AltChart:
+    tokens = _theme_tokens()
+    if not tokens:
+        return chart
+
+    bg = _token(tokens, "card_bg", "#11161f")
+    border = _token(tokens, "panel_border", "#1f2532")
+    text = _token(tokens, "text_2", "#d1d5db")
+    text_strong = _token(tokens, "text_1", "#f1f5f9")
+    grid = _token(tokens, "divider", "#242a35")
+
+    return (
+        chart.properties(background=bg)
+        .configure_view(fill=bg, stroke=border, strokeWidth=1)
+        .configure_axis(
+            labelColor=text,
+            titleColor=text_strong,
+            gridColor=grid,
+            gridOpacity=0.45,
+            domainColor=grid,
+            tickColor=grid,
+            labelFont=FONT_BODY,
+            titleFont=FONT_BODY,
+            labelFontSize=11,
+            titleFontSize=12,
+        )
+        .configure_legend(
+            orient="right",
+            labelColor=text,
+            titleColor=text_strong,
+            labelFont=FONT_BODY,
+            titleFont=FONT_BODY,
+            labelFontSize=11,
+            titleFontSize=12,
+            symbolSize=80,
+            columns=1,
+        )
+        .configure_title(
+            color=text_strong,
+            font=FONT_DISPLAY,
+            fontSize=16,
+            anchor="start",
+        )
+        .configure_header(
+            labelColor=text,
+            titleColor=text_strong,
+            labelFont=FONT_BODY,
+            titleFont=FONT_BODY,
+        )
+    )
 
 
 @_cache_data_decorator()
@@ -207,25 +355,16 @@ def _requires_columns(df: pd.DataFrame, cols: Iterable[str]) -> bool:
     return True
 
 
-def _chart(
-    chart: alt.Chart | alt.LayerChart | alt.HConcatChart | alt.VConcatChart,
-) -> None:
+def _chart(chart: AltChart) -> AltChart:
     """
     Wrapper para mostrar gráficos siempre a ancho completo.
     """
-    chart = chart.configure_legend(
-        orient="right",
-        titleFontSize=12,
-        labelFontSize=11,
-        symbolSize=80,
-        columns=1,
-    )
+    chart = _apply_chart_theme(chart)
     st.altair_chart(chart, width="stretch")
+    return chart
 
 
-def _chart_png_bytes(
-    chart: alt.Chart | alt.LayerChart | alt.HConcatChart | alt.VConcatChart,
-) -> bytes | None:
+def _chart_png_bytes(chart: AltChart) -> bytes | None:
     try:
         import io
 
@@ -236,9 +375,7 @@ def _chart_png_bytes(
         return None
 
 
-def _chart_svg_bytes(
-    chart: alt.Chart | alt.LayerChart | alt.HConcatChart | alt.VConcatChart,
-) -> bytes | None:
+def _chart_svg_bytes(chart: AltChart) -> bytes | None:
     try:
         import io
 
@@ -300,8 +437,8 @@ def _render_view(
     view: str,
     df_g: pd.DataFrame,
     *,
-    lib_sel: alt.Selection,
-    dec_sel: alt.Selection,
+    lib_sel: AltSelection,
+    dec_sel: AltSelection,
     imdb_ref: float,
     rt_ref: float,
     meta_ref: float,
@@ -315,10 +452,15 @@ def _render_view(
     min_n_libs: int,
     boxplot_horizontal: bool,
     compare_libs: list[str],
-) -> alt.Chart | alt.LayerChart | alt.HConcatChart | alt.VConcatChart | None:
-    chart_export: (
-        alt.Chart | alt.LayerChart | alt.HConcatChart | alt.VConcatChart | None
-    ) = None
+) -> AltChart | None:
+    chart_export: AltChart | None = None
+    tokens = _theme_tokens()
+    accents = _chart_accents()
+    ref_color = _token(tokens, "text_3", "#666666")
+    mean_color = accents["accent_soft"]
+    median_color = _token(tokens, "text_1", "#ffffff")
+    accent_color = accents["accent"]
+    boxplot_scale = _boxplot_scale(tokens)
     # 1) Distribución por decisión
     if view == "Distribución por decisión":
         if not _requires_columns(df_g, ["decision", "title"]):
@@ -341,13 +483,13 @@ def _render_view(
             .encode(
                 x=alt.X("decision:N", title="Decisión"),
                 y=alt.Y("count:Q", title="Número de películas"),
-                color=decision_color("decision"),
+                color=_decision_color(),
                 tooltip=["decision", "count"],
                 opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
             )
             .add_params(dec_sel)
         )
-        _chart(chart)
+        chart = _chart(chart)
         chart_export = chart
 
     # 2) Rating IMDb por decisión
@@ -367,7 +509,7 @@ def _render_view(
             .encode(
                 x=alt.X("imdb_rating:Q", bin=bin_spec, title="IMDb rating (0-10)"),
                 y=alt.Y("count():Q", title="Numero de peliculas"),
-                color=decision_color("decision"),
+                color=_decision_color(),
                 tooltip=[
                     alt.Tooltip("decision:N", title="Decision"),
                     alt.Tooltip("imdb_rating:Q", bin=bin_spec, title="IMDb (bin)"),
@@ -379,14 +521,15 @@ def _render_view(
         )
         ref_line = (
             alt.Chart(data)
-            .mark_rule(color="#666", strokeDash=[4, 4])
+            .mark_rule(color=ref_color, strokeDash=[4, 4])
             .encode(x=alt.datum(imdb_ref))
         )
         chart = (base + ref_line).facet(
             column=alt.Column("decision:N", title="Decision")
         )
-        _chart(chart.resolve_scale(y="independent"))
-        chart_export = chart.resolve_scale(y="independent")
+        chart = chart.resolve_scale(y="independent")
+        chart = _chart(chart)
+        chart_export = chart
 
     # 3) Ratings IMDb vs RT
     elif view == "Ratings IMDb vs RT":
@@ -405,7 +548,7 @@ def _render_view(
             .encode(
                 x=alt.X("imdb_rating:Q", title="IMDb rating (0-10)"),
                 y=alt.Y("rt_score:Q", title="RT score (%)"),
-                color=decision_color("decision"),
+                color=_decision_color(),
                 tooltip=_movie_tooltips(data),
                 opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
             )
@@ -417,7 +560,7 @@ def _render_view(
             .encode(
                 x=alt.X("imdb_rating:Q"),
                 y=alt.Y("rt_score:Q"),
-                color=decision_color("decision"),
+                color=_decision_color(),
                 shape=alt.Shape(
                     "imdb_outlier:N",
                     scale=alt.Scale(
@@ -433,16 +576,16 @@ def _render_view(
         )
         ref_imdb = (
             alt.Chart(pd.DataFrame({"imdb_rating": [imdb_ref]}))
-            .mark_rule(color="#666", strokeDash=[4, 4])
+            .mark_rule(color=ref_color, strokeDash=[4, 4])
             .encode(x=alt.X("imdb_rating:Q"))
         )
         ref_rt = (
             alt.Chart(pd.DataFrame({"rt_score": [rt_ref]}))
-            .mark_rule(color="#666", strokeDash=[4, 4])
+            .mark_rule(color=ref_color, strokeDash=[4, 4])
             .encode(y=alt.Y("rt_score:Q"))
         )
         chart = base + outliers + ref_imdb + ref_rt
-        _chart(chart)
+        chart = _chart(chart)
         chart_export = chart
 
     # 4) Ratings IMDb vs Metacritic
@@ -465,7 +608,7 @@ def _render_view(
                     "metacritic_score:Q",
                     title="Metacritic score (0-100)",
                 ),
-                color=decision_color("decision"),
+                color=_decision_color(),
                 tooltip=_movie_tooltips(data),
                 opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
             )
@@ -477,7 +620,7 @@ def _render_view(
             .encode(
                 x=alt.X("imdb_rating:Q"),
                 y=alt.Y("metacritic_score:Q"),
-                color=decision_color("decision"),
+                color=_decision_color(),
                 shape=alt.Shape(
                     "imdb_outlier:N",
                     scale=alt.Scale(
@@ -493,16 +636,16 @@ def _render_view(
         )
         ref_imdb = (
             alt.Chart(pd.DataFrame({"imdb_rating": [imdb_ref]}))
-            .mark_rule(color="#666", strokeDash=[4, 4])
+            .mark_rule(color=ref_color, strokeDash=[4, 4])
             .encode(x=alt.X("imdb_rating:Q"))
         )
         ref_meta = (
             alt.Chart(pd.DataFrame({"metacritic_score": [meta_ref]}))
-            .mark_rule(color="#666", strokeDash=[4, 4])
+            .mark_rule(color=ref_color, strokeDash=[4, 4])
             .encode(y=alt.Y("metacritic_score:Q"))
         )
         chart = base + outliers + ref_imdb + ref_meta
-        _chart(chart)
+        chart = _chart(chart)
         chart_export = chart
 
     # 5) Distribución por década
@@ -528,13 +671,13 @@ def _render_view(
             .encode(
                 x=alt.X("decade_label:N", title="Década"),
                 y=alt.Y("count:Q", title="Número de películas"),
-                color=decision_color("decision"),
+                color=_decision_color(),
                 tooltip=["decade_label", "decision", "count"],
                 opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
             )
             .add_params(dec_sel)
         )
-        _chart(chart)
+        chart = _chart(chart)
         chart_export = chart
 
     # 6) Distribución por género (OMDb)
@@ -565,13 +708,13 @@ def _render_view(
             .encode(
                 x=alt.X("genre:N", title="Género"),
                 y=alt.Y("count:Q", title="Número de películas", stack="normalize"),
-                color=decision_color("decision"),
+                color=_decision_color(),
                 tooltip=["genre", "decision", "count"],
                 opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
             )
             .add_params(dec_sel)
         )
-        _chart(chart)
+        chart = _chart(chart)
         chart_export = chart
 
     # 7) Espacio ocupado por biblioteca/decisión
@@ -595,7 +738,7 @@ def _render_view(
             .encode(
                 x=alt.X("library:N", title="Biblioteca"),
                 y=alt.Y("file_size_gb:Q", title="Tamano (GB)", stack="normalize"),
-                color=decision_color("decision"),
+                color=_decision_color(),
                 tooltip=[
                     "library",
                     "decision",
@@ -605,7 +748,7 @@ def _render_view(
             )
             .add_params(lib_sel, dec_sel)
         )
-        _chart(chart_space)
+        chart_space = _chart(chart_space)
         chart_export = chart_space
 
         total_space = float(agg["file_size_gb"].sum())
@@ -699,7 +842,7 @@ def _render_view(
                         ],
                     )
                 )
-                _chart(comp_chart)
+                comp_chart = _chart(comp_chart)
 
         tooltip_common = [
             alt.Tooltip("library:N", title="Biblioteca"),
@@ -708,15 +851,15 @@ def _render_view(
         ]
         ref_line = (
             alt.Chart(pd.DataFrame({"imdb_rating": [imdb_ref]}))
-            .mark_rule(color="#666", strokeDash=[4, 4])
+            .mark_rule(color=ref_color, strokeDash=[4, 4])
             .encode(y=alt.Y("imdb_rating:Q"))
         )
         mean_line = (
             alt.Chart(pd.DataFrame({"imdb_rating": [global_mean]}))
-            .mark_rule(color="#9bd4ff", strokeDash=[2, 2])
+            .mark_rule(color=mean_color, strokeDash=[2, 2])
             .encode(y=alt.Y("imdb_rating:Q"))
         )
-        color_scale = alt.Scale(scheme="blues")
+        color_scale = boxplot_scale
         chart_box = (
             alt.Chart(data)
             .mark_boxplot(size=40)
@@ -747,7 +890,7 @@ def _render_view(
         )
         chart_median = (
             alt.Chart(stats)
-            .mark_tick(color="#ffffff", thickness=2)
+            .mark_tick(color=median_color, thickness=2)
             .encode(
                 x=(
                     alt.X("library:N", sort=order)
@@ -783,14 +926,14 @@ def _render_view(
                     if not horizontal
                     else alt.Y("library:N", sort=order)
                 ),
-                color=alt.value("#9bd4ff"),
+                color=alt.value(accent_color),
                 tooltip=_movie_tooltips(data),
                 opacity=alt.condition(lib_sel, alt.value(1), alt.value(0.1)),
             )
             .add_params(lib_sel)
         )
         chart = chart_strip + chart_box + chart_median + ref_line + mean_line
-        _chart(chart)
+        chart = _chart(chart)
         chart_export = chart
 
     # 9) Ranking de directores
@@ -822,7 +965,7 @@ def _render_view(
             .encode(
                 x=alt.X("director_list:N", title="Director", sort=top_directors),
                 y=alt.Y("count:Q", title="Peliculas"),
-                color=decision_color("decision"),
+                color=_decision_color(),
                 tooltip=[
                     alt.Tooltip("director_list:N", title="Director"),
                     alt.Tooltip("decision:N", title="Decision"),
@@ -834,7 +977,7 @@ def _render_view(
             )
             .add_params(dec_sel)
         )
-        _chart(chart)
+        chart = _chart(chart)
         chart_export = chart
 
     # 10) Palabras más frecuentes en títulos DELETE/MAYBE
@@ -856,13 +999,13 @@ def _render_view(
             .encode(
                 x=alt.X("word:N", title="Palabra"),
                 y=alt.Y("count:Q", title="Frecuencia"),
-                color=decision_color("decision"),
+                color=_decision_color(),
                 tooltip=["word", "decision", "count"],
                 opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
             )
             .add_params(dec_sel)
         )
-        _chart(chart)
+        chart = _chart(chart)
         chart_export = chart
 
     return chart_export

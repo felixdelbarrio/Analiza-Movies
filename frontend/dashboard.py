@@ -54,8 +54,14 @@ from frontend.config_front_base import (  # noqa: E402
     FRONT_API_TIMEOUT_S,
     FRONT_DEBUG,
     FRONT_MODE,
-    FRONT_GRID_COLORIZE,
+    get_front_grid_colorize,
     save_front_grid_colorize,
+)
+from frontend.config_front_theme import (  # noqa: E402
+    DEFAULT_THEME_KEY,
+    get_front_theme,
+    normalize_theme_key,
+    save_front_theme,
 )
 from frontend.data_utils import add_derived_columns, format_count_size  # noqa: E402
 from frontend.front_api_client import (  # noqa: E402
@@ -90,6 +96,695 @@ TEXT_COLUMNS: Final[tuple[str, ...]] = (
     "path",
     "library",
 )
+
+THEME_STATE_KEY: Final[str] = "front_theme"
+THEMES: Final[dict[str, dict[str, object]]] = {
+    "noir": {
+        "label": "Noir Onyx",
+        "tagline": "Oscuro cinematografico con contraste premium.",
+        "tokens": {
+            "app_bg": "#0b0f14",
+            "app_decor": "radial-gradient(1100px circle at 8% -12%, rgba(58, 76, 120, 0.35), transparent 55%), radial-gradient(900px circle at 92% -18%, rgba(142, 114, 74, 0.22), transparent 52%)",
+            "text_1": "#f1f5f9",
+            "text_2": "#d1d5db",
+            "text_3": "#9ca3af",
+            "panel_bg": "linear-gradient(180deg, #121826 0%, #0f141d 100%)",
+            "panel_border": "#1f2532",
+            "panel_shadow": "0 18px 40px rgba(0, 0, 0, 0.35)",
+            "button_bg": "#171b24",
+            "button_border": "#262c38",
+            "button_hover_bg": "#202635",
+            "button_text": "#f3f4f6",
+            "metric_bg": "#111722",
+            "metric_border": "#202737",
+            "tag_bg": "#2b2f36",
+            "tag_border": "#3a404a",
+            "tag_text": "#e5e7eb",
+            "tabs_bg": "#0f141d",
+            "tabs_border": "#1f2532",
+            "card_bg": "#11161f",
+            "card_border": "#1f2430",
+            "card_shadow": "0 12px 30px rgba(0, 0, 0, 0.25)",
+            "image_shadow": "0 8px 24px rgba(0, 0, 0, 0.35)",
+            "pill_bg": "#171b24",
+            "pill_border": "#262c38",
+            "action_bg": "#171b24",
+            "action_border": "#262c38",
+            "action_text": "#e5e7eb",
+            "action_hover_bg": "#202635",
+            "divider": "#242a35",
+            "summary_bg": "linear-gradient(180deg, rgba(22, 27, 38, 0.9), rgba(15, 20, 29, 0.95))",
+            "summary_border": "#242b38",
+            "summary_text": "#dbe2ea",
+        },
+    },
+    "ivory": {
+        "label": "Ivory Atelier",
+        "tagline": "Marfil editorial con luz suave y calidez de estudio.",
+        "tokens": {
+            "app_bg": "#f4efe7",
+            "app_decor": "radial-gradient(1200px circle at 10% -18%, rgba(208, 183, 146, 0.45), transparent 58%), radial-gradient(900px circle at 95% -12%, rgba(171, 140, 98, 0.25), transparent 50%)",
+            "text_1": "#2b2621",
+            "text_2": "#4c4338",
+            "text_3": "#8a7a68",
+            "panel_bg": "linear-gradient(180deg, #ffffff 0%, #f1e7d9 100%)",
+            "panel_border": "#dccbb7",
+            "panel_shadow": "0 16px 34px rgba(86, 60, 32, 0.18)",
+            "button_bg": "#f6efe4",
+            "button_border": "#d9c7b2",
+            "button_hover_bg": "#efe3d2",
+            "button_text": "#2a2722",
+            "metric_bg": "#fbf7f2",
+            "metric_border": "#e1d2bf",
+            "tag_bg": "#efe6da",
+            "tag_border": "#d7c6b4",
+            "tag_text": "#362f27",
+            "tabs_bg": "#f6efe4",
+            "tabs_border": "#dccbb7",
+            "card_bg": "#fdfaf6",
+            "card_border": "#e1d4c3",
+            "card_shadow": "0 12px 30px rgba(108, 84, 55, 0.18)",
+            "image_shadow": "0 10px 28px rgba(110, 84, 54, 0.18)",
+            "pill_bg": "#f3eadf",
+            "pill_border": "#dac9b6",
+            "action_bg": "#f3eadf",
+            "action_border": "#d7c6b4",
+            "action_text": "#2d2720",
+            "action_hover_bg": "#e8d8c5",
+            "divider": "#e0d2c2",
+            "summary_bg": "linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(240, 226, 210, 0.92))",
+            "summary_border": "#decdb8",
+            "summary_text": "#3d3329",
+        },
+    },
+    "sapphire": {
+        "label": "Sapphire Executive",
+        "tagline": "Azul ejecutivo con brillo frio y precision.",
+        "tokens": {
+            "app_bg": "#0b1220",
+            "app_decor": "radial-gradient(1200px circle at 8% -18%, rgba(72, 118, 186, 0.35), transparent 56%), radial-gradient(900px circle at 92% -14%, rgba(60, 98, 146, 0.22), transparent 52%)",
+            "text_1": "#eef3ff",
+            "text_2": "#c6d2e6",
+            "text_3": "#8fa3c4",
+            "panel_bg": "linear-gradient(180deg, #111d32 0%, #0e1526 100%)",
+            "panel_border": "#22304a",
+            "panel_shadow": "0 18px 40px rgba(4, 12, 32, 0.45)",
+            "button_bg": "#162033",
+            "button_border": "#2a3a57",
+            "button_hover_bg": "#1d2a43",
+            "button_text": "#e6eefc",
+            "metric_bg": "#111a2c",
+            "metric_border": "#24324d",
+            "tag_bg": "#1d2535",
+            "tag_border": "#2c3a55",
+            "tag_text": "#e6eefc",
+            "tabs_bg": "#0f1726",
+            "tabs_border": "#22304a",
+            "card_bg": "#101a2b",
+            "card_border": "#21314a",
+            "card_shadow": "0 12px 30px rgba(3, 11, 28, 0.35)",
+            "image_shadow": "0 8px 24px rgba(2, 8, 20, 0.45)",
+            "pill_bg": "#162033",
+            "pill_border": "#2a3a57",
+            "action_bg": "#162033",
+            "action_border": "#2a3a57",
+            "action_text": "#e6eefc",
+            "action_hover_bg": "#1d2a43",
+            "divider": "#28344a",
+            "summary_bg": "linear-gradient(180deg, rgba(20, 30, 50, 0.92), rgba(14, 21, 38, 0.94))",
+            "summary_border": "#273755",
+            "summary_text": "#e6edf8",
+        },
+    },
+    "verdant": {
+        "label": "Verdant Club",
+        "tagline": "Verde sobrio con aire de lounge privado.",
+        "tokens": {
+            "app_bg": "#0c1412",
+            "app_decor": "radial-gradient(1100px circle at 8% -16%, rgba(74, 120, 104, 0.3), transparent 55%), radial-gradient(900px circle at 92% -14%, rgba(64, 104, 90, 0.22), transparent 52%)",
+            "text_1": "#eef6f1",
+            "text_2": "#c9d7d1",
+            "text_3": "#93a39b",
+            "panel_bg": "linear-gradient(180deg, #12201c 0%, #0f1714 100%)",
+            "panel_border": "#23322d",
+            "panel_shadow": "0 18px 40px rgba(4, 14, 10, 0.5)",
+            "button_bg": "#17221e",
+            "button_border": "#2a3b34",
+            "button_hover_bg": "#1f2b26",
+            "button_text": "#e3efe8",
+            "metric_bg": "#121b17",
+            "metric_border": "#26342e",
+            "tag_bg": "#1b2621",
+            "tag_border": "#2b3a33",
+            "tag_text": "#e3efe8",
+            "tabs_bg": "#111b18",
+            "tabs_border": "#23322d",
+            "card_bg": "#111b17",
+            "card_border": "#22312b",
+            "card_shadow": "0 12px 30px rgba(4, 12, 9, 0.35)",
+            "image_shadow": "0 8px 24px rgba(6, 16, 12, 0.45)",
+            "pill_bg": "#17221e",
+            "pill_border": "#2a3b34",
+            "action_bg": "#17221e",
+            "action_border": "#2a3b34",
+            "action_text": "#e3efe8",
+            "action_hover_bg": "#1f2b26",
+            "divider": "#293630",
+            "summary_bg": "linear-gradient(180deg, rgba(20, 30, 26, 0.92), rgba(15, 23, 20, 0.95))",
+            "summary_border": "#2a3a33",
+            "summary_text": "#e1ebe6",
+        },
+    },
+    "bordeaux": {
+        "label": "Bordeaux Premier",
+        "tagline": "Burdeos profundo con dramatismo elegante.",
+        "tokens": {
+            "app_bg": "#140c10",
+            "app_decor": "radial-gradient(1100px circle at 8% -18%, rgba(140, 68, 88, 0.28), transparent 58%), radial-gradient(900px circle at 92% -14%, rgba(112, 54, 72, 0.22), transparent 52%)",
+            "text_1": "#f7eef2",
+            "text_2": "#e0c8d3",
+            "text_3": "#b79aa8",
+            "panel_bg": "linear-gradient(180deg, #211118 0%, #170c11 100%)",
+            "panel_border": "#35202b",
+            "panel_shadow": "0 18px 40px rgba(22, 8, 14, 0.5)",
+            "button_bg": "#22131b",
+            "button_border": "#3a2531",
+            "button_hover_bg": "#2b1822",
+            "button_text": "#f3e6ec",
+            "metric_bg": "#1a0f15",
+            "metric_border": "#3a2531",
+            "tag_bg": "#24151d",
+            "tag_border": "#3a2531",
+            "tag_text": "#f1e1e9",
+            "tabs_bg": "#1a1116",
+            "tabs_border": "#35202b",
+            "card_bg": "#1a0f15",
+            "card_border": "#34202a",
+            "card_shadow": "0 12px 30px rgba(16, 6, 10, 0.35)",
+            "image_shadow": "0 8px 24px rgba(16, 6, 10, 0.45)",
+            "pill_bg": "#22131b",
+            "pill_border": "#3a2531",
+            "action_bg": "#22131b",
+            "action_border": "#3a2531",
+            "action_text": "#f1e1e9",
+            "action_hover_bg": "#2b1822",
+            "divider": "#35202b",
+            "summary_bg": "linear-gradient(180deg, rgba(35, 18, 26, 0.92), rgba(22, 12, 17, 0.95))",
+            "summary_border": "#3a2531",
+            "summary_text": "#f3e6ec",
+        },
+    },
+}
+THEME_ORDER: Final[tuple[str, ...]] = (
+    "noir",
+    "ivory",
+    "sapphire",
+    "verdant",
+    "bordeaux",
+)
+
+
+def _resolve_theme_key(raw: str | None) -> str:
+    if not isinstance(raw, str):
+        return DEFAULT_THEME_KEY
+    key = normalize_theme_key(raw)
+    if key in THEMES:
+        return key
+    return DEFAULT_THEME_KEY
+
+
+def _theme_label(theme_key: str) -> str:
+    theme = THEMES.get(theme_key, THEMES[DEFAULT_THEME_KEY])
+    return cast(str, theme.get("label", theme_key))
+
+
+def _theme_tagline(theme_key: str) -> str:
+    theme = THEMES.get(theme_key, THEMES[DEFAULT_THEME_KEY])
+    return cast(str, theme.get("tagline", ""))
+
+
+def _theme_tokens(theme_key: str) -> dict[str, str]:
+    theme = THEMES.get(theme_key, THEMES[DEFAULT_THEME_KEY])
+    tokens = theme.get("tokens", {})
+    return cast(dict[str, str], tokens)
+
+
+def _apply_theme(theme_key: str) -> None:
+    tokens = _theme_tokens(theme_key)
+    st.session_state["front_theme_tokens"] = dict(tokens)
+    st.markdown(
+        f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&family=Manrope:wght@400;500;600;700&display=swap');
+:root {{
+  --mc-font-body: "Manrope", "Segoe UI", sans-serif;
+  --mc-font-display: "Libre Baskerville", "Times New Roman", serif;
+  --mc-app-bg: {tokens["app_bg"]};
+  --mc-app-decor: {tokens["app_decor"]};
+  --mc-text-1: {tokens["text_1"]};
+  --mc-text-2: {tokens["text_2"]};
+  --mc-text-3: {tokens["text_3"]};
+  --mc-panel-bg: {tokens["panel_bg"]};
+  --mc-panel-border: {tokens["panel_border"]};
+  --mc-panel-shadow: {tokens["panel_shadow"]};
+  --mc-button-bg: {tokens["button_bg"]};
+  --mc-button-border: {tokens["button_border"]};
+  --mc-button-hover-bg: {tokens["button_hover_bg"]};
+  --mc-button-text: {tokens["button_text"]};
+  --mc-metric-bg: {tokens["metric_bg"]};
+  --mc-metric-border: {tokens["metric_border"]};
+  --mc-tag-bg: {tokens["tag_bg"]};
+  --mc-tag-border: {tokens["tag_border"]};
+  --mc-tag-text: {tokens["tag_text"]};
+  --mc-tabs-bg: {tokens["tabs_bg"]};
+  --mc-tabs-border: {tokens["tabs_border"]};
+  --mc-card-bg: {tokens["card_bg"]};
+  --mc-card-border: {tokens["card_border"]};
+  --mc-card-shadow: {tokens["card_shadow"]};
+  --mc-image-shadow: {tokens["image_shadow"]};
+  --mc-pill-bg: {tokens["pill_bg"]};
+  --mc-pill-border: {tokens["pill_border"]};
+  --mc-action-bg: {tokens["action_bg"]};
+  --mc-action-border: {tokens["action_border"]};
+  --mc-action-text: {tokens["action_text"]};
+  --mc-action-hover-bg: {tokens["action_hover_bg"]};
+  --mc-divider: {tokens["divider"]};
+  --mc-summary-bg: {tokens["summary_bg"]};
+  --mc-summary-border: {tokens["summary_border"]};
+  --mc-summary-text: {tokens["summary_text"]};
+  --mc-input-bg: {tokens["button_bg"]};
+  --mc-input-border: {tokens["button_border"]};
+  --mc-input-hover: {tokens["button_hover_bg"]};
+  --mc-input-focus: {tokens["panel_border"]};
+  --mc-input-text: {tokens["text_1"]};
+  --mc-input-placeholder: {tokens["text_3"]};
+  --mc-grid-bg: {tokens["card_bg"]};
+  --mc-grid-header-bg: {tokens["button_bg"]};
+  --mc-grid-header-text: {tokens["text_1"]};
+  --mc-grid-text: {tokens["text_2"]};
+  --mc-grid-border: {tokens["panel_border"]};
+  --mc-grid-row-alt: {tokens["metric_bg"]};
+  --mc-grid-row-hover: {tokens["tag_bg"]};
+  --mc-grid-selected: {tokens["button_hover_bg"]};
+  --gdg-bg-cell: var(--mc-grid-bg);
+  --gdg-bg-cell-medium: var(--mc-grid-row-alt);
+  --gdg-bg-cell-hover: var(--mc-grid-row-hover);
+  --gdg-bg-cell-selected: var(--mc-grid-selected);
+  --gdg-bg-header: var(--mc-grid-header-bg);
+  --gdg-bg-header-hovered: var(--mc-grid-row-hover);
+  --gdg-bg-header-selected: var(--mc-grid-selected);
+  --gdg-bg-header-selected-hover: var(--mc-grid-selected);
+  --gdg-bg-header-has-focus: var(--mc-grid-header-bg);
+  --gdg-text-dark: var(--mc-grid-text);
+  --gdg-text-medium: var(--mc-grid-text);
+  --gdg-text-light: var(--mc-text-3);
+  --gdg-border-color: var(--mc-grid-border);
+  --gdg-horizontal-border-color: var(--mc-grid-border);
+  --gdg-vertical-border-color: var(--mc-grid-border);
+  --gdg-drilldown: var(--mc-grid-selected);
+}}
+body,
+.stApp,
+div[data-testid="stAppViewContainer"] {{
+  background-color: var(--mc-app-bg) !important;
+  background-image: var(--mc-app-decor);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  color: var(--mc-text-1);
+  font-family: var(--mc-font-body);
+}}
+div[data-testid="stAppViewContainer"] h1,
+div[data-testid="stAppViewContainer"] h2,
+div[data-testid="stAppViewContainer"] h3,
+div[data-testid="stAppViewContainer"] h4,
+div[data-testid="stAppViewContainer"] h5,
+div[data-testid="stAppViewContainer"] h6 {{
+  color: var(--mc-text-1);
+  font-family: var(--mc-font-display);
+  letter-spacing: 0.01em;
+}}
+div[data-testid="stAppViewContainer"] [data-testid="stMarkdownContainer"] p,
+div[data-testid="stAppViewContainer"] [data-testid="stMarkdownContainer"] li,
+div[data-testid="stAppViewContainer"] [data-testid="stMarkdownContainer"] span {{
+  color: var(--mc-text-2);
+}}
+div[data-testid="stAppViewContainer"] [data-testid="stMetricValue"] {{
+  color: var(--mc-text-1);
+}}
+div[data-testid="stAppViewContainer"] [data-testid="stMetricLabel"] {{
+  color: var(--mc-text-3);
+}}
+div[data-testid="stAppViewContainer"] a {{
+  color: var(--mc-text-1);
+}}
+div[data-testid="stAppViewContainer"] a:hover {{
+  color: var(--mc-text-2);
+}}
+div[data-testid="stAppViewContainer"] section.main,
+div[data-testid="stAppViewContainer"] div.block-container {{
+  background: transparent !important;
+}}
+div[data-testid="stDialog"],
+div[role="dialog"] {{
+  color: var(--mc-text-1);
+}}
+div[data-testid="stDialog"] > div,
+div[data-testid="stDialog"] [data-testid="stDialogContent"],
+div[role="dialog"] > div {{
+  background: var(--mc-card-bg);
+  border: 1px solid var(--mc-card-border);
+  box-shadow: var(--mc-card-shadow);
+}}
+div[data-testid="stDialog"] h1,
+div[data-testid="stDialog"] h2,
+div[data-testid="stDialog"] h3,
+div[data-testid="stDialog"] h4 {{
+  color: var(--mc-text-1);
+}}
+div[data-testid="stDialog"] [data-testid="stWidgetLabel"] > div,
+div[data-testid="stDialog"] [data-testid="stWidgetLabel"] span,
+div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] p {{
+  color: var(--mc-text-1) !important;
+}}
+div[data-testid="stDialog"] [data-testid="stCheckbox"] label,
+div[data-testid="stDialog"] [data-testid="stCheckbox"] span {{
+  color: var(--mc-text-1) !important;
+}}
+div[data-testid="stSelectbox"] label,
+div[data-testid="stMultiSelect"] label,
+div[data-testid="stTextInput"] label,
+div[data-testid="stNumberInput"] label,
+div[data-testid="stTextArea"] label,
+div[data-testid="stSlider"] label,
+div[data-testid="stDateInput"] label,
+div[data-testid="stCheckbox"] label,
+div[data-testid="stRadio"] label {{
+  color: var(--mc-text-1) !important;
+  font-weight: 600;
+}}
+div[data-baseweb="input"] > div,
+div[data-baseweb="select"] > div,
+div[data-baseweb="textarea"] > div {{
+  background-color: var(--mc-input-bg) !important;
+  border: 1px solid var(--mc-input-border) !important;
+  box-shadow: none !important;
+}}
+div[data-baseweb="input"] > div:focus-within,
+div[data-baseweb="select"] > div:focus-within,
+div[data-baseweb="textarea"] > div:focus-within {{
+  border-color: var(--mc-input-focus) !important;
+  box-shadow: 0 0 0 1px var(--mc-input-focus) !important;
+}}
+div[data-baseweb="input"] input,
+div[data-baseweb="textarea"] textarea {{
+  color: var(--mc-input-text) !important;
+  caret-color: var(--mc-input-text);
+}}
+div[data-baseweb="input"] input::placeholder,
+div[data-baseweb="textarea"] textarea::placeholder {{
+  color: var(--mc-input-placeholder) !important;
+}}
+div[data-baseweb="select"] div[role="combobox"],
+div[data-baseweb="select"] span,
+div[data-baseweb="select"] input {{
+  color: var(--mc-input-text) !important;
+}}
+div[data-baseweb="select"] {{
+  color: var(--mc-input-text) !important;
+}}
+div[data-baseweb="select"] * {{
+  color: var(--mc-input-text) !important;
+}}
+div[data-baseweb="select"] [class*="placeholder"] {{
+  color: var(--mc-input-placeholder) !important;
+}}
+div[data-baseweb="select"] [class*="singleValue"] {{
+  color: var(--mc-input-text) !important;
+}}
+div[data-baseweb="select"] svg {{
+  color: var(--mc-text-2) !important;
+  fill: var(--mc-text-2) !important;
+}}
+div[data-baseweb="select"] [aria-label="Clear value"] svg,
+div[data-baseweb="select"] [aria-label="Clear"] svg,
+div[data-baseweb="select"] [title="Clear"] svg {{
+  color: var(--mc-text-2) !important;
+  fill: var(--mc-text-2) !important;
+}}
+div[data-baseweb="popover"] div[role="listbox"],
+div[data-baseweb="menu"],
+div[role="listbox"] {{
+  background-color: var(--mc-card-bg) !important;
+  background: var(--mc-card-bg) !important;
+  border: 1px solid var(--mc-panel-border) !important;
+  box-shadow: var(--mc-card-shadow);
+}}
+div[data-baseweb="popover"],
+div[data-baseweb="popover"] > div,
+div[data-baseweb="popover"] > div > div {{
+  background-color: var(--mc-card-bg) !important;
+  background: var(--mc-card-bg) !important;
+}}
+ul[role="listbox"] {{
+  background-color: var(--mc-card-bg) !important;
+  background: var(--mc-card-bg) !important;
+  border: 1px solid var(--mc-panel-border) !important;
+}}
+div[data-baseweb="popover"] div[role="option"],
+div[data-baseweb="menu"] div[role="option"],
+div[role="listbox"] div[role="option"] {{
+  color: var(--mc-text-1) !important;
+  background-color: var(--mc-card-bg) !important;
+  background: var(--mc-card-bg) !important;
+}}
+ul[role="listbox"] li[role="option"] {{
+  color: var(--mc-text-1) !important;
+  background-color: var(--mc-card-bg) !important;
+  background: var(--mc-card-bg) !important;
+}}
+div[data-baseweb="popover"] div[role="option"][aria-selected="true"],
+div[data-baseweb="popover"] div[role="option"]:hover,
+div[data-baseweb="menu"] div[role="option"][aria-selected="true"],
+div[data-baseweb="menu"] div[role="option"]:hover,
+div[role="listbox"] div[role="option"][aria-selected="true"],
+div[role="listbox"] div[role="option"]:hover {{
+  background-color: var(--mc-input-hover) !important;
+  background: var(--mc-input-hover) !important;
+}}
+ul[role="listbox"] li[role="option"][aria-selected="true"],
+ul[role="listbox"] li[role="option"]:hover {{
+  background-color: var(--mc-input-hover) !important;
+  background: var(--mc-input-hover) !important;
+}}
+div[data-testid="stCheckbox"] span[role="checkbox"],
+div[data-testid="stCheckbox"] span[aria-checked] {{
+  background-color: var(--mc-input-bg) !important;
+  border: 1px solid var(--mc-input-border) !important;
+}}
+div[data-testid="stCheckbox"] svg {{
+  color: var(--mc-text-1) !important;
+  fill: var(--mc-text-1) !important;
+}}
+div[data-baseweb="checkbox"] [role="checkbox"],
+div[data-baseweb="checkbox"] [aria-checked] {{
+  background-color: var(--mc-input-bg) !important;
+  border: 1px solid var(--mc-input-border) !important;
+}}
+div[data-baseweb="checkbox"] svg {{
+  color: var(--mc-text-1) !important;
+  fill: var(--mc-text-1) !important;
+}}
+div[data-baseweb="checkbox"] label,
+div[data-baseweb="checkbox"] span {{
+  color: var(--mc-text-1) !important;
+}}
+div[data-testid="stDialog"] header,
+div[data-testid="stDialog"] header h1,
+div[data-testid="stDialog"] header h2,
+div[data-testid="stDialog"] header h3 {{
+  color: var(--mc-text-1) !important;
+}}
+button[data-testid="baseButton-primary"],
+button[data-testid="stBaseButton-primary"],
+button[data-testid="baseButton-secondary"],
+button[data-testid="stBaseButton-secondary"] {{
+  background: var(--mc-button-bg) !important;
+  border: 1px solid var(--mc-button-border) !important;
+  color: var(--mc-button-text) !important;
+  box-shadow: none !important;
+}}
+button[data-testid="baseButton-primary"] span,
+button[data-testid="stBaseButton-primary"] span,
+button[data-testid="baseButton-secondary"] span,
+button[data-testid="stBaseButton-secondary"] span {{
+  color: var(--mc-button-text) !important;
+}}
+button[data-testid="baseButton-primary"]:hover,
+button[data-testid="stBaseButton-primary"]:hover,
+button[data-testid="baseButton-secondary"]:hover,
+button[data-testid="stBaseButton-secondary"]:hover {{
+  background: var(--mc-button-hover-bg) !important;
+}}
+.ag-theme-alpine,
+.ag-theme-alpine-dark,
+.ag-theme-streamlit {{
+  --ag-background-color: var(--mc-grid-bg);
+  --ag-header-background-color: var(--mc-grid-header-bg);
+  --ag-header-foreground-color: var(--mc-grid-header-text);
+  --ag-foreground-color: var(--mc-grid-text);
+  --ag-odd-row-background-color: var(--mc-grid-row-alt);
+  --ag-row-hover-color: var(--mc-grid-row-hover);
+  --ag-selected-row-background-color: var(--mc-grid-selected);
+  --ag-border-color: var(--mc-grid-border);
+  --ag-row-border-color: var(--mc-divider);
+  --ag-font-family: var(--mc-font-body);
+}}
+.ag-theme-alpine,
+.ag-theme-alpine-dark,
+.ag-theme-streamlit {{
+  background-color: var(--mc-grid-bg) !important;
+  color: var(--mc-grid-text) !important;
+}}
+.ag-theme-alpine .ag-root-wrapper,
+.ag-theme-alpine-dark .ag-root-wrapper,
+.ag-theme-streamlit .ag-root-wrapper,
+.ag-theme-alpine .ag-root-wrapper-body,
+.ag-theme-alpine-dark .ag-root-wrapper-body,
+.ag-theme-streamlit .ag-root-wrapper-body,
+.ag-theme-alpine .ag-root,
+.ag-theme-alpine-dark .ag-root,
+.ag-theme-streamlit .ag-root,
+.ag-theme-alpine .ag-body-viewport,
+.ag-theme-alpine-dark .ag-body-viewport,
+.ag-theme-streamlit .ag-body-viewport,
+.ag-theme-alpine .ag-center-cols-clipper,
+.ag-theme-alpine-dark .ag-center-cols-clipper,
+.ag-theme-streamlit .ag-center-cols-clipper,
+.ag-theme-alpine .ag-center-cols-container,
+.ag-theme-alpine-dark .ag-center-cols-container,
+.ag-theme-streamlit .ag-center-cols-container {{
+  background-color: var(--mc-grid-bg) !important;
+}}
+.ag-theme-alpine .ag-header,
+.ag-theme-alpine-dark .ag-header,
+.ag-theme-streamlit .ag-header {{
+  background-color: var(--mc-grid-header-bg) !important;
+  border-bottom: 1px solid var(--mc-grid-border) !important;
+}}
+.ag-theme-alpine .ag-header-cell,
+.ag-theme-alpine-dark .ag-header-cell,
+.ag-theme-streamlit .ag-header-cell,
+.ag-theme-alpine .ag-header-group-cell,
+.ag-theme-alpine-dark .ag-header-group-cell,
+.ag-theme-streamlit .ag-header-group-cell {{
+  background-color: var(--mc-grid-header-bg) !important;
+  color: var(--mc-grid-header-text) !important;
+  border-color: var(--mc-grid-border) !important;
+}}
+.ag-theme-alpine .ag-cell,
+.ag-theme-alpine-dark .ag-cell,
+.ag-theme-streamlit .ag-cell {{
+  color: inherit !important;
+  border-color: var(--mc-grid-border) !important;
+}}
+.ag-theme-alpine .ag-row,
+.ag-theme-alpine-dark .ag-row,
+.ag-theme-streamlit .ag-row {{
+  border-color: var(--mc-grid-border) !important;
+}}
+.ag-theme-alpine .ag-row-odd,
+.ag-theme-alpine-dark .ag-row-odd,
+.ag-theme-streamlit .ag-row-odd {{
+  background-color: var(--mc-grid-row-alt) !important;
+}}
+.ag-theme-alpine .ag-row-hover,
+.ag-theme-alpine-dark .ag-row-hover,
+.ag-theme-streamlit .ag-row-hover {{
+  background-color: var(--mc-grid-row-hover) !important;
+}}
+.ag-theme-alpine .ag-row-selected,
+.ag-theme-alpine-dark .ag-row-selected,
+.ag-theme-streamlit .ag-row-selected {{
+  background-color: var(--mc-grid-selected) !important;
+}}
+.ag-theme-alpine .ag-icon,
+.ag-theme-alpine-dark .ag-icon,
+.ag-theme-streamlit .ag-icon {{
+  color: var(--mc-grid-header-text) !important;
+  fill: var(--mc-grid-header-text) !important;
+}}
+.ag-theme-alpine .ag-paging-panel,
+.ag-theme-alpine-dark .ag-paging-panel,
+.ag-theme-streamlit .ag-paging-panel {{
+  color: var(--mc-grid-text) !important;
+}}
+div[data-testid="stDataFrame"] {{
+  background-color: var(--mc-grid-bg) !important;
+  border: 1px solid var(--mc-grid-border) !important;
+  border-radius: 12px;
+  overflow: hidden;
+  --gdg-bg-cell: var(--mc-grid-bg);
+  --gdg-bg-cell-medium: var(--mc-grid-row-alt);
+  --gdg-bg-cell-hover: var(--mc-grid-row-hover);
+  --gdg-bg-cell-selected: var(--mc-grid-selected);
+  --gdg-bg-header: var(--mc-grid-header-bg);
+  --gdg-bg-header-hovered: var(--mc-grid-row-hover);
+  --gdg-bg-header-selected: var(--mc-grid-selected);
+  --gdg-bg-header-selected-hover: var(--mc-grid-selected);
+  --gdg-text-dark: var(--mc-grid-text);
+  --gdg-text-medium: var(--mc-grid-text);
+  --gdg-text-light: var(--mc-text-3);
+  --gdg-border-color: var(--mc-grid-border);
+  --gdg-horizontal-border-color: var(--mc-grid-border);
+  --gdg-vertical-border-color: var(--mc-grid-border);
+  --gdg-drilldown: var(--mc-grid-selected);
+}}
+glide-data-grid,
+div[data-testid="stDataFrame"] glide-data-grid,
+div[data-testid="stDataFrame"] .glide-data-grid {{
+  background-color: var(--mc-grid-bg) !important;
+  color: var(--mc-grid-text) !important;
+}}
+div[data-testid="stDataFrame"] canvas {{
+  background-color: var(--mc-grid-bg) !important;
+}}
+div[data-testid="stDataFrame"] [role="grid"],
+div[data-testid="stDataFrame"] [role="table"] {{
+  background-color: var(--mc-grid-bg) !important;
+  color: var(--mc-grid-text) !important;
+}}
+div[data-testid="stDataFrame"] [role="columnheader"],
+div[data-testid="stDataFrame"] [role="rowheader"] {{
+  background-color: var(--mc-grid-header-bg) !important;
+  color: var(--mc-grid-header-text) !important;
+  border-color: var(--mc-grid-border) !important;
+}}
+div[data-testid="stDataFrame"] [role="row"] {{
+  background-color: var(--mc-grid-bg) !important;
+}}
+div[data-testid="stDataFrame"] [role="row"]:nth-child(even) {{
+  background-color: var(--mc-grid-row-alt) !important;
+}}
+div[data-testid="stDataFrame"] [role="gridcell"] {{
+  color: var(--mc-grid-text) !important;
+  border-color: var(--mc-grid-border) !important;
+}}
+.theme-preview {{
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.2rem;
+}}
+.theme-chip {{
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid var(--mc-panel-border);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.25);
+}}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
 
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -307,6 +1002,9 @@ def _ui_error(msg: str) -> None:
 # =============================================================================
 
 st.set_page_config(page_title="Movies Cleaner — Dashboard", layout="wide")
+if THEME_STATE_KEY not in st.session_state:
+    st.session_state[THEME_STATE_KEY] = _resolve_theme_key(get_front_theme())
+_apply_theme(_resolve_theme_key(st.session_state.get(THEME_STATE_KEY)))
 
 # =============================================================================
 # 5) UI base
@@ -486,9 +1184,10 @@ def _render_config_container(body: Callable[[], None]) -> bool:
 
 
 if "grid_colorize_rows" not in st.session_state:
-    st.session_state["grid_colorize_rows"] = FRONT_GRID_COLORIZE
+    st.session_state["grid_colorize_rows"] = get_front_grid_colorize()
 
 CONFIG_COLORIZE_KEY = "config_colorize"
+CONFIG_THEME_KEY = "config_theme"
 CONFIG_SHOW_NUMERIC_KEY = "config_show_numeric_filters"
 CONFIG_SHOW_THRESHOLDS_KEY = "config_show_chart_thresholds"
 CONFIG_VIEWS_KEY = "config_dashboard_views"
@@ -502,7 +1201,10 @@ if st.session_state.get("config_open"):
     def _load_config_defaults() -> dict[str, object]:
         return {
             CONFIG_COLORIZE_KEY: bool(
-                st.session_state.get("grid_colorize_rows", FRONT_GRID_COLORIZE)
+                st.session_state.get("grid_colorize_rows", get_front_grid_colorize())
+            ),
+            CONFIG_THEME_KEY: _resolve_theme_key(
+                st.session_state.get(THEME_STATE_KEY, get_front_theme())
             ),
             CONFIG_SHOW_NUMERIC_KEY: get_show_numeric_filters(),
             CONFIG_SHOW_THRESHOLDS_KEY: get_show_chart_thresholds(),
@@ -521,6 +1223,27 @@ if st.session_state.get("config_open"):
 
     def _config_body() -> None:
         st.subheader("Preferencias")
+        theme_key = st.selectbox(
+            "Tema de interfaz",
+            list(THEME_ORDER),
+            key=CONFIG_THEME_KEY,
+            format_func=_theme_label,
+        )
+        theme_tagline = _theme_tagline(theme_key)
+        if theme_tagline:
+            st.caption(theme_tagline)
+        preview_tokens = _theme_tokens(theme_key)
+        st.markdown(
+            f"""
+<div class="theme-preview">
+  <span class="theme-chip" style="background: {preview_tokens["app_bg"]}; border: 1px solid {preview_tokens["panel_border"]};"></span>
+  <span class="theme-chip" style="background: {preview_tokens["panel_bg"]}; border: 1px solid {preview_tokens["panel_border"]};"></span>
+  <span class="theme-chip" style="background: {preview_tokens["button_bg"]}; border: 1px solid {preview_tokens["button_border"]};"></span>
+  <span class="theme-chip" style="background: {preview_tokens["summary_bg"]}; border: 1px solid {preview_tokens["summary_border"]};"></span>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
         colorize = st.checkbox(
             "Señalética de color en tablas",
             key=CONFIG_COLORIZE_KEY,
@@ -544,10 +1267,13 @@ if st.session_state.get("config_open"):
                 if len(exec_views) > 3:
                     st.error("Selecciona un maximo de 3 graficos.")
                     return
+                resolved_theme = _resolve_theme_key(theme_key)
+                save_front_theme(resolved_theme)
                 save_front_grid_colorize(colorize)
                 save_dashboard_views(exec_views)
                 save_show_numeric_filters(show_numeric_filters)
                 save_show_chart_thresholds(show_chart_thresholds)
+                st.session_state[THEME_STATE_KEY] = resolved_theme
                 st.session_state["grid_colorize_rows"] = colorize
                 st.session_state["config_open"] = False
                 st.session_state[CONFIG_EDITING_KEY] = False
@@ -579,11 +1305,11 @@ with st.container():
 <div id="summary-card-anchor"></div>
 <style>
 div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) {
-  background: linear-gradient(180deg, #121826 0%, #0f141d 100%);
-  border: 1px solid #1f2532;
+  background: var(--mc-panel-bg);
+  border: 1px solid var(--mc-panel-border);
   border-radius: 18px;
   padding: 24px 26px 22px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--mc-panel-shadow);
 }
 div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) h1 {
   margin: 0;
@@ -610,27 +1336,27 @@ div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="b
 }
 div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="stBaseButton-secondary"] span,
 div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="baseButton-secondary"] span {
-  color: inherit !important;
+  color: var(--mc-button-text) !important;
   font-size: 0.95rem;
   font-weight: 700;
   padding: 0.35rem 0.75rem;
   border-radius: 0.6rem;
-  background: #171b24;
-  border: 1px solid #262c38;
+  background: var(--mc-button-bg);
+  border: 1px solid var(--mc-button-border);
 }
 div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="stBaseButton-secondary"]:hover span,
 div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="baseButton-secondary"]:hover span {
-  color: #f3f4f6 !important;
-  background: #202635;
+  color: var(--mc-button-text) !important;
+  background: var(--mc-button-hover-bg);
 }
 div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) [data-testid="stMetric"] {
-  background: #111722;
-  border: 1px solid #202737;
+  background: var(--mc-metric-bg);
+  border: 1px solid var(--mc-metric-border);
   border-radius: 12px;
   padding: 0.65rem 0.75rem;
 }
 div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) [data-testid="stMetricLabel"] {
-  color: #9ca3af;
+  color: var(--mc-text-3);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   font-size: 0.72rem;
@@ -680,11 +1406,16 @@ st.markdown(
     """
 <style>
 div[data-testid="stMultiSelect"] [data-baseweb="tag"] {
-  background-color: #2b2f36 !important;
-  border: 1px solid #3a404a !important;
+  background-color: var(--mc-tag-bg) !important;
+  border: 1px solid var(--mc-tag-border) !important;
 }
 div[data-testid="stMultiSelect"] [data-baseweb="tag"] span {
-  color: #e5e7eb !important;
+  color: var(--mc-tag-text) !important;
+}
+div[data-testid="stMultiSelect"] [data-baseweb="tag"] svg,
+div[data-testid="stMultiSelect"] [data-baseweb="tag"] button {
+  color: var(--mc-tag-text) !important;
+  fill: var(--mc-tag-text) !important;
 }
 .stDataFrame div[data-testid="stDataFrameToolbar"],
 div[data-testid="stDataFrameToolbar"] {
@@ -720,8 +1451,8 @@ st.markdown(
 <style>
 div[data-testid="stVerticalBlock"]:has(#tabs-row-anchor) {
   margin-top: 0.2rem;
-  background: #0f141d;
-  border: 1px solid #1f2532;
+  background: var(--mc-tabs-bg);
+  border: 1px solid var(--mc-tabs-border);
   border-radius: 14px;
   padding: 0.35rem 0.6rem 0.1rem;
 }

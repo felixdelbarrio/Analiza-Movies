@@ -40,6 +40,11 @@ import streamlit as st
 from st_aggrid import GridOptionsBuilder, JsCode
 
 from frontend.config_front_artifacts import OMDB_CACHE_PATH, WIKI_CACHE_PATH
+from frontend.config_front_theme import (
+    get_front_theme,
+    is_dark_theme,
+    normalize_theme_key,
+)
 from frontend.data_utils import safe_json_loads_single
 
 RowDict = dict[str, Any]
@@ -73,6 +78,8 @@ class AgGridCallable(Protocol):
         gridOptions: Mapping[str, Any],
         update_on: Sequence[str],
         enable_enterprise_modules: bool,
+        theme: str | None = None,
+        custom_css: Mapping[str, Mapping[str, str]] | None = None,
         height: int,
         allow_unsafe_jscode: bool | None = None,
         key: str,
@@ -107,6 +114,88 @@ def _columns_with_gap(
         return cast(Sequence[Any], st.columns(spec, gap=gap))
     except TypeError:
         return cast(Sequence[Any], st.columns(spec))
+
+
+def _current_theme_key() -> str:
+    raw = st.session_state.get("front_theme")
+    fallback = get_front_theme()
+    return normalize_theme_key(raw if isinstance(raw, str) else fallback)
+
+
+def _aggrid_theme() -> str:
+    key = _current_theme_key()
+    return "alpine-dark" if is_dark_theme(key) else "alpine"
+
+
+def _theme_tokens() -> dict[str, str]:
+    raw = st.session_state.get("front_theme_tokens")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        out[str(k)] = str(v)
+    return out
+
+
+def _aggrid_custom_css() -> dict[str, dict[str, str]]:
+    tokens = _theme_tokens()
+    if not tokens:
+        return {}
+
+    def _token(key: str, fallback: str) -> str:
+        return tokens.get(key, fallback)
+
+    bg = _token("card_bg", "#11161f")
+    header_bg = _token("button_bg", "#171b24")
+    border = _token("panel_border", "#1f2532")
+    text = _token("text_2", "#d1d5db")
+    text_strong = _token("text_1", "#f1f5f9")
+    row_alt = _token("metric_bg", "#111722")
+    hover = _token("tag_bg", "#2b2f36")
+    selected = _token("button_hover_bg", "#202635")
+
+    return {
+        ".ag-root-wrapper": {
+            "background-color": f"{bg} !important",
+            "border": f"1px solid {border} !important",
+            "border-radius": "12px",
+            "color": text,
+        },
+        ".ag-header": {
+            "background-color": f"{header_bg} !important",
+            "border-bottom": f"1px solid {border} !important",
+            "color": f"{text_strong} !important",
+        },
+        ".ag-header-cell, .ag-header-group-cell": {
+            "background-color": f"{header_bg} !important",
+            "color": f"{text_strong} !important",
+            "border-color": f"{border} !important",
+        },
+        ".ag-row": {
+            "background-color": f"{bg} !important",
+            "color": text,
+        },
+        ".ag-row-odd": {
+            "background-color": f"{row_alt} !important",
+        },
+        ".ag-row-hover": {
+            "background-color": f"{hover} !important",
+        },
+        ".ag-row-selected": {
+            "background-color": f"{selected} !important",
+        },
+        ".ag-cell": {
+            "border-color": f"{border} !important",
+            "color": "inherit !important",
+        },
+        ".ag-icon": {
+            "color": f"{text_strong} !important",
+            "fill": f"{text_strong} !important",
+        },
+        ".ag-paging-panel": {
+            "color": f"{text} !important",
+        },
+    }
 
 
 # ============================================================================
@@ -741,14 +830,17 @@ function(params) {
 
     aggrid_fn = cast(AgGridCallable, getattr(st_aggrid_mod, "AgGrid"))
 
+    theme_key = _current_theme_key()
     grid_response = aggrid_fn(
         df_view.copy(),
         gridOptions=grid_options,
         update_on=["selectionChanged"],
         enable_enterprise_modules=False,
+        theme=_aggrid_theme(),
+        custom_css=_aggrid_custom_css(),
         height=grid_height,
         allow_unsafe_jscode=True,
-        key=f"aggrid_{key_suffix}_{int(colorize_rows)}",
+        key=f"aggrid_{key_suffix}_{int(colorize_rows)}_{theme_key}",
     )
 
     selected_raw = grid_response.get("selected_rows")
@@ -762,6 +854,77 @@ function(params) {
         return None
 
     return dict(selected_rows[0])
+
+
+# ============================================================================
+# Tabla de solo lectura (AgGrid) para vistas simples
+# ============================================================================
+
+
+def aggrid_readonly(df: pd.DataFrame, *, key_suffix: str, height: int = 420) -> None:
+    """
+    Muestra un AgGrid solo-lectura con estilos del tema activo.
+    """
+    if df.empty:
+        st.info("No hay datos para mostrar.")
+        return
+
+    gb = GridOptionsBuilder.from_dataframe(df)
+    gb.configure_selection(selection_mode="single", use_checkbox=False)
+    gb.configure_grid_options(
+        domLayout="normal",
+        suppressRowTransform=True,
+        enableCellTextSelection=True,
+        ensureDomOrder=True,
+        defaultColDef={"resizable": True, "sortable": True},
+    )
+
+    auto_size_js = JsCode(
+        """
+function(params) {
+  if (!params || !params.api || !params.columnApi) {
+    return;
+  }
+  setTimeout(function() {
+    params.api.sizeColumnsToFit();
+  }, 0);
+}
+"""
+    )
+    fit_js = JsCode(
+        """
+function(params) {
+  if (!params || !params.api) {
+    return;
+  }
+  setTimeout(function() {
+    params.api.sizeColumnsToFit();
+  }, 0);
+}
+"""
+    )
+    gb.configure_grid_options(
+        onFirstDataRendered=auto_size_js, onGridSizeChanged=fit_js
+    )
+
+    grid_options = gb.build()
+
+    import st_aggrid as st_aggrid_mod
+
+    aggrid_fn = cast(AgGridCallable, getattr(st_aggrid_mod, "AgGrid"))
+
+    theme_key = _current_theme_key()
+    aggrid_fn(
+        df.copy(),
+        gridOptions=grid_options,
+        update_on=["selectionChanged"],
+        enable_enterprise_modules=False,
+        theme=_aggrid_theme(),
+        custom_css=_aggrid_custom_css(),
+        height=height,
+        allow_unsafe_jscode=True,
+        key=f"aggrid_readonly_{key_suffix}_{theme_key}",
+    )
 
 
 # ============================================================================
@@ -1180,15 +1343,15 @@ def render_detail_card(
             f"""
 <style>
 div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) {{
-  background: #11161f;
-  border: 1px solid #1f2430;
+  background: var(--mc-card-bg);
+  border: 1px solid var(--mc-card-border);
   border-radius: 16px;
   padding: 18px 20px 22px;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--mc-card-shadow);
 }}
 div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) img {{
   border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--mc-image-shadow);
 }}
 div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) h4.detail-title {{
   margin: 0 0 0.5rem 0;
@@ -1196,8 +1359,8 @@ div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) h4.detail-title {{
   align-items: center;
   padding: 0.45rem 0.85rem;
   border-radius: 0.65rem;
-  background: #171b24;
-  border: 1px solid #262c38;
+  background: var(--mc-pill-bg);
+  border: 1px solid var(--mc-pill-border);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 }}
 div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) h4.detail-title a {{
@@ -1214,24 +1377,24 @@ div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) a.detail-action {{
   gap: 0.4rem;
   padding: 0.45rem 0.7rem;
   border-radius: 0.6rem;
-  background: #171b24;
-  border: 1px solid #262c38;
-  color: #e5e7eb !important;
+  background: var(--mc-action-bg);
+  border: 1px solid var(--mc-action-border);
+  color: var(--mc-action-text) !important;
   text-decoration: none !important;
   font-weight: 600;
   width: 100%;
 }}
 div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) a.detail-action:hover {{
-  background: #202635;
+  background: var(--mc-action-hover-bg);
 }}
 div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) hr {{
   border: 0;
   height: 1px;
-  background: #242a35;
+  background: var(--mc-divider);
   margin: 1rem 0;
 }}
 div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) p {{
-  color: #d1d5db;
+  color: var(--mc-text-2);
   line-height: 1.55;
   max-width: 62ch;
   margin-left: auto;
@@ -1243,8 +1406,8 @@ div[data-testid="stVerticalBlock"]:has(#detail-card-modal) p {{
   margin-right: 0;
 }}
 div[data-testid="stVerticalBlock"]:has(#detail-card-modal) .summary-block {{
-  background: linear-gradient(180deg, rgba(22, 27, 38, 0.9), rgba(15, 20, 29, 0.95));
-  border: 1px solid #242b38;
+  background: var(--mc-summary-bg);
+  border: 1px solid var(--mc-summary-border);
   border-radius: 14px;
   padding: 18px 20px;
   width: 100%;
@@ -1257,17 +1420,17 @@ div[data-testid="stVerticalBlock"]:has(#detail-card-modal) .summary-block p {{
   margin: 0;
   line-height: 1.65;
   font-size: 0.98rem;
-  color: #dbe2ea;
+  color: var(--mc-summary-text);
 }}
 div[data-testid="stVerticalBlock"]:has(#detail-card-modal) div[data-testid="stMetric"] {{
-  background: #141a24;
-  border: 1px solid #242b38;
+  background: var(--mc-metric-bg);
+  border: 1px solid var(--mc-metric-border);
   border-radius: 12px;
   padding: 10px 12px;
   text-align: center;
 }}
 div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) [data-testid="stMetricLabel"] {{
-  color: #9ca3af;
+  color: var(--mc-text-3);
   letter-spacing: 0.04em;
   font-size: 0.75rem;
   text-transform: uppercase;

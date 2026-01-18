@@ -33,6 +33,13 @@ _DECISION_LABELS: dict[str, str] = {
 }
 
 
+def _decision_label(value: object) -> str:
+    label = _DECISION_LABELS.get(value) if isinstance(value, str) else None
+    if isinstance(label, str):
+        return label
+    return str(value)
+
+
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -134,7 +141,7 @@ def render(df_all: pd.DataFrame) -> None:
         dec_filter: Sequence[str] = st.multiselect(
             "Decisión",
             decisions,
-            format_func=lambda v: _DECISION_LABELS.get(v, v),
+            format_func=_decision_label,
             key="dec_filter_all_movies",
         )
 
