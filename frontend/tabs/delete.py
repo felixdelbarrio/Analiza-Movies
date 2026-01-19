@@ -32,7 +32,7 @@ import pandas as pd
 import streamlit as st
 from st_aggrid import GridOptionsBuilder, JsCode
 
-from frontend.components import render_grid_toolbar
+from frontend.components import render_decision_chip_styles, render_grid_toolbar
 from frontend.config_front_theme import (
     get_front_theme,
     is_dark_theme,
@@ -46,10 +46,10 @@ DeleteFilesFromRowsFn = Callable[[pd.DataFrame, bool], tuple[int, int, Sequence[
 
 HIDDEN_COLUMNS: set[str] = {"plex_ta"}
 _DECISION_LABELS: dict[str, str] = {
-    "DELETE": "🟥 DELETE",
-    "MAYBE": "🟨 MAYBE",
-    "KEEP": "🟩 KEEP",
-    "UNKNOWN": "⬜ UNKNOWN",
+    "DELETE": "DELETE",
+    "MAYBE": "MAYBE",
+    "KEEP": "KEEP",
+    "UNKNOWN": "UNKNOWN",
 }
 
 
@@ -69,10 +69,10 @@ function(params) {
     return {};
   }
   const d = String(raw).toUpperCase();
-  if (d === "DELETE") return { color: "#e53935" };
-  if (d === "KEEP") return { color: "#43a047" };
-  if (d === "MAYBE") return { color: "#fbc02d" };
-  if (d === "UNKNOWN") return { color: "#9e9e9e" };
+  if (d === "DELETE") return { color: "var(--mc-decision-delete)" };
+  if (d === "KEEP") return { color: "var(--mc-decision-keep)" };
+  if (d === "MAYBE") return { color: "var(--mc-decision-maybe)" };
+  if (d === "UNKNOWN") return { color: "var(--mc-decision-unknown)" };
   return {};
 }
 """
@@ -195,6 +195,10 @@ def _aggrid_custom_css() -> dict[str, dict[str, str]]:
     row_alt = _token("metric_bg", "#111722")
     hover = _token("tag_bg", "#2b2f36")
     selected = _token("button_hover_bg", "#202635")
+    dec_delete = _token("decision_delete", "#e53935")
+    dec_keep = _token("decision_keep", "#43a047")
+    dec_maybe = _token("decision_maybe", "#fbc02d")
+    dec_unknown = _token("decision_unknown", "#9e9e9e")
 
     return {
         ".ag-root-wrapper": {
@@ -202,6 +206,31 @@ def _aggrid_custom_css() -> dict[str, dict[str, str]]:
             "border": f"1px solid {border} !important",
             "border-radius": "12px",
             "color": text,
+            "--mc-decision-delete": dec_delete,
+            "--mc-decision-keep": dec_keep,
+            "--mc-decision-maybe": dec_maybe,
+            "--mc-decision-unknown": dec_unknown,
+        },
+        ".ag-body": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-viewport": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-body-viewport": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-center-cols-viewport": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-center-cols-container": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-body-horizontal-scroll-viewport": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-body-vertical-scroll-viewport": {
+            "background-color": f"{bg} !important",
         },
         ".ag-header": {
             "background-color": f"{header_bg} !important",
@@ -380,8 +409,6 @@ def render(
 
     aggrid_fn = cast(AgGridCallable, getattr(st_aggrid_mod, "AgGrid"))
 
-    st.write("### Candidatas (borrado controlado)")
-
     if df_filtered is None or df_filtered.empty:
         st.info("No hay CSV filtrado. Ejecuta primero el analisis.")
         return
@@ -417,6 +444,12 @@ def render(
                 default=["DELETE", "MAYBE"],
                 format_func=_decision_label,
                 key="dec_filter_delete",
+            )
+            colorize = bool(st.session_state.get("grid_colorize_rows", True))
+            render_decision_chip_styles(
+                "decision-chips-delete",
+                enabled=colorize,
+                selected_values=list(dec_filter),
             )
         else:
             dec_filter = []

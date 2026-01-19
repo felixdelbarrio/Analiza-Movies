@@ -26,6 +26,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from frontend.components import render_decision_chip_styles
 from frontend.data_utils import (
     build_word_counts,
     decision_color,
@@ -91,10 +92,10 @@ _DECISION_PALETTES: Final[dict[str, dict[str, str]]] = {
         "UNKNOWN": "#9aa79f",
     },
     "bordeaux": {
-        "DELETE": "#e06477",
-        "KEEP": "#5aa985",
-        "MAYBE": "#d0a867",
-        "UNKNOWN": "#b5a0aa",
+        "DELETE": "#e24b5f",
+        "KEEP": "#2f9d6d",
+        "MAYBE": "#d79a2b",
+        "UNKNOWN": "#7d8faa",
     },
 }
 _CHART_ACCENTS: Final[dict[str, dict[str, str]]] = {
@@ -102,14 +103,14 @@ _CHART_ACCENTS: Final[dict[str, dict[str, str]]] = {
     "ivory": {"accent": "#c9894c", "accent_soft": "#a56a3b"},
     "sapphire": {"accent": "#8bbcff", "accent_soft": "#5b84d8"},
     "verdant": {"accent": "#88d6b3", "accent_soft": "#4fa47b"},
-    "bordeaux": {"accent": "#e3a0b8", "accent_soft": "#b46a86"},
+    "bordeaux": {"accent": "#2d6fc7", "accent_soft": "#8fb7f1"},
 }
 _BOXPLOT_GRADIENTS: Final[dict[str, tuple[str, str, str]]] = {
     "noir": ("#1b2635", "#3a6ea8", "#8dd2ff"),
     "ivory": ("#ead8c5", "#c9894c", "#7d4421"),
     "sapphire": ("#1a2740", "#406fd1", "#9dd0ff"),
     "verdant": ("#1a2621", "#3f8b6a", "#b0e0cc"),
-    "bordeaux": ("#24141d", "#7d3550", "#e0a0b6"),
+    "bordeaux": ("#eef4ff", "#8fb7f1", "#2d6fc7"),
 }
 
 
@@ -145,7 +146,16 @@ def _token(tokens: dict[str, str], key: str, fallback: str) -> str:
 
 def _decision_palette() -> dict[str, str]:
     theme_key = _current_theme_key()
-    return _DECISION_PALETTES.get(theme_key, _DECISION_PALETTES["noir"])
+    fallback = _DECISION_PALETTES.get(theme_key, _DECISION_PALETTES["noir"])
+    tokens = _theme_tokens()
+    if tokens:
+        return {
+            "DELETE": tokens.get("decision_delete", fallback["DELETE"]),
+            "KEEP": tokens.get("decision_keep", fallback["KEEP"]),
+            "MAYBE": tokens.get("decision_maybe", fallback["MAYBE"]),
+            "UNKNOWN": tokens.get("decision_unknown", fallback["UNKNOWN"]),
+        }
+    return fallback
 
 
 def _decision_color(field: str = "decision") -> alt.Color:
@@ -1049,8 +1059,6 @@ def render(df_all: pd.DataFrame) -> None:
     Args:
         df_all: DataFrame completo (puede venir vacío).
     """
-    st.write("### Gráficos")
-
     if not isinstance(df_all, pd.DataFrame) or df_all.empty:
         st.info("No hay datos para mostrar graficos. Revisa la fuente de datos.")
         return
@@ -1129,6 +1137,12 @@ def render(df_all: pd.DataFrame) -> None:
                         decisions,
                         default=[],
                         key="charts_filter_decision",
+                    )
+                    colorize = bool(st.session_state.get("grid_colorize_rows", True))
+                    render_decision_chip_styles(
+                        "decision-chips-charts",
+                        enabled=colorize,
+                        selected_values=list(selected_decisions) if selected_decisions else [],
                     )
         if show_numeric_filters:
             has_view_filters = view in {
@@ -1263,7 +1277,6 @@ def render(df_all: pd.DataFrame) -> None:
         return
 
     if show_exec:
-        st.subheader("Dashboard")
         available_exec = [v for v in VIEW_OPTIONS if v != "Dashboard"]
         exec_views = get_dashboard_views(available_exec)
         exec_views = exec_views[:3]

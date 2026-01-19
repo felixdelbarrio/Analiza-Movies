@@ -136,6 +136,10 @@ THEMES: Final[dict[str, dict[str, object]]] = {
             "summary_bg": "linear-gradient(180deg, rgba(22, 27, 38, 0.9), rgba(15, 20, 29, 0.95))",
             "summary_border": "#242b38",
             "summary_text": "#dbe2ea",
+            "decision_delete": "#e55b5b",
+            "decision_keep": "#56b37a",
+            "decision_maybe": "#e1b75b",
+            "decision_unknown": "#9da3ad",
         },
     },
     "ivory": {
@@ -175,6 +179,10 @@ THEMES: Final[dict[str, dict[str, object]]] = {
             "summary_bg": "linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(240, 226, 210, 0.92))",
             "summary_border": "#decdb8",
             "summary_text": "#3d3329",
+            "decision_delete": "#b3473f",
+            "decision_keep": "#3f7f5a",
+            "decision_maybe": "#b0883a",
+            "decision_unknown": "#8f7f70",
         },
     },
     "sapphire": {
@@ -214,6 +222,10 @@ THEMES: Final[dict[str, dict[str, object]]] = {
             "summary_bg": "linear-gradient(180deg, rgba(20, 30, 50, 0.92), rgba(14, 21, 38, 0.94))",
             "summary_border": "#273755",
             "summary_text": "#e6edf8",
+            "decision_delete": "#e46b78",
+            "decision_keep": "#4fb08a",
+            "decision_maybe": "#d7b365",
+            "decision_unknown": "#9aa7bd",
         },
     },
     "verdant": {
@@ -253,45 +265,53 @@ THEMES: Final[dict[str, dict[str, object]]] = {
             "summary_bg": "linear-gradient(180deg, rgba(20, 30, 26, 0.92), rgba(15, 23, 20, 0.95))",
             "summary_border": "#2a3a33",
             "summary_text": "#e1ebe6",
+            "decision_delete": "#e06a63",
+            "decision_keep": "#4da97a",
+            "decision_maybe": "#d0b05c",
+            "decision_unknown": "#9aa79f",
         },
     },
     "bordeaux": {
-        "label": "Bordeaux Premier",
-        "tagline": "Burdeos profundo con dramatismo elegante.",
+        "label": "Azure Atelier",
+        "tagline": "Blanco porcelana y azules satinados con calma de galeria.",
         "tokens": {
-            "app_bg": "#140c10",
-            "app_decor": "radial-gradient(1100px circle at 8% -18%, rgba(140, 68, 88, 0.28), transparent 58%), radial-gradient(900px circle at 92% -14%, rgba(112, 54, 72, 0.22), transparent 52%)",
-            "text_1": "#f7eef2",
-            "text_2": "#e0c8d3",
-            "text_3": "#b79aa8",
-            "panel_bg": "linear-gradient(180deg, #211118 0%, #170c11 100%)",
-            "panel_border": "#35202b",
-            "panel_shadow": "0 18px 40px rgba(22, 8, 14, 0.5)",
-            "button_bg": "#22131b",
-            "button_border": "#3a2531",
-            "button_hover_bg": "#2b1822",
-            "button_text": "#f3e6ec",
-            "metric_bg": "#1a0f15",
-            "metric_border": "#3a2531",
-            "tag_bg": "#24151d",
-            "tag_border": "#3a2531",
-            "tag_text": "#f1e1e9",
-            "tabs_bg": "#1a1116",
-            "tabs_border": "#35202b",
-            "card_bg": "#1a0f15",
-            "card_border": "#34202a",
-            "card_shadow": "0 12px 30px rgba(16, 6, 10, 0.35)",
-            "image_shadow": "0 8px 24px rgba(16, 6, 10, 0.45)",
-            "pill_bg": "#22131b",
-            "pill_border": "#3a2531",
-            "action_bg": "#22131b",
-            "action_border": "#3a2531",
-            "action_text": "#f1e1e9",
-            "action_hover_bg": "#2b1822",
-            "divider": "#35202b",
-            "summary_bg": "linear-gradient(180deg, rgba(35, 18, 26, 0.92), rgba(22, 12, 17, 0.95))",
-            "summary_border": "#3a2531",
-            "summary_text": "#f3e6ec",
+            "app_bg": "#e6eef9",
+            "app_decor": "radial-gradient(1200px circle at 12% -18%, rgba(77, 129, 199, 0.28), transparent 58%), radial-gradient(900px circle at 88% -10%, rgba(164, 196, 232, 0.42), transparent 54%)",
+            "text_1": "#0e1b2e",
+            "text_2": "#2b3f60",
+            "text_3": "#5e738f",
+            "panel_bg": "linear-gradient(180deg, #f9fcff 0%, #e4eefb 100%)",
+            "panel_border": "#c2d3eb",
+            "panel_shadow": "0 18px 40px rgba(33, 63, 104, 0.16)",
+            "button_bg": "#e1ecfa",
+            "button_border": "#b9cde6",
+            "button_hover_bg": "#d2e2f6",
+            "button_text": "#11233a",
+            "metric_bg": "#e7f0fb",
+            "metric_border": "#bfd2ea",
+            "tag_bg": "#d9e7f9",
+            "tag_border": "#b7cbe6",
+            "tag_text": "#1d2f48",
+            "tabs_bg": "#dbe8f8",
+            "tabs_border": "#c0d3eb",
+            "card_bg": "#f2f7ff",
+            "card_border": "#c5d8ef",
+            "card_shadow": "0 14px 32px rgba(28, 54, 92, 0.14)",
+            "image_shadow": "0 12px 26px rgba(22, 40, 75, 0.18)",
+            "pill_bg": "#e0ebf9",
+            "pill_border": "#b9cde6",
+            "action_bg": "#e0ebf9",
+            "action_border": "#b9cde6",
+            "action_text": "#1d2f48",
+            "action_hover_bg": "#d2e2f6",
+            "divider": "#c4d6ee",
+            "summary_bg": "linear-gradient(180deg, rgba(248, 252, 255, 0.98), rgba(219, 233, 250, 0.98))",
+            "summary_border": "#c4d6ee",
+            "summary_text": "#1d2f48",
+            "decision_delete": "#e24b5f",
+            "decision_keep": "#2f9d6d",
+            "decision_maybe": "#d79a2b",
+            "decision_unknown": "#7d8faa",
         },
     },
 }
@@ -378,6 +398,10 @@ def _apply_theme(theme_key: str) -> None:
   --mc-input-focus: {tokens["panel_border"]};
   --mc-input-text: {tokens["text_1"]};
   --mc-input-placeholder: {tokens["text_3"]};
+  --mc-decision-delete: {tokens["decision_delete"]};
+  --mc-decision-keep: {tokens["decision_keep"]};
+  --mc-decision-maybe: {tokens["decision_maybe"]};
+  --mc-decision-unknown: {tokens["decision_unknown"]};
   --mc-grid-bg: {tokens["card_bg"]};
   --mc-grid-header-bg: {tokens["button_bg"]};
   --mc-grid-header-text: {tokens["text_1"]};
@@ -539,6 +563,20 @@ div[role="listbox"] {{
   border: 1px solid var(--mc-panel-border) !important;
   box-shadow: var(--mc-card-shadow);
 }}
+div[data-baseweb="popover"] [data-baseweb="menu"],
+div[data-baseweb="popover"] [data-baseweb="menu"] > ul,
+div[data-baseweb="popover"] [data-baseweb="menu"] ul[role="listbox"],
+div[data-baseweb="popover"] [role="listbox"],
+div[data-baseweb="popover"] ul[role="listbox"] {{
+  background-color: var(--mc-card-bg) !important;
+  background: var(--mc-card-bg) !important;
+  color: var(--mc-text-1) !important;
+}}
+div[data-baseweb="popover"] [data-baseweb="menu"] li,
+div[data-baseweb="popover"] li[role="option"] {{
+  background-color: var(--mc-card-bg) !important;
+  color: var(--mc-text-1) !important;
+}}
 div[data-baseweb="popover"],
 div[data-baseweb="popover"] > div,
 div[data-baseweb="popover"] > div > div {{
@@ -657,6 +695,15 @@ button[data-testid="stBaseButton-secondary"]:hover {{
 .ag-theme-alpine .ag-body-viewport,
 .ag-theme-alpine-dark .ag-body-viewport,
 .ag-theme-streamlit .ag-body-viewport,
+.ag-theme-alpine .ag-center-cols-viewport,
+.ag-theme-alpine-dark .ag-center-cols-viewport,
+.ag-theme-streamlit .ag-center-cols-viewport,
+.ag-theme-alpine .ag-body-horizontal-scroll-viewport,
+.ag-theme-alpine-dark .ag-body-horizontal-scroll-viewport,
+.ag-theme-streamlit .ag-body-horizontal-scroll-viewport,
+.ag-theme-alpine .ag-body-vertical-scroll-viewport,
+.ag-theme-alpine-dark .ag-body-vertical-scroll-viewport,
+.ag-theme-streamlit .ag-body-vertical-scroll-viewport,
 .ag-theme-alpine .ag-center-cols-clipper,
 .ag-theme-alpine-dark .ag-center-cols-clipper,
 .ag-theme-streamlit .ag-center-cols-clipper,
@@ -1164,27 +1211,14 @@ if st.session_state.get("modal_open"):
     st.stop()
 
 
-def _render_config_container(body: Callable[[], None]) -> bool:
-    dialog: Any = getattr(st, "dialog", None)
-    if callable(dialog):
-        dialog_fn = cast(
-            Callable[[str], Callable[[Callable[[], None]], Callable[[], None]]],
-            dialog,
-        )
-
-        @dialog_fn("Configuracion")
-        def _dlg() -> None:
-            body()
-
-        _dlg()
-        return True
+def _render_config_container(body: Callable[[], None]) -> None:
     with st.expander("Configuracion", expanded=True):
         body()
-    return False
 
 
 if "grid_colorize_rows" not in st.session_state:
     st.session_state["grid_colorize_rows"] = get_front_grid_colorize()
+colorize_rows = bool(st.session_state.get("grid_colorize_rows", True))
 
 CONFIG_COLORIZE_KEY = "config_colorize"
 CONFIG_THEME_KEY = "config_theme"
@@ -1194,106 +1228,7 @@ CONFIG_VIEWS_KEY = "config_dashboard_views"
 CONFIG_EDITING_KEY = "config_editing"
 CONFIG_RESET_KEY = "config_reset_pending"
 CONFIG_DEFAULTS_KEY = "config_defaults"
-
-if st.session_state.get("config_open"):
-    available_dashboard = [v for v in VIEW_OPTIONS if v != "Dashboard"]
-
-    def _load_config_defaults() -> dict[str, object]:
-        return {
-            CONFIG_COLORIZE_KEY: bool(
-                st.session_state.get("grid_colorize_rows", get_front_grid_colorize())
-            ),
-            CONFIG_THEME_KEY: _resolve_theme_key(
-                st.session_state.get(THEME_STATE_KEY, get_front_theme())
-            ),
-            CONFIG_SHOW_NUMERIC_KEY: get_show_numeric_filters(),
-            CONFIG_SHOW_THRESHOLDS_KEY: get_show_chart_thresholds(),
-            CONFIG_VIEWS_KEY: get_dashboard_views(available_dashboard),
-        }
-
-    if st.session_state.get(CONFIG_RESET_KEY, False) or not st.session_state.get(
-        CONFIG_EDITING_KEY, False
-    ):
-        defaults = _load_config_defaults()
-        st.session_state[CONFIG_DEFAULTS_KEY] = defaults
-        for key, value in defaults.items():
-            st.session_state.setdefault(key, value)
-        st.session_state[CONFIG_EDITING_KEY] = True
-        st.session_state[CONFIG_RESET_KEY] = False
-
-    def _config_body() -> None:
-        st.subheader("Preferencias")
-        theme_key = st.selectbox(
-            "Tema de interfaz",
-            list(THEME_ORDER),
-            key=CONFIG_THEME_KEY,
-            format_func=_theme_label,
-        )
-        theme_tagline = _theme_tagline(theme_key)
-        if theme_tagline:
-            st.caption(theme_tagline)
-        preview_tokens = _theme_tokens(theme_key)
-        st.markdown(
-            f"""
-<div class="theme-preview">
-  <span class="theme-chip" style="background: {preview_tokens["app_bg"]}; border: 1px solid {preview_tokens["panel_border"]};"></span>
-  <span class="theme-chip" style="background: {preview_tokens["panel_bg"]}; border: 1px solid {preview_tokens["panel_border"]};"></span>
-  <span class="theme-chip" style="background: {preview_tokens["button_bg"]}; border: 1px solid {preview_tokens["button_border"]};"></span>
-  <span class="theme-chip" style="background: {preview_tokens["summary_bg"]}; border: 1px solid {preview_tokens["summary_border"]};"></span>
-</div>
-""",
-            unsafe_allow_html=True,
-        )
-        colorize = st.checkbox(
-            "Señalética de color en tablas",
-            key=CONFIG_COLORIZE_KEY,
-        )
-        show_numeric_filters = st.checkbox(
-            "Mostrar filtros numéricos",
-            key=CONFIG_SHOW_NUMERIC_KEY,
-        )
-        show_chart_thresholds = st.checkbox(
-            "Mostrar umbrales en gráficos",
-            key=CONFIG_SHOW_THRESHOLDS_KEY,
-        )
-        exec_views = st.multiselect(
-            "Graficos dashboard (max 3)",
-            available_dashboard,
-            key=CONFIG_VIEWS_KEY,
-        )
-        save_cols = st.columns(2)
-        with save_cols[0]:
-            if st.button("Guardar"):
-                if len(exec_views) > 3:
-                    st.error("Selecciona un maximo de 3 graficos.")
-                    return
-                resolved_theme = _resolve_theme_key(theme_key)
-                save_front_theme(resolved_theme)
-                save_front_grid_colorize(colorize)
-                save_dashboard_views(exec_views)
-                save_show_numeric_filters(show_numeric_filters)
-                save_show_chart_thresholds(show_chart_thresholds)
-                st.session_state[THEME_STATE_KEY] = resolved_theme
-                st.session_state["grid_colorize_rows"] = colorize
-                st.session_state["config_open"] = False
-                st.session_state[CONFIG_EDITING_KEY] = False
-                st.session_state[CONFIG_RESET_KEY] = False
-                st.session_state.pop(CONFIG_DEFAULTS_KEY, None)
-                st.success("Configuracion guardada.")
-                st.rerun()
-        with save_cols[1]:
-            if st.button("Cancelar"):
-                st.session_state["config_open"] = False
-                st.session_state[CONFIG_EDITING_KEY] = False
-                st.session_state[CONFIG_RESET_KEY] = True
-                st.session_state.pop(CONFIG_DEFAULTS_KEY, None)
-
-    used_dialog = _render_config_container(_config_body)
-    if used_dialog and st.session_state.get("config_open"):
-        st.session_state["config_open"] = False
-        st.session_state[CONFIG_EDITING_KEY] = False
-        st.session_state[CONFIG_RESET_KEY] = True
-        st.session_state.pop(CONFIG_DEFAULTS_KEY, None)
+config_clicked = False
 
 # =============================================================================
 # 8) Resumen general (KPIs)
@@ -1308,12 +1243,14 @@ div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) {
   background: var(--mc-panel-bg);
   border: 1px solid var(--mc-panel-border);
   border-radius: 18px;
-  padding: 24px 26px 22px;
+  padding: 10px 18px 20px;
   box-shadow: var(--mc-panel-shadow);
+  margin-bottom: -0.2rem !important;
 }
 div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) h1 {
   margin: 0;
-  font-size: 2.1rem;
+  line-height: 1.1;
+  font-size: 1.9rem;
 }
 div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) h3 {
   margin: 0 0 0.9rem 0;
@@ -1349,20 +1286,51 @@ div[data-testid="stVerticalBlock"]:has(#config-top-anchor) button[data-testid="b
   color: var(--mc-button-text) !important;
   background: var(--mc-button-hover-bg);
 }
-div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) [data-testid="stMetric"] {
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) .summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.3rem;
+  margin-bottom: 0;
+}
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) .summary-card {
   background: var(--mc-metric-bg);
   border: 1px solid var(--mc-metric-border);
   border-radius: 12px;
-  padding: 0.65rem 0.75rem;
+  padding: 0.55rem 0.7rem;
+  min-height: 68px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.2rem;
+  box-sizing: border-box;
 }
-div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) [data-testid="stMetricLabel"] {
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) .summary-label {
   color: var(--mc-text-3);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  font-size: 0.72rem;
+  font-size: 0.64rem;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) [data-testid="stMetricValue"] {
-  font-size: 1.6rem;
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) .summary-value {
+  font-size: 1.4rem;
+  color: var(--mc-text-1);
+  line-height: 1.1;
+}
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) .summary-grid--colorize .summary-card--keep .summary-label,
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) .summary-grid--colorize .summary-card--keep .summary-value {
+  color: var(--mc-decision-keep);
+}
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) .summary-grid--colorize .summary-card--delete .summary-label,
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) .summary-grid--colorize .summary-card--delete .summary-value {
+  color: var(--mc-decision-delete);
+}
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) .summary-grid--colorize .summary-card--maybe .summary-label,
+div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) .summary-grid--colorize .summary-card--maybe .summary-value {
+  color: var(--mc-decision-maybe);
 }
 </style>
 """,
@@ -1373,34 +1341,168 @@ div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) [data-testid="stMet
         st.title("🎬 Movies Cleaner — Dashboard")
     with top_cols[1]:
         st.markdown('<div id="config-top-anchor"></div>', unsafe_allow_html=True)
-        if st.button("Configuracion", key="config_link_top", type="secondary"):
-            st.session_state["config_open"] = True
-    st.subheader("Resumen general")
-
+        config_clicked = st.button(
+            "Configuracion",
+            key="config_link_top",
+            type="secondary",
+        )
     summary = compute_summary(df_all)
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric(
-        "Películas", format_count_size(summary["total_count"], summary["total_size_gb"])
-    )
-    col2.metric(
-        "KEEP", format_count_size(summary["keep_count"], summary["keep_size_gb"])
-    )
-    col3.metric(
-        "DELETE", format_count_size(summary["delete_count"], summary["delete_size_gb"])
-    )
-    col4.metric(
-        "MAYBE", format_count_size(summary["maybe_count"], summary["maybe_size_gb"])
-    )
-
     imdb_mean_df = summary.get("imdb_mean_df")
-    if imdb_mean_df is not None and not pd.isna(imdb_mean_df):
-        col5.metric("IMDb medio (analizado)", f"{imdb_mean_df:.2f}")
+    imdb_value = (
+        f"{imdb_mean_df:.2f}"
+        if imdb_mean_df is not None and not pd.isna(imdb_mean_df)
+        else "N/A"
+    )
+    summary_cards = [
+        ("Películas", format_count_size(summary["total_count"], summary["total_size_gb"]), "neutral"),
+        ("KEEP", format_count_size(summary["keep_count"], summary["keep_size_gb"]), "keep"),
+        ("DELETE", format_count_size(summary["delete_count"], summary["delete_size_gb"]), "delete"),
+        ("MAYBE", format_count_size(summary["maybe_count"], summary["maybe_size_gb"]), "maybe"),
+        ("IMDb medio (analizado)", imdb_value, "neutral"),
+    ]
+    grid_class = "summary-grid summary-grid--colorize" if colorize_rows else "summary-grid"
+    cards_html = "\n".join(
+        f'<div class="summary-card summary-card--{variant}">'
+        f'<div class="summary-label">{label}</div>'
+        f'<div class="summary-value">{value}</div>'
+        "</div>"
+        for label, value, variant in summary_cards
+    )
+    st.markdown(
+        f'<div class="{grid_class}">{cards_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+available_dashboard = [v for v in VIEW_OPTIONS if v != "Dashboard"]
+
+
+def _load_config_defaults() -> dict[str, object]:
+    return {
+        CONFIG_COLORIZE_KEY: bool(
+            st.session_state.get("grid_colorize_rows", get_front_grid_colorize())
+        ),
+        CONFIG_THEME_KEY: _resolve_theme_key(
+            st.session_state.get(THEME_STATE_KEY, get_front_theme())
+        ),
+        CONFIG_SHOW_NUMERIC_KEY: get_show_numeric_filters(),
+        CONFIG_SHOW_THRESHOLDS_KEY: get_show_chart_thresholds(),
+        CONFIG_VIEWS_KEY: get_dashboard_views(available_dashboard),
+    }
+
+
+def _ensure_config_defaults() -> None:
+    if st.session_state.get(CONFIG_RESET_KEY, False) or not st.session_state.get(
+        CONFIG_EDITING_KEY, False
+    ):
+        defaults = _load_config_defaults()
+        st.session_state[CONFIG_DEFAULTS_KEY] = defaults
+        for key, value in defaults.items():
+            st.session_state.setdefault(key, value)
+        st.session_state[CONFIG_EDITING_KEY] = True
+        st.session_state[CONFIG_RESET_KEY] = False
+
+
+def _config_body() -> None:
+    st.subheader("Preferencias")
+    theme_key = st.selectbox(
+        "Tema de interfaz",
+        list(THEME_ORDER),
+        key=CONFIG_THEME_KEY,
+        format_func=_theme_label,
+    )
+    theme_tagline = _theme_tagline(theme_key)
+    if theme_tagline:
+        st.caption(theme_tagline)
+    preview_tokens = _theme_tokens(theme_key)
+    st.markdown(
+        f"""
+<div class="theme-preview">
+  <span class="theme-chip" style="background: {preview_tokens["app_bg"]}; border: 1px solid {preview_tokens["panel_border"]};"></span>
+  <span class="theme-chip" style="background: {preview_tokens["panel_bg"]}; border: 1px solid {preview_tokens["panel_border"]};"></span>
+  <span class="theme-chip" style="background: {preview_tokens["button_bg"]}; border: 1px solid {preview_tokens["button_border"]};"></span>
+  <span class="theme-chip" style="background: {preview_tokens["summary_bg"]}; border: 1px solid {preview_tokens["summary_border"]};"></span>
+  <span class="theme-chip" style="background: {preview_tokens["decision_keep"]}; border: 1px solid {preview_tokens["panel_border"]};"></span>
+  <span class="theme-chip" style="background: {preview_tokens["decision_maybe"]}; border: 1px solid {preview_tokens["panel_border"]};"></span>
+  <span class="theme-chip" style="background: {preview_tokens["decision_delete"]}; border: 1px solid {preview_tokens["panel_border"]};"></span>
+  <span class="theme-chip" style="background: {preview_tokens["decision_unknown"]}; border: 1px solid {preview_tokens["panel_border"]};"></span>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    colorize = st.checkbox(
+        "Señalética de color en tablas",
+        key=CONFIG_COLORIZE_KEY,
+    )
+    show_numeric_filters = st.checkbox(
+        "Mostrar filtros numéricos",
+        key=CONFIG_SHOW_NUMERIC_KEY,
+    )
+    show_chart_thresholds = st.checkbox(
+        "Mostrar umbrales en gráficos",
+        key=CONFIG_SHOW_THRESHOLDS_KEY,
+    )
+    exec_views = st.multiselect(
+        "Graficos dashboard (max 3)",
+        available_dashboard,
+        key=CONFIG_VIEWS_KEY,
+    )
+    save_cols = st.columns(2)
+    with save_cols[0]:
+        if st.button("Guardar"):
+            if len(exec_views) > 3:
+                st.error("Selecciona un maximo de 3 graficos.")
+                return
+            resolved_theme = _resolve_theme_key(theme_key)
+            save_front_theme(resolved_theme)
+            save_front_grid_colorize(colorize)
+            save_dashboard_views(exec_views)
+            save_show_numeric_filters(show_numeric_filters)
+            save_show_chart_thresholds(show_chart_thresholds)
+            st.session_state[THEME_STATE_KEY] = resolved_theme
+            st.session_state["grid_colorize_rows"] = colorize
+            st.session_state["config_open"] = False
+            st.session_state[CONFIG_EDITING_KEY] = False
+            st.session_state[CONFIG_RESET_KEY] = False
+            st.session_state.pop(CONFIG_DEFAULTS_KEY, None)
+            st.success("Configuracion guardada.")
+            st.rerun()
+    with save_cols[1]:
+        if st.button("Cancelar"):
+            st.session_state["config_open"] = False
+            st.session_state[CONFIG_EDITING_KEY] = False
+            st.session_state[CONFIG_RESET_KEY] = True
+            st.session_state.pop(CONFIG_DEFAULTS_KEY, None)
+
+
+dialog_fn: Any = getattr(st, "dialog", None)
+_config_dialog: Callable[[], None] | None = None
+if callable(dialog_fn):
+    dialog_fn = cast(Callable[[str], Callable[[Callable[[], None]], Callable[[], None]]], dialog_fn)
+
+    @dialog_fn("Configuracion")
+    def _config_dialog() -> None:
+        _config_body()
+
+
+def _open_config() -> None:
+    _ensure_config_defaults()
+    if _config_dialog is not None:
+        _config_dialog()
     else:
-        col5.metric("IMDb medio (analizado)", "N/A")
+        _render_config_container(_config_body)
 
-st.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
 
+if config_clicked:
+    if _config_dialog is not None:
+        _open_config()
+    else:
+        st.session_state["config_open"] = True
+
+if _config_dialog is None and st.session_state.get("config_open"):
+    _open_config()
+
+# Auto-apply summary semaforo colors when enabled.
 # Consistencia visual: tags de multiselect con fondo neutro (evita rojo fijo).
 st.markdown(
     """
@@ -1450,14 +1552,21 @@ st.markdown(
 <div id="tabs-row-anchor"></div>
 <style>
 div[data-testid="stVerticalBlock"]:has(#tabs-row-anchor) {
-  margin-top: 0.2rem;
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0.05rem;
   background: var(--mc-tabs-bg);
   border: 1px solid var(--mc-tabs-border);
   border-radius: 14px;
-  padding: 0.35rem 0.6rem 0.1rem;
+  padding: 0.08rem 0.35rem 0;
 }
 div[data-testid="stVerticalBlock"]:has(#tabs-row-anchor) div[data-testid="stTabs"] {
-  padding-top: 0.2rem;
+  padding-top: 0;
+}
+div[data-testid="stVerticalBlock"]:has(#tabs-row-anchor) [data-testid="stTabList"] {
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
 }
 </style>
 """,

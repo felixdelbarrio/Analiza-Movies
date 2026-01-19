@@ -17,14 +17,10 @@ Principios:
 
 from __future__ import annotations
 
-from typing import Final
-
 import pandas as pd
 import streamlit as st
 
 from frontend.components import aggrid_with_row_click, render_detail_card
-
-TITLE_TEXT: Final[str] = "### Duplicadas por IMDb ID"
 
 
 def _filter_duplicates(df: pd.DataFrame) -> pd.DataFrame:
@@ -96,8 +92,6 @@ def render(df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
         df_all: DataFrame completo (fuente principal).
         df_filtered: DataFrame filtrado (ignorado; se mantiene por compatibilidad de firma).
     """
-    st.write(TITLE_TEXT)
-
     if "imdb_id" not in df_all.columns:
         st.info("No hay columna imdb_id para detectar duplicados.")
         return
