@@ -109,8 +109,6 @@ def render_df(df_meta: pd.DataFrame) -> None:
     Args:
         df_meta: DataFrame con sugerencias de metadata.
     """
-    st.write("### Corrección de metadata (sugerencias)")
-
     if df_meta.empty:
         st.info(
             "El CSV de sugerencias de metadata está vacío o no se pudo leer correctamente."
@@ -127,8 +125,6 @@ def render(metadata_sugg_csv: str) -> None:
     Args:
         metadata_sugg_csv: ruta al CSV de sugerencias de metadata.
     """
-    st.write("### Corrección de metadata (sugerencias)")
-
     if not metadata_sugg_csv:
         st.info("No se ha especificado ruta para el CSV de sugerencias de metadata.")
         return

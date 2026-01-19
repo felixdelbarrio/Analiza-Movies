@@ -13,30 +13,48 @@ Notas de implementación:
 - Se usa st.altair_chart(chart, width="stretch") para evitar use_container_width (deprecado).
 - Los gráficos intentan ser “auto-explicativos” con tooltips.
 - Para datos derivados (géneros/directores) se parsea omdb_json de forma segura.
-
-Dependencias:
-- frontend.data_utils: helpers de parsing y agregación (géneros, word counts, color).
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Final, Iterable, TypeVar, cast
+from typing import Any, Final, cast
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
-from frontend.data_utils import (
-    build_word_counts,
-    decision_color,
-    directors_from_omdb_json_or_cache,
-    explode_genres_from_omdb_json,
-)
-from frontend.config_front_theme import get_front_theme, normalize_theme_key
+from frontend.components import render_decision_chip_styles
 from frontend.config_front_charts import (
     get_dashboard_views,
     get_show_chart_thresholds,
     get_show_numeric_filters,
+)
+from frontend.tabs.charts_data import _mark_imdb_outliers
+from frontend.tabs.charts_shared import (
+    AltChart,
+    AltSelection,
+    DECISION_ORDER,
+    IMDB_OUTLIER_HIGH,
+    IMDB_OUTLIER_LOW,
+    IMDB_REFERENCE,
+    METACRITIC_REFERENCE,
+    RT_REFERENCE,
+    _chart_png_bytes,
+    _chart_svg_bytes,
+    _movie_tooltips,
+    _ordered_options,
+)
+from frontend.tabs.charts_views import (
+    boxplot_by_library,
+    decade_distribution,
+    decision_distribution,
+    director_ranking,
+    genre_distribution,
+    imdb_by_decision,
+    imdb_vs_metacritic,
+    imdb_vs_rt,
+    space_by_library,
+    word_ranking,
 )
 
 VIEW_OPTIONS: Final[list[str]] = [
@@ -53,384 +71,7 @@ VIEW_OPTIONS: Final[list[str]] = [
     "Rating IMDb por decisión",
 ]
 
-IMDB_OUTLIER_HIGH: Final[float] = 8.5
-IMDB_OUTLIER_LOW: Final[float] = 5.0
-IMDB_REFERENCE: Final[float] = 7.0
-RT_REFERENCE: Final[float] = 60.0
-METACRITIC_REFERENCE: Final[float] = 60.0
-
-_F = TypeVar("_F", bound=Callable[..., Any])
-AltChart = Any
-AltSelection = Any
-FONT_BODY: Final[str] = "Manrope"
-FONT_DISPLAY: Final[str] = "Libre Baskerville"
-
-_DECISION_PALETTES: Final[dict[str, dict[str, str]]] = {
-    "noir": {
-        "DELETE": "#e55b5b",
-        "KEEP": "#56b37a",
-        "MAYBE": "#e1b75b",
-        "UNKNOWN": "#9da3ad",
-    },
-    "ivory": {
-        "DELETE": "#b3473f",
-        "KEEP": "#3f7f5a",
-        "MAYBE": "#b0883a",
-        "UNKNOWN": "#8f7f70",
-    },
-    "sapphire": {
-        "DELETE": "#e46b78",
-        "KEEP": "#4fb08a",
-        "MAYBE": "#d7b365",
-        "UNKNOWN": "#9aa7bd",
-    },
-    "verdant": {
-        "DELETE": "#e06a63",
-        "KEEP": "#4da97a",
-        "MAYBE": "#d0b05c",
-        "UNKNOWN": "#9aa79f",
-    },
-    "bordeaux": {
-        "DELETE": "#e06477",
-        "KEEP": "#5aa985",
-        "MAYBE": "#d0a867",
-        "UNKNOWN": "#b5a0aa",
-    },
-}
-_CHART_ACCENTS: Final[dict[str, dict[str, str]]] = {
-    "noir": {"accent": "#8dd2ff", "accent_soft": "#5aa7d9"},
-    "ivory": {"accent": "#c9894c", "accent_soft": "#a56a3b"},
-    "sapphire": {"accent": "#8bbcff", "accent_soft": "#5b84d8"},
-    "verdant": {"accent": "#88d6b3", "accent_soft": "#4fa47b"},
-    "bordeaux": {"accent": "#e3a0b8", "accent_soft": "#b46a86"},
-}
-_BOXPLOT_GRADIENTS: Final[dict[str, tuple[str, str, str]]] = {
-    "noir": ("#1b2635", "#3a6ea8", "#8dd2ff"),
-    "ivory": ("#ead8c5", "#c9894c", "#7d4421"),
-    "sapphire": ("#1a2740", "#406fd1", "#9dd0ff"),
-    "verdant": ("#1a2621", "#3f8b6a", "#b0e0cc"),
-    "bordeaux": ("#24141d", "#7d3550", "#e0a0b6"),
-}
-
-
-def _cache_data_decorator() -> Callable[[_F], _F]:
-    cache_fn = getattr(st, "cache_data", None)
-    if callable(cache_fn):
-        return cast(Callable[[_F], _F], cache_fn(show_spinner=False))
-    cache_fn = getattr(st, "cache", None)
-    if callable(cache_fn):
-        return cast(Callable[[_F], _F], cache_fn)
-    return cast(Callable[[_F], _F], lambda f: f)
-
-
-def _current_theme_key() -> str:
-    raw = st.session_state.get("front_theme")
-    fallback = get_front_theme()
-    return normalize_theme_key(raw if isinstance(raw, str) else fallback)
-
-
-def _theme_tokens() -> dict[str, str]:
-    raw = st.session_state.get("front_theme_tokens")
-    if not isinstance(raw, dict):
-        return {}
-    out: dict[str, str] = {}
-    for k, v in raw.items():
-        out[str(k)] = str(v)
-    return out
-
-
-def _token(tokens: dict[str, str], key: str, fallback: str) -> str:
-    return tokens.get(key, fallback)
-
-
-def _decision_palette() -> dict[str, str]:
-    theme_key = _current_theme_key()
-    return _DECISION_PALETTES.get(theme_key, _DECISION_PALETTES["noir"])
-
-
-def _decision_color(field: str = "decision") -> alt.Color:
-    return decision_color(field, palette=_decision_palette())
-
-
-def _boxplot_scale(tokens: dict[str, str]) -> alt.Scale:
-    theme_key = _current_theme_key()
-    gradient = _BOXPLOT_GRADIENTS.get(theme_key)
-    if gradient:
-        return alt.Scale(range=list(gradient))
-    start = _token(tokens, "metric_bg", "#111722")
-    end = _token(tokens, "text_2", "#d1d5db")
-    return alt.Scale(range=[start, end])
-
-
-def _chart_accents() -> dict[str, str]:
-    theme_key = _current_theme_key()
-    return _CHART_ACCENTS.get(theme_key, _CHART_ACCENTS["noir"])
-
-
-def _apply_chart_theme(chart: AltChart) -> AltChart:
-    tokens = _theme_tokens()
-    if not tokens:
-        return chart
-
-    bg = _token(tokens, "card_bg", "#11161f")
-    border = _token(tokens, "panel_border", "#1f2532")
-    text = _token(tokens, "text_2", "#d1d5db")
-    text_strong = _token(tokens, "text_1", "#f1f5f9")
-    grid = _token(tokens, "divider", "#242a35")
-
-    return (
-        chart.properties(background=bg)
-        .configure_view(fill=bg, stroke=border, strokeWidth=1)
-        .configure_axis(
-            labelColor=text,
-            titleColor=text_strong,
-            gridColor=grid,
-            gridOpacity=0.45,
-            domainColor=grid,
-            tickColor=grid,
-            labelFont=FONT_BODY,
-            titleFont=FONT_BODY,
-            labelFontSize=11,
-            titleFontSize=12,
-        )
-        .configure_legend(
-            orient="right",
-            labelColor=text,
-            titleColor=text_strong,
-            labelFont=FONT_BODY,
-            titleFont=FONT_BODY,
-            labelFontSize=11,
-            titleFontSize=12,
-            symbolSize=80,
-            columns=1,
-        )
-        .configure_title(
-            color=text_strong,
-            font=FONT_DISPLAY,
-            fontSize=16,
-            anchor="start",
-        )
-        .configure_header(
-            labelColor=text,
-            titleColor=text_strong,
-            labelFont=FONT_BODY,
-            titleFont=FONT_BODY,
-        )
-    )
-
-
-@_cache_data_decorator()
-def _genres_agg(df: pd.DataFrame) -> pd.DataFrame:
-    df_gen = explode_genres_from_omdb_json(df)
-    if (
-        df_gen.empty
-        or "title" not in df_gen.columns
-        or "decision" not in df_gen.columns
-    ):
-        return pd.DataFrame(columns=["genre", "decision", "count"])
-
-    return (
-        df_gen.groupby(["genre", "decision"], dropna=False)["title"]
-        .count()
-        .reset_index()
-        .rename(columns={"title": "count"})
-    )
-
-
-@_cache_data_decorator()
-def _director_stats(df: pd.DataFrame) -> pd.DataFrame:
-    if not {"imdb_rating", "title"}.issubset(df.columns):
-        return pd.DataFrame(columns=["director_list", "imdb_mean", "count"])
-    if "omdb_json" not in df.columns and "imdb_id" not in df.columns:
-        return pd.DataFrame(columns=["director_list", "imdb_mean", "count"])
-
-    cols: list[str] = ["imdb_rating", "title"]
-    if "omdb_json" in df.columns:
-        cols.append("omdb_json")
-    if "imdb_id" in df.columns:
-        cols.append("imdb_id")
-
-    df_dir = df.loc[:, cols].copy()
-    if "omdb_json" in df_dir.columns:
-        omdb_vals = df_dir["omdb_json"]
-    else:
-        omdb_vals = pd.Series([None] * len(df_dir), index=df_dir.index)
-    if "imdb_id" in df_dir.columns:
-        imdb_vals = df_dir["imdb_id"]
-    else:
-        imdb_vals = pd.Series([None] * len(df_dir), index=df_dir.index)
-    df_dir["director_list"] = [
-        directors_from_omdb_json_or_cache(omdb_raw, imdb_id)
-        for omdb_raw, imdb_id in zip(omdb_vals, imdb_vals)
-    ]
-    df_dir = df_dir.explode("director_list", ignore_index=True)
-    df_dir = df_dir[df_dir["director_list"].notna() & (df_dir["director_list"] != "")]
-
-    if df_dir.empty:
-        return pd.DataFrame(columns=["director_list", "imdb_mean", "count"])
-
-    return (
-        df_dir.groupby("director_list", dropna=False)
-        .agg(
-            imdb_mean=("imdb_rating", "mean"),
-            count=("title", "count"),
-        )
-        .reset_index()
-    )
-
-
-@_cache_data_decorator()
-def _director_decision_stats(df: pd.DataFrame) -> pd.DataFrame:
-    if not {"imdb_rating", "title", "decision"}.issubset(df.columns):
-        return pd.DataFrame(
-            columns=["director_list", "decision", "count", "imdb_mean", "count_total"]
-        )
-    if "omdb_json" not in df.columns and "imdb_id" not in df.columns:
-        return pd.DataFrame(
-            columns=["director_list", "decision", "count", "imdb_mean", "count_total"]
-        )
-
-    cols: list[str] = ["imdb_rating", "title", "decision"]
-    if "omdb_json" in df.columns:
-        cols.append("omdb_json")
-    if "imdb_id" in df.columns:
-        cols.append("imdb_id")
-
-    df_dir = df.loc[:, cols].copy()
-    if "omdb_json" in df_dir.columns:
-        omdb_vals = df_dir["omdb_json"]
-    else:
-        omdb_vals = pd.Series([None] * len(df_dir), index=df_dir.index)
-    if "imdb_id" in df_dir.columns:
-        imdb_vals = df_dir["imdb_id"]
-    else:
-        imdb_vals = pd.Series([None] * len(df_dir), index=df_dir.index)
-    df_dir["director_list"] = [
-        directors_from_omdb_json_or_cache(omdb_raw, imdb_id)
-        for omdb_raw, imdb_id in zip(omdb_vals, imdb_vals)
-    ]
-    df_dir = df_dir.explode("director_list", ignore_index=True)
-    df_dir = df_dir[df_dir["director_list"].notna() & (df_dir["director_list"] != "")]
-
-    if df_dir.empty:
-        return pd.DataFrame(
-            columns=["director_list", "decision", "count", "imdb_mean", "count_total"]
-        )
-
-    stats_mean = (
-        df_dir.groupby("director_list", dropna=False)
-        .agg(imdb_mean=("imdb_rating", "mean"), count_total=("title", "count"))
-        .reset_index()
-    )
-    counts = (
-        df_dir.groupby(["director_list", "decision"], dropna=False)["title"]
-        .count()
-        .reset_index()
-        .rename(columns={"title": "count"})
-    )
-    out = counts.merge(stats_mean, on="director_list", how="left")
-    return out
-
-
-@_cache_data_decorator()
-def _word_counts(df: pd.DataFrame, decisions: tuple[str, ...]) -> pd.DataFrame:
-    return build_word_counts(df, decisions)
-
-
-def _requires_columns(df: pd.DataFrame, cols: Iterable[str]) -> bool:
-    """
-    Comprueba que `df` contiene todas las columnas indicadas.
-
-    Returns:
-      - True  si todas las columnas están presentes.
-      - False si falta alguna (y muestra un mensaje informativo en Streamlit).
-    """
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        st.info(
-            f"Faltan columna(s) requerida(s): {', '.join(missing)}. "
-            "Revisa la fuente de datos."
-        )
-        return False
-    return True
-
-
-def _chart(chart: AltChart) -> AltChart:
-    """
-    Wrapper para mostrar gráficos siempre a ancho completo.
-    """
-    chart = _apply_chart_theme(chart)
-    st.altair_chart(chart, width="stretch")
-    return chart
-
-
-def _chart_png_bytes(chart: AltChart) -> bytes | None:
-    try:
-        import io
-
-        buf = io.BytesIO()
-        chart.save(buf, format="png")
-        return buf.getvalue()
-    except Exception:
-        return None
-
-
-def _chart_svg_bytes(chart: AltChart) -> bytes | None:
-    try:
-        import io
-
-        buf = io.BytesIO()
-        chart.save(buf, format="svg")
-        return buf.getvalue()
-    except Exception:
-        return None
-
-
-def _ordered_options(values: Iterable[object], order: list[str]) -> list[str]:
-    unique = {str(v) for v in values if v is not None and str(v).strip() != ""}
-    ordered: list[str] = []
-    for item in order:
-        if item in unique:
-            ordered.append(item)
-            unique.discard(item)
-    ordered.extend(sorted(unique))
-    return ordered
-
-
-def _movie_tooltips(df: pd.DataFrame) -> list[alt.Tooltip]:
-    out: list[alt.Tooltip] = []
-    if "title" in df.columns:
-        out.append(alt.Tooltip("title:N", title="Titulo"))
-    if "year" in df.columns:
-        out.append(alt.Tooltip("year:Q", title="Ano", format=".0f"))
-    if "library" in df.columns:
-        out.append(alt.Tooltip("library:N", title="Biblioteca"))
-    if "decision" in df.columns:
-        out.append(alt.Tooltip("decision:N", title="Decision"))
-    if "imdb_rating" in df.columns:
-        out.append(alt.Tooltip("imdb_rating:Q", title="IMDb", format=".1f"))
-    if "rt_score" in df.columns:
-        out.append(alt.Tooltip("rt_score:Q", title="RT (%)", format=".0f"))
-    if "metacritic_score" in df.columns:
-        out.append(alt.Tooltip("metacritic_score:Q", title="Metacritic", format=".0f"))
-    if "imdb_votes" in df.columns:
-        out.append(alt.Tooltip("imdb_votes:Q", title="Votos IMDb", format=",.0f"))
-    if "file_size_gb" in df.columns:
-        out.append(alt.Tooltip("file_size_gb:Q", title="Tamano (GB)", format=".2f"))
-    return out
-
-
-def _mark_imdb_outliers(
-    data: pd.DataFrame,
-    *,
-    low: float = IMDB_OUTLIER_LOW,
-    high: float = IMDB_OUTLIER_HIGH,
-) -> pd.DataFrame:
-    out = data.copy()
-    out["imdb_outlier"] = pd.NA
-    out.loc[out["imdb_rating"] >= high, "imdb_outlier"] = "Alta"
-    out.loc[out["imdb_rating"] <= low, "imdb_outlier"] = "Baja"
-    return out
+_REEXPORTED: tuple[object, ...] = (_mark_imdb_outliers, _movie_tooltips)
 
 
 def _render_view(
@@ -452,563 +93,81 @@ def _render_view(
     min_n_libs: int,
     boxplot_horizontal: bool,
     compare_libs: list[str],
+    show_insights: bool = True,
 ) -> AltChart | None:
-    chart_export: AltChart | None = None
-    tokens = _theme_tokens()
-    accents = _chart_accents()
-    ref_color = _token(tokens, "text_3", "#666666")
-    mean_color = accents["accent_soft"]
-    median_color = _token(tokens, "text_1", "#ffffff")
-    accent_color = accents["accent"]
-    boxplot_scale = _boxplot_scale(tokens)
-    # 1) Distribución por decisión
     if view == "Distribución por decisión":
-        if not _requires_columns(df_g, ["decision", "title"]):
-            return None
-
-        agg = (
-            df_g.groupby("decision", dropna=False)["title"]
-            .count()
-            .reset_index()
-            .rename(columns={"title": "count"})
+        return decision_distribution.render(
+            df_g, dec_sel=dec_sel, show_insights=show_insights
         )
-
-        if agg.empty:
-            st.info("No hay datos para la distribucion por decision. Revisa filtros.")
-            return None
-
-        chart = (
-            alt.Chart(agg)
-            .mark_bar()
-            .encode(
-                x=alt.X("decision:N", title="Decisión"),
-                y=alt.Y("count:Q", title="Número de películas"),
-                color=_decision_color(),
-                tooltip=["decision", "count"],
-                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
-            )
-            .add_params(dec_sel)
+    if view == "Rating IMDb por decisión":
+        return imdb_by_decision.render(
+            df_g, dec_sel=dec_sel, imdb_ref=imdb_ref, show_insights=show_insights
         )
-        chart = _chart(chart)
-        chart_export = chart
-
-    # 2) Rating IMDb por decisión
-    elif view == "Rating IMDb por decisión":
-        if not _requires_columns(df_g, ["imdb_rating", "decision"]):
-            return None
-
-        data = df_g.dropna(subset=["imdb_rating"])
-        if data.empty:
-            st.info("No hay ratings IMDb validos para mostrar. Revisa filtros.")
-            return None
-
-        bin_spec = alt.Bin(step=0.5, extent=[0, 10])
-        base = (
-            alt.Chart(data)
-            .mark_bar(opacity=0.85)
-            .encode(
-                x=alt.X("imdb_rating:Q", bin=bin_spec, title="IMDb rating (0-10)"),
-                y=alt.Y("count():Q", title="Numero de peliculas"),
-                color=_decision_color(),
-                tooltip=[
-                    alt.Tooltip("decision:N", title="Decision"),
-                    alt.Tooltip("imdb_rating:Q", bin=bin_spec, title="IMDb (bin)"),
-                    alt.Tooltip("count():Q", title="Peliculas", format=".0f"),
-                ],
-                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
-            )
-            .add_params(dec_sel)
+    if view == "Ratings IMDb vs RT":
+        return imdb_vs_rt.render(
+            df_g,
+            dec_sel=dec_sel,
+            imdb_ref=imdb_ref,
+            rt_ref=rt_ref,
+            outlier_low=outlier_low,
+            outlier_high=outlier_high,
+            show_insights=show_insights,
         )
-        ref_line = (
-            alt.Chart(data)
-            .mark_rule(color=ref_color, strokeDash=[4, 4])
-            .encode(x=alt.datum(imdb_ref))
+    if view == "Ratings IMDb vs Metacritic":
+        return imdb_vs_metacritic.render(
+            df_g,
+            dec_sel=dec_sel,
+            imdb_ref=imdb_ref,
+            meta_ref=meta_ref,
+            outlier_low=outlier_low,
+            outlier_high=outlier_high,
+            show_insights=show_insights,
         )
-        chart = (base + ref_line).facet(
-            column=alt.Column("decision:N", title="Decision")
+    if view == "Distribución por década":
+        return decade_distribution.render(
+            df_g, dec_sel=dec_sel, show_insights=show_insights
         )
-        chart = chart.resolve_scale(y="independent")
-        chart = _chart(chart)
-        chart_export = chart
-
-    # 3) Ratings IMDb vs RT
-    elif view == "Ratings IMDb vs RT":
-        if not _requires_columns(df_g, ["imdb_rating", "rt_score", "decision"]):
-            return None
-
-        data = df_g.dropna(subset=["imdb_rating", "rt_score"])
-        if data.empty:
-            st.info("No hay suficientes datos de IMDb y RT. Revisa filtros.")
-            return None
-
-        data = _mark_imdb_outliers(data, low=outlier_low, high=outlier_high)
-        base = (
-            alt.Chart(data)
-            .mark_circle(size=60, opacity=0.7)
-            .encode(
-                x=alt.X("imdb_rating:Q", title="IMDb rating (0-10)"),
-                y=alt.Y("rt_score:Q", title="RT score (%)"),
-                color=_decision_color(),
-                tooltip=_movie_tooltips(data),
-                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
-            )
-            .add_params(dec_sel)
+    if view == "Distribución por género (OMDb)":
+        return genre_distribution.render(
+            df_g,
+            dec_sel=dec_sel,
+            top_n_genres=top_n_genres,
+            show_insights=show_insights,
         )
-        outliers = (
-            alt.Chart(data[data["imdb_outlier"].notna()])
-            .mark_point(size=120, filled=True)
-            .encode(
-                x=alt.X("imdb_rating:Q"),
-                y=alt.Y("rt_score:Q"),
-                color=_decision_color(),
-                shape=alt.Shape(
-                    "imdb_outlier:N",
-                    scale=alt.Scale(
-                        domain=["Alta", "Baja"],
-                        range=["triangle-up", "triangle-down"],
-                    ),
-                    legend=alt.Legend(orient="right", title="Outlier IMDb"),
-                ),
-                tooltip=_movie_tooltips(data),
-                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
-            )
-            .add_params(dec_sel)
+    if view == "Espacio ocupado por biblioteca/decisión":
+        return space_by_library.render(
+            df_g,
+            lib_sel=lib_sel,
+            dec_sel=dec_sel,
+            show_insights=show_insights,
         )
-        ref_imdb = (
-            alt.Chart(pd.DataFrame({"imdb_rating": [imdb_ref]}))
-            .mark_rule(color=ref_color, strokeDash=[4, 4])
-            .encode(x=alt.X("imdb_rating:Q"))
+    if view == "Boxplot IMDb por biblioteca":
+        return boxplot_by_library.render(
+            df_g,
+            lib_sel=lib_sel,
+            imdb_ref=imdb_ref,
+            top_n_libs=top_n_libs,
+            min_n_libs=min_n_libs,
+            boxplot_horizontal=boxplot_horizontal,
+            compare_libs=compare_libs,
+            show_insights=show_insights,
         )
-        ref_rt = (
-            alt.Chart(pd.DataFrame({"rt_score": [rt_ref]}))
-            .mark_rule(color=ref_color, strokeDash=[4, 4])
-            .encode(y=alt.Y("rt_score:Q"))
+    if view == "Ranking de directores":
+        return director_ranking.render(
+            df_g,
+            dec_sel=dec_sel,
+            min_movies_directors=min_movies_directors,
+            top_n_directors=top_n_directors,
+            show_insights=show_insights,
         )
-        chart = base + outliers + ref_imdb + ref_rt
-        chart = _chart(chart)
-        chart_export = chart
-
-    # 4) Ratings IMDb vs Metacritic
-    elif view == "Ratings IMDb vs Metacritic":
-        if not _requires_columns(df_g, ["imdb_rating", "metacritic_score", "decision"]):
-            return None
-
-        data = df_g.dropna(subset=["imdb_rating", "metacritic_score"])
-        if data.empty:
-            st.info("No hay suficientes datos de IMDb y Metacritic. Revisa filtros.")
-            return None
-
-        data = _mark_imdb_outliers(data, low=outlier_low, high=outlier_high)
-        base = (
-            alt.Chart(data)
-            .mark_circle(size=60, opacity=0.7)
-            .encode(
-                x=alt.X("imdb_rating:Q", title="IMDb rating (0-10)"),
-                y=alt.Y(
-                    "metacritic_score:Q",
-                    title="Metacritic score (0-100)",
-                ),
-                color=_decision_color(),
-                tooltip=_movie_tooltips(data),
-                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
-            )
-            .add_params(dec_sel)
+    if view == "Palabras más frecuentes en títulos DELETE/MAYBE":
+        return word_ranking.render(
+            df_g,
+            dec_sel=dec_sel,
+            top_n_words=top_n_words,
+            show_insights=show_insights,
         )
-        outliers = (
-            alt.Chart(data[data["imdb_outlier"].notna()])
-            .mark_point(size=120, filled=True)
-            .encode(
-                x=alt.X("imdb_rating:Q"),
-                y=alt.Y("metacritic_score:Q"),
-                color=_decision_color(),
-                shape=alt.Shape(
-                    "imdb_outlier:N",
-                    scale=alt.Scale(
-                        domain=["Alta", "Baja"],
-                        range=["triangle-up", "triangle-down"],
-                    ),
-                    legend=alt.Legend(orient="right", title="Outlier IMDb"),
-                ),
-                tooltip=_movie_tooltips(data),
-                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
-            )
-            .add_params(dec_sel)
-        )
-        ref_imdb = (
-            alt.Chart(pd.DataFrame({"imdb_rating": [imdb_ref]}))
-            .mark_rule(color=ref_color, strokeDash=[4, 4])
-            .encode(x=alt.X("imdb_rating:Q"))
-        )
-        ref_meta = (
-            alt.Chart(pd.DataFrame({"metacritic_score": [meta_ref]}))
-            .mark_rule(color=ref_color, strokeDash=[4, 4])
-            .encode(y=alt.Y("metacritic_score:Q"))
-        )
-        chart = base + outliers + ref_imdb + ref_meta
-        chart = _chart(chart)
-        chart_export = chart
-
-    # 5) Distribución por década
-    elif view == "Distribución por década":
-        if not _requires_columns(df_g, ["decade_label", "decision", "title"]):
-            return None
-
-        data = df_g.dropna(subset=["decade_label"])
-        if data.empty:
-            st.info("No hay informacion de decada disponible. Revisa filtros.")
-            return None
-
-        agg = (
-            data.groupby(["decade_label", "decision"], dropna=False)["title"]
-            .count()
-            .reset_index()
-            .rename(columns={"title": "count"})
-        )
-
-        chart = (
-            alt.Chart(agg)
-            .mark_bar()
-            .encode(
-                x=alt.X("decade_label:N", title="Década"),
-                y=alt.Y("count:Q", title="Número de películas"),
-                color=_decision_color(),
-                tooltip=["decade_label", "decision", "count"],
-                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
-            )
-            .add_params(dec_sel)
-        )
-        chart = _chart(chart)
-        chart_export = chart
-
-    # 6) Distribución por género (OMDb)
-    elif view == "Distribución por género (OMDb)":
-        agg = _genres_agg(df_g)
-
-        if agg.empty:
-            st.info("No hay datos de genero. Revisa filtros o datos de OMDb.")
-            return None
-
-        top_n = top_n_genres
-        top_genres = (
-            agg.groupby("genre")["count"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(top_n)
-            .index
-        )
-        agg = agg[agg["genre"].isin(top_genres)]
-
-        if agg.empty:
-            st.info("No hay datos suficientes para los generos seleccionados.")
-            return None
-
-        chart = (
-            alt.Chart(agg)
-            .mark_bar()
-            .encode(
-                x=alt.X("genre:N", title="Género"),
-                y=alt.Y("count:Q", title="Número de películas", stack="normalize"),
-                color=_decision_color(),
-                tooltip=["genre", "decision", "count"],
-                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
-            )
-            .add_params(dec_sel)
-        )
-        chart = _chart(chart)
-        chart_export = chart
-
-    # 7) Espacio ocupado por biblioteca/decisión
-    elif view == "Espacio ocupado por biblioteca/decisión":
-        if not _requires_columns(df_g, ["file_size_gb", "library", "decision"]):
-            return None
-
-        agg = (
-            df_g.groupby(["library", "decision"], dropna=False)["file_size_gb"]
-            .sum()
-            .reset_index()
-        )
-
-        if agg.empty:
-            st.info("No hay datos de tamano de archivos. Revisa filtros.")
-            return None
-
-        chart_space = (
-            alt.Chart(agg)
-            .mark_bar()
-            .encode(
-                x=alt.X("library:N", title="Biblioteca"),
-                y=alt.Y("file_size_gb:Q", title="Tamano (GB)", stack="normalize"),
-                color=_decision_color(),
-                tooltip=[
-                    "library",
-                    "decision",
-                    alt.Tooltip("file_size_gb:Q", title="Tamano (GB)", format=".2f"),
-                ],
-                opacity=alt.condition(lib_sel & dec_sel, alt.value(1), alt.value(0.2)),
-            )
-            .add_params(lib_sel, dec_sel)
-        )
-        chart_space = _chart(chart_space)
-        chart_export = chart_space
-
-        total_space = float(agg["file_size_gb"].sum())
-        space_delete = float(agg.loc[agg["decision"] == "DELETE", "file_size_gb"].sum())
-        space_maybe = float(agg.loc[agg["decision"] == "MAYBE", "file_size_gb"].sum())
-
-        st.markdown(
-            f"- Espacio total: **{total_space:.2f} GB**\n"
-            f"- DELETE: **{space_delete:.2f} GB**\n"
-            f"- MAYBE: **{space_maybe:.2f} GB**"
-        )
-
-    # 8) Boxplot IMDb por biblioteca
-    elif view == "Boxplot IMDb por biblioteca":
-        if not _requires_columns(df_g, ["imdb_rating", "library"]):
-            return None
-
-        data = df_g.dropna(subset=["imdb_rating", "library"])
-        if data.empty:
-            st.info("No hay datos suficientes de IMDb/biblioteca. Revisa filtros.")
-            return None
-
-        stats = (
-            data.groupby("library", dropna=False)["imdb_rating"]
-            .agg(imdb_median="median", count="count")
-            .reset_index()
-        )
-        if stats.empty:
-            st.info("No hay estadisticas para bibliotecas. Revisa filtros.")
-            return None
-
-        global_mean = float(data["imdb_rating"].mean())
-        num_libs = int(stats["library"].nunique())
-        max_libs = max(1, min(50, num_libs))
-        top_n = top_n_libs if top_n_libs is not None else min(20, max_libs)
-        min_n = min_n_libs
-        horizontal = boxplot_horizontal
-
-        if top_n < num_libs:
-            top_libs = (
-                stats.sort_values("count", ascending=False)
-                .head(top_n)["library"]
-                .tolist()
-            )
-            data = data[data["library"].isin(top_libs)]
-            stats = stats[stats["library"].isin(top_libs)]
-        stats = stats[stats["count"] >= min_n]
-        data = data[data["library"].isin(stats["library"])]
-        if data.empty:
-            st.info("No hay datos tras aplicar filtros. Revisa filtros.")
-            return None
-
-        data = data.merge(stats, on="library", how="left")
-        order = stats.sort_values("imdb_median", ascending=False)["library"].tolist()
-        top3 = stats.head(3)
-        bottom3 = stats.tail(3)
-        st.caption(
-            "Top medianas: "
-            + ", ".join(
-                [f"{row.library} ({row.imdb_median:.1f})" for row in top3.itertuples()]
-            )
-            + " | "
-            + "Bottom medianas: "
-            + ", ".join(
-                [
-                    f"{row.library} ({row.imdb_median:.1f})"
-                    for row in bottom3.itertuples()
-                ]
-            )
-        )
-        if len(compare_libs) == 2:
-            comp = stats[stats["library"].isin(compare_libs)].copy()
-            if len(comp) == 2:
-                delta = comp.iloc[0]["imdb_median"] - comp.iloc[1]["imdb_median"]
-                st.caption(
-                    f"Comparacion: {compare_libs[0]} vs {compare_libs[1]} | "
-                    f"Delta mediana IMDb: {delta:.2f}"
-                )
-                comp_chart = (
-                    alt.Chart(comp)
-                    .mark_bar()
-                    .encode(
-                        x=alt.X("library:N", title="Biblioteca"),
-                        y=alt.Y("imdb_median:Q", title="Mediana IMDb"),
-                        tooltip=[
-                            alt.Tooltip("library:N", title="Biblioteca"),
-                            alt.Tooltip(
-                                "imdb_median:Q", title="Mediana IMDb", format=".1f"
-                            ),
-                            alt.Tooltip("count:Q", title="Peliculas", format=".0f"),
-                        ],
-                    )
-                )
-                comp_chart = _chart(comp_chart)
-
-        tooltip_common = [
-            alt.Tooltip("library:N", title="Biblioteca"),
-            alt.Tooltip("imdb_median:Q", title="Mediana IMDb", format=".1f"),
-            alt.Tooltip("count:Q", title="Peliculas", format=".0f"),
-        ]
-        ref_line = (
-            alt.Chart(pd.DataFrame({"imdb_rating": [imdb_ref]}))
-            .mark_rule(color=ref_color, strokeDash=[4, 4])
-            .encode(y=alt.Y("imdb_rating:Q"))
-        )
-        mean_line = (
-            alt.Chart(pd.DataFrame({"imdb_rating": [global_mean]}))
-            .mark_rule(color=mean_color, strokeDash=[2, 2])
-            .encode(y=alt.Y("imdb_rating:Q"))
-        )
-        color_scale = boxplot_scale
-        chart_box = (
-            alt.Chart(data)
-            .mark_boxplot(size=40)
-            .encode(
-                x=(
-                    alt.X(
-                        "library:N",
-                        title="Biblioteca",
-                        sort=order,
-                        axis=alt.Axis(labelAngle=-45, labelLimit=140),
-                    )
-                    if not horizontal
-                    else alt.X("imdb_rating:Q", title="IMDb rating (0-10)")
-                ),
-                y=(
-                    alt.Y("imdb_rating:Q", title="IMDb rating (0-10)")
-                    if not horizontal
-                    else alt.Y(
-                        "library:N",
-                        title="Biblioteca",
-                        sort=order,
-                    )
-                ),
-                color=alt.Color("imdb_median:Q", scale=color_scale, legend=None),
-                tooltip=tooltip_common,
-                opacity=alt.condition(lib_sel, alt.value(1), alt.value(0.2)),
-            )
-        )
-        chart_median = (
-            alt.Chart(stats)
-            .mark_tick(color=median_color, thickness=2)
-            .encode(
-                x=(
-                    alt.X("library:N", sort=order)
-                    if not horizontal
-                    else alt.X("imdb_median:Q")
-                ),
-                y=(
-                    alt.Y("imdb_median:Q")
-                    if not horizontal
-                    else alt.Y("library:N", sort=order)
-                ),
-                tooltip=tooltip_common,
-            )
-        )
-        chart_strip = (
-            alt.Chart(data)
-            .transform_calculate(
-                imdb_jitter="datum.imdb_rating + (random() - 0.5) * 0.2"
-            )
-            .mark_circle(size=18, opacity=0.25)
-            .encode(
-                x=(
-                    alt.X(
-                        "library:N",
-                        sort=order,
-                        axis=alt.Axis(labelAngle=-45, labelLimit=140),
-                    )
-                    if not horizontal
-                    else alt.X("imdb_jitter:Q")
-                ),
-                y=(
-                    alt.Y("imdb_jitter:Q")
-                    if not horizontal
-                    else alt.Y("library:N", sort=order)
-                ),
-                color=alt.value(accent_color),
-                tooltip=_movie_tooltips(data),
-                opacity=alt.condition(lib_sel, alt.value(1), alt.value(0.1)),
-            )
-            .add_params(lib_sel)
-        )
-        chart = chart_strip + chart_box + chart_median + ref_line + mean_line
-        chart = _chart(chart)
-        chart_export = chart
-
-    # 9) Ranking de directores
-    elif view == "Ranking de directores":
-        agg = _director_decision_stats(df_g)
-        if agg.empty:
-            st.info("No se encontraron directores. Revisa filtros o datos de OMDb.")
-            return None
-
-        min_movies = min_movies_directors
-        top_n = top_n_directors
-        agg = agg[agg["count_total"] >= min_movies]
-
-        if agg.empty:
-            st.info("No hay directores que cumplan el minimo. Revisa filtros.")
-            return None
-
-        order = (
-            agg.drop_duplicates("director_list")
-            .sort_values("imdb_mean", ascending=False)["director_list"]
-            .tolist()
-        )
-        top_directors = order[:top_n]
-        agg_top = agg[agg["director_list"].isin(top_directors)]
-
-        chart = (
-            alt.Chart(agg_top)
-            .mark_bar()
-            .encode(
-                x=alt.X("director_list:N", title="Director", sort=top_directors),
-                y=alt.Y("count:Q", title="Peliculas"),
-                color=_decision_color(),
-                tooltip=[
-                    alt.Tooltip("director_list:N", title="Director"),
-                    alt.Tooltip("decision:N", title="Decision"),
-                    alt.Tooltip("count:Q", title="Peliculas", format=".0f"),
-                    alt.Tooltip("imdb_mean:Q", title="IMDb medio", format=".1f"),
-                    alt.Tooltip("count_total:Q", title="Total", format=".0f"),
-                ],
-                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
-            )
-            .add_params(dec_sel)
-        )
-        chart = _chart(chart)
-        chart_export = chart
-
-    # 10) Palabras más frecuentes en títulos DELETE/MAYBE
-    elif view == "Palabras más frecuentes en títulos DELETE/MAYBE":
-        df_words = _word_counts(df_g, ("DELETE", "MAYBE"))
-
-        if df_words.empty:
-            st.info(
-                "No hay datos suficientes para el analisis de palabras. Revisa filtros."
-            )
-            return None
-
-        top_n = top_n_words
-        df_top = df_words.head(top_n)
-
-        chart = (
-            alt.Chart(df_top)
-            .mark_bar()
-            .encode(
-                x=alt.X("word:N", title="Palabra"),
-                y=alt.Y("count:Q", title="Frecuencia"),
-                color=_decision_color(),
-                tooltip=["word", "decision", "count"],
-                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
-            )
-            .add_params(dec_sel)
-        )
-        chart = _chart(chart)
-        chart_export = chart
-
-    return chart_export
+    return None
 
 
 def _auto_insights(df: pd.DataFrame) -> list[str]:
@@ -1049,8 +208,6 @@ def render(df_all: pd.DataFrame) -> None:
     Args:
         df_all: DataFrame completo (puede venir vacío).
     """
-    st.write("### Gráficos")
-
     if not isinstance(df_all, pd.DataFrame) or df_all.empty:
         st.info("No hay datos para mostrar graficos. Revisa la fuente de datos.")
         return
@@ -1121,7 +278,7 @@ def render(df_all: pd.DataFrame) -> None:
             if "decision" in df_g.columns:
                 decisions = _ordered_options(
                     df_g["decision"],
-                    ["KEEP", "MAYBE", "DELETE", "UNKNOWN"],
+                    DECISION_ORDER,
                 )
                 if decisions:
                     selected_decisions = st.multiselect(
@@ -1129,6 +286,14 @@ def render(df_all: pd.DataFrame) -> None:
                         decisions,
                         default=[],
                         key="charts_filter_decision",
+                    )
+                    colorize = bool(st.session_state.get("grid_colorize_rows", True))
+                    render_decision_chip_styles(
+                        "decision-chips-charts",
+                        enabled=colorize,
+                        selected_values=(
+                            list(selected_decisions) if selected_decisions else []
+                        ),
                     )
         if show_numeric_filters:
             has_view_filters = view in {
@@ -1152,7 +317,7 @@ def render(df_all: pd.DataFrame) -> None:
                     key="charts_min_movies_directors",
                 )
                 top_n_directors = st.slider(
-                    "Top N directores por IMDb medio",
+                    "Directores a mostrar (peor -> mejor)",
                     5,
                     50,
                     20,
@@ -1160,7 +325,11 @@ def render(df_all: pd.DataFrame) -> None:
                 )
             elif view == "Palabras más frecuentes en títulos DELETE/MAYBE":
                 top_n_words = st.slider(
-                    "Top N palabras", 5, 50, 20, key="charts_top_n_words"
+                    "Top N palabras (peor -> mejor)",
+                    5,
+                    50,
+                    20,
+                    key="charts_top_n_words",
                 )
             elif view == "Boxplot IMDb por biblioteca":
                 num_libs = (
@@ -1263,14 +432,13 @@ def render(df_all: pd.DataFrame) -> None:
         return
 
     if show_exec:
-        st.subheader("Dashboard")
         available_exec = [v for v in VIEW_OPTIONS if v != "Dashboard"]
         exec_views = get_dashboard_views(available_exec)
         exec_views = exec_views[:3]
         exec_cols = st.columns(len(exec_views))
         for exec_view, col in zip(exec_views, exec_cols, strict=False):
             with col:
-                st.caption(exec_view)
+                st.markdown(f"**{exec_view}**")
                 _render_view(
                     exec_view,
                     df_g,
@@ -1289,6 +457,7 @@ def render(df_all: pd.DataFrame) -> None:
                     min_n_libs=min_n_libs,
                     boxplot_horizontal=boxplot_horizontal,
                     compare_libs=compare_libs,
+                    show_insights=True,
                 )
         insights = _auto_insights(df_g)
         if insights:

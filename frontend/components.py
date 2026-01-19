@@ -37,6 +37,7 @@ from typing import Any, Callable, Literal, Optional, Protocol, TypeVar, cast
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from st_aggrid import GridOptionsBuilder, JsCode
 
 from frontend.config_front_artifacts import OMDB_CACHE_PATH, WIKI_CACHE_PATH
@@ -48,6 +49,7 @@ from frontend.config_front_theme import (
 from frontend.data_utils import safe_json_loads_single
 
 RowDict = dict[str, Any]
+GridCaptionBuilder = Callable[[int, int, bool], str | None]
 
 _DECISION_ROW_STYLE = JsCode(
     """
@@ -60,10 +62,10 @@ function(params) {
     return {};
   }
   const d = String(raw).toUpperCase();
-  if (d === "DELETE") return { color: "#e53935" };
-  if (d === "KEEP") return { color: "#43a047" };
-  if (d === "MAYBE") return { color: "#fbc02d" };
-  if (d === "UNKNOWN") return { color: "#9e9e9e" };
+  if (d === "DELETE") return { color: "var(--mc-decision-delete)" };
+  if (d === "KEEP") return { color: "var(--mc-decision-keep)" };
+  if (d === "MAYBE") return { color: "var(--mc-decision-maybe)" };
+  if (d === "UNKNOWN") return { color: "var(--mc-decision-unknown)" };
   return {};
 }
 """
@@ -153,6 +155,10 @@ def _aggrid_custom_css() -> dict[str, dict[str, str]]:
     row_alt = _token("metric_bg", "#111722")
     hover = _token("tag_bg", "#2b2f36")
     selected = _token("button_hover_bg", "#202635")
+    dec_delete = _token("decision_delete", "#e53935")
+    dec_keep = _token("decision_keep", "#43a047")
+    dec_maybe = _token("decision_maybe", "#fbc02d")
+    dec_unknown = _token("decision_unknown", "#9e9e9e")
 
     return {
         ".ag-root-wrapper": {
@@ -160,6 +166,31 @@ def _aggrid_custom_css() -> dict[str, dict[str, str]]:
             "border": f"1px solid {border} !important",
             "border-radius": "12px",
             "color": text,
+            "--mc-decision-delete": dec_delete,
+            "--mc-decision-keep": dec_keep,
+            "--mc-decision-maybe": dec_maybe,
+            "--mc-decision-unknown": dec_unknown,
+        },
+        ".ag-body": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-viewport": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-body-viewport": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-center-cols-viewport": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-center-cols-container": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-body-horizontal-scroll-viewport": {
+            "background-color": f"{bg} !important",
+        },
+        ".ag-body-vertical-scroll-viewport": {
+            "background-color": f"{bg} !important",
         },
         ".ag-header": {
             "background-color": f"{header_bg} !important",
@@ -196,6 +227,243 @@ def _aggrid_custom_css() -> dict[str, dict[str, str]]:
             "color": f"{text} !important",
         },
     }
+
+
+# Apply decision colors to multiselect chips inside a scoped container.
+def render_decision_chip_styles(
+    anchor_id: str,
+    *,
+    enabled: bool = True,
+    selected_values: Sequence[str] | None = None,
+) -> None:
+    st.markdown(f'<div id="{anchor_id}"></div>', unsafe_allow_html=True)
+    selected_payload = json.dumps([str(v).upper() for v in selected_values or []])
+    components.html(
+        f"""
+<script>
+(() => {{
+  const win = window.parent;
+  if (!win || !win.document) return;
+  const doc = win.document;
+  const enabled = {str(enabled).lower()};
+  const selectedValues = {selected_payload};
+  const anchor = doc.getElementById("{anchor_id}");
+  if (!anchor) return;
+  const root = anchor.closest('[data-testid="stVerticalBlock"]') || anchor.parentElement;
+  if (!root) return;
+  const widget = anchor.closest('div[data-testid="stMultiSelect"]') ||
+    (anchor.closest('div[data-testid="column"]') ||
+      anchor.closest('div[data-testid="stVerticalBlock"]'))?.querySelector('div[data-testid="stMultiSelect"]');
+  const scope = widget || root;
+  win.__mcDecisionTagObservers = win.__mcDecisionTagObservers || {{}};
+  const existing = win.__mcDecisionTagObservers["{anchor_id}"];
+  const palette = () => {{
+    const styles = win.getComputedStyle(doc.documentElement);
+    return {{
+      DELETE: styles.getPropertyValue("--mc-decision-delete").trim() || "#e53935",
+      KEEP: styles.getPropertyValue("--mc-decision-keep").trim() || "#43a047",
+      MAYBE: styles.getPropertyValue("--mc-decision-maybe").trim() || "#fbc02d",
+      UNKNOWN: styles.getPropertyValue("--mc-decision-unknown").trim() || "#9e9e9e",
+    }};
+  }};
+  const parseColor = (value) => {{
+    const v = (value || "").trim();
+    if (!v) return null;
+    if (v.startsWith("#")) {{
+      let hex = v.slice(1);
+      if (hex.length === 3) {{
+        hex = hex.split("").map(ch => ch + ch).join("");
+      }}
+      if (hex.length === 6) {{
+        const r = parseInt(hex.slice(0, 2), 16);
+        const g = parseInt(hex.slice(2, 4), 16);
+        const b = parseInt(hex.slice(4, 6), 16);
+        return [r, g, b];
+      }}
+      return null;
+    }}
+    const match = v.match(/rgba?\\(([^)]+)\\)/i);
+    if (match) {{
+      const parts = match[1].split(",").map(p => parseFloat(p.trim()));
+      if (parts.length >= 3 && parts.every(n => Number.isFinite(n))) {{
+        return [parts[0], parts[1], parts[2]];
+      }}
+    }}
+    return null;
+  }};
+  const textColorFor = (color) => {{
+    const rgb = parseColor(color);
+    if (!rgb) return "#0b1220";
+    const [r, g, b] = rgb.map(v => v / 255);
+    const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return luminance > 0.6 ? "#0b1220" : "#f8fafc";
+  }};
+  const keyFromLabel = (label) => {{
+    if (!label) return null;
+    const match = label.match(/\\b(DELETE|KEEP|MAYBE|UNKNOWN)\\b/);
+    return match ? match[1] : null;
+  }};
+  const clearTagStyles = (tag) => {{
+    tag.style.removeProperty("background-color");
+    tag.style.removeProperty("border-color");
+    tag.style.removeProperty("color");
+    tag.querySelectorAll("span, svg, button").forEach((el) => {{
+      el.style.removeProperty("color");
+      el.style.removeProperty("fill");
+    }});
+  }};
+  const applyTagStyles = (tag, color, textColor) => {{
+    tag.style.setProperty("background-color", color, "important");
+    tag.style.setProperty("border-color", color, "important");
+    tag.style.setProperty("color", textColor, "important");
+    tag.querySelectorAll("span, svg, button").forEach((el) => {{
+      el.style.setProperty("color", textColor, "important");
+      el.style.setProperty("fill", textColor, "important");
+    }});
+  }};
+  const optionTarget = (option) => {{
+    return option.querySelector('[data-baseweb="menu-item"]') || option;
+  }};
+  const findListbox = () => {{
+    const combobox = scope.querySelector('[role="combobox"]');
+    if (!combobox) return null;
+    const listboxId =
+      combobox.getAttribute("aria-controls") || combobox.getAttribute("aria-owns");
+    if (!listboxId) return null;
+    return doc.getElementById(listboxId);
+  }};
+  const ensureOptionMarker = (target, color) => {{
+    let marker = target.querySelector('[data-mc-decision-marker="true"]');
+    if (!marker) {{
+      marker = doc.createElement("span");
+      marker.setAttribute("data-mc-decision-marker", "true");
+      marker.setAttribute("aria-hidden", "true");
+      marker.style.display = "inline-block";
+      marker.style.width = "8px";
+      marker.style.height = "8px";
+      marker.style.borderRadius = "2px";
+      marker.style.marginRight = "8px";
+      marker.style.flex = "0 0 auto";
+      target.insertBefore(marker, target.firstChild);
+    }}
+    marker.style.backgroundColor = color;
+    return marker;
+  }};
+  const removeOptionMarker = (target) => {{
+    const marker = target.querySelector('[data-mc-decision-marker="true"]');
+    if (marker && marker.parentElement) {{
+      marker.parentElement.removeChild(marker);
+    }}
+  }};
+  const clearOptionStyles = (option) => {{
+    const target = optionTarget(option);
+    target.style.removeProperty("background-image");
+    target.style.removeProperty("background-repeat");
+    target.style.removeProperty("background-size");
+    target.style.removeProperty("background-position");
+    target.style.removeProperty("padding-left");
+    target.style.removeProperty("color");
+    option.style.removeProperty("color");
+    removeOptionMarker(target);
+  }};
+  const applyOptionStyles = (option, color) => {{
+    const target = optionTarget(option);
+    ensureOptionMarker(target, color);
+    target.style.setProperty("display", "flex", "important");
+    target.style.setProperty("align-items", "center", "important");
+    target.style.setProperty("color", "var(--mc-text-1)", "important");
+    option.style.setProperty("color", "var(--mc-text-1)", "important");
+  }};
+  const collectOptions = () => {{
+    const listbox = findListbox();
+    if (listbox) {{
+      return Array.from(listbox.querySelectorAll('[role="option"]'));
+    }}
+    const options = new Set();
+    doc.querySelectorAll('[role="option"]').forEach((node) => options.add(node));
+    doc
+      .querySelectorAll('[data-baseweb="menu"] li, [data-baseweb="menu"] [role="option"]')
+      .forEach((node) => options.add(node));
+    doc
+      .querySelectorAll('[data-baseweb="popover"] [role="option"]')
+      .forEach((node) => options.add(node));
+    return Array.from(options);
+  }};
+  const apply = () => {{
+    const colors = palette();
+    const tags = scope.querySelectorAll('[data-baseweb="tag"]');
+    const tagKeys =
+      selectedValues.length && selectedValues.length === tags.length
+        ? selectedValues
+        : null;
+    Array.from(tags).forEach((tag, idx) => {{
+      const label = (tag.textContent || tag.innerText || "").toUpperCase();
+      const key = tagKeys ? tagKeys[idx] : keyFromLabel(label);
+      if (!key) return;
+      if (!enabled) {{
+        clearTagStyles(tag);
+        return;
+      }}
+      const color = colors[key] || colors.UNKNOWN;
+      const textColor = textColorFor(color);
+      applyTagStyles(tag, color, textColor);
+    }});
+    collectOptions().forEach((option) => {{
+      const label = (option.textContent || option.innerText || "").toUpperCase();
+      const key = keyFromLabel(label);
+      if (!key) return;
+      if (!enabled) {{
+        clearOptionStyles(option);
+        return;
+      }}
+      const color = colors[key] || colors.UNKNOWN;
+      applyOptionStyles(option, color);
+    }});
+  }};
+  const scheduleApply = () => {{
+    let tries = 0;
+    const tick = () => {{
+      apply();
+      tries += 1;
+      if (tries < 10) {{
+        win.setTimeout(tick, 80);
+      }}
+    }};
+    tick();
+  }};
+  if (existing && existing.root && typeof existing.root.disconnect === "function") {{
+    existing.root.disconnect();
+  }}
+  if (existing && existing.body && typeof existing.body.disconnect === "function") {{
+    existing.body.disconnect();
+  }}
+  if (existing && existing.listener) {{
+    doc.removeEventListener("click", existing.listener, true);
+    doc.removeEventListener("keydown", existing.listener, true);
+    doc.removeEventListener("focusin", existing.listener, true);
+  }}
+  const rootObserver = new MutationObserver(apply);
+  rootObserver.observe(root, {{ childList: true, subtree: true }});
+  const bodyObserver = new MutationObserver(apply);
+  if (doc.body) {{
+    bodyObserver.observe(doc.body, {{ childList: true, subtree: true }});
+  }}
+  const listener = () => scheduleApply();
+  doc.addEventListener("click", listener, true);
+  doc.addEventListener("keydown", listener, true);
+  doc.addEventListener("focusin", listener, true);
+  win.__mcDecisionTagObservers["{anchor_id}"] = {{
+    root: rootObserver,
+    body: bodyObserver,
+    listener: listener,
+  }};
+  scheduleApply();
+}})();
+</script>
+""",
+        height=0,
+        width=0,
+    )
 
 
 # ============================================================================
@@ -516,7 +784,13 @@ def render_grid_toolbar(
         "Simple: Actor | Doble: Actor 2006 | Multiple: Actor 2006 Director Genero"
     ),
     show_search: bool = True,
+    caption_builder: GridCaptionBuilder | None = None,
 ) -> tuple[pd.DataFrame, str, int]:
+    def _default_caption(count: int, total: int, has_search: bool) -> str:
+        if has_search:
+            return f"Filas: {count} / {total}"
+        return f"Filas: {total}"
+
     total_rows = len(df)
 
     safe_suffix = re.sub(r"[^a-zA-Z0-9_-]", "-", key_suffix)
@@ -548,6 +822,12 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="stBaseB
 div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseButton-secondary"]:hover {{
   filter: brightness(1.1);
   background: transparent !important;
+}}
+div[data-testid="stVerticalBlock"]:has(#{anchor_id}) .grid-caption {{
+  text-align: left;
+  font-size: 0.8rem;
+  opacity: 0.7;
+  margin-top: 0.1rem;
 }}
 </style>
 """,
@@ -610,10 +890,15 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseBut
             help=search_help,
         )
 
-    if search_query:
-        left_slot.caption(f"Filas: {len(df_view)} / {total_rows}")
-    else:
-        left_slot.caption(f"Filas: {total_rows}")
+    if caption_builder is None:
+        caption_builder = _default_caption
+
+    caption = caption_builder(len(df_view), total_rows, bool(search_query))
+    if caption:
+        left_slot.markdown(
+            f'<div class="grid-caption">{caption}</div>',
+            unsafe_allow_html=True,
+        )
 
     grid_height = 520
 
@@ -632,6 +917,7 @@ def aggrid_with_row_click(
     visible_order: Sequence[str] | None = None,
     auto_select_first: bool = False,
     show_toolbar: bool = True,
+    toolbar_caption_builder: GridCaptionBuilder | None = None,
 ) -> Optional[dict[str, Any]]:
     """
     Muestra un AgGrid con selección de una sola fila.
@@ -663,6 +949,7 @@ def aggrid_with_row_click(
             df_view,
             key_suffix=key_suffix,
             download_filename=f"{key_suffix}_table.csv",
+            caption_builder=toolbar_caption_builder,
         )
         if df_view.empty:
             if search_query.strip():
@@ -1331,6 +1618,9 @@ def render_detail_card(
     is_modal = bool(st.session_state.get("modal_open"))
     poster_width = 240 if is_modal else 260
     detail_anchor_id = "detail-card-modal" if is_modal else "detail-card-main"
+    left_anchor_id = f"{detail_anchor_id}-left"
+    metrics_anchor_id = f"{detail_anchor_id}-metrics"
+    action_group_anchor_id = f"{detail_anchor_id}-action-group"
     imdb_url = _build_imdb_url(imdb_id)
     plex_url = _build_plex_url(plex_guid)
 
@@ -1339,9 +1629,40 @@ def render_detail_card(
             f'<div id="{detail_anchor_id}" style="display:none;"></div>',
             unsafe_allow_html=True,
         )
+        extra_action_group_css = ""
+        if not is_modal:
+            extra_action_group_css = f"""
+div[data-testid="stVerticalBlock"]:has(#{action_group_anchor_id}) {{
+  background: var(--mc-panel-bg);
+  border: 1px solid var(--mc-panel-border);
+  border-radius: 14px;
+  padding: 0.7rem 0.85rem;
+  margin-top: 0.75rem;
+}}
+div[data-testid="stVerticalBlock"]:has(#{action_group_anchor_id}) [data-testid="stMetric"] {{
+  background: var(--mc-metric-bg);
+  border: 1px solid var(--mc-metric-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  text-align: center;
+}}
+div[data-testid="stVerticalBlock"]:has(#{action_group_anchor_id}) [data-testid="stMetricLabel"] {{
+  color: var(--mc-text-3);
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}}
+div[data-testid="stVerticalBlock"]:has(#{action_group_anchor_id}) [data-testid="stMetricValue"] {{
+  font-size: 1.6rem;
+}}
+"""
+
         st.markdown(
             f"""
 <style>
+div[data-testid="stHorizontalBlock"]:has(#{left_anchor_id}) {{
+  align-items: stretch;
+}}
 div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) {{
   background: var(--mc-card-bg);
   border: 1px solid var(--mc-card-border);
@@ -1438,6 +1759,7 @@ div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) [data-testid="stMetr
 div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) [data-testid="stMetricValue"] {{
   font-size: 1.8rem;
 }}
+{extra_action_group_css}
 </style>
 """,
             unsafe_allow_html=True,
@@ -1450,10 +1772,22 @@ div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) [data-testid="stMetr
         )
 
         with col_left:
+            st.markdown(f'<div id="{left_anchor_id}"></div>', unsafe_allow_html=True)
             if _is_nonempty_str(poster_url):
                 st.image(str(poster_url), width=poster_width)
             else:
                 st.write("📷 Sin póster")
+            if is_modal and (imdb_url or plex_url):
+                if imdb_url:
+                    st.markdown(
+                        f'<a class="detail-action" href="{imdb_url}">🎬 Ver en IMDb</a>',
+                        unsafe_allow_html=True,
+                    )
+                if plex_url:
+                    st.markdown(
+                        f'<a class="detail-action" href="{plex_url}">📺 Ver en Plex</a>',
+                        unsafe_allow_html=True,
+                    )
 
         with col_right:
             header = str(title) + _safe_year_suffix(year)
@@ -1487,31 +1821,47 @@ div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) [data-testid="stMetr
                 st.write(f"**Año:** {year}")
             if actors:
                 st.write(f"**Actores:** {actors}")
-
-            m1, m2, m3 = st.columns(3)
-            m1.metric("IMDb", _safe_number_to_str(imdb_rating))
             if is_modal:
-                m1.caption(f"Votos IMDb: {_safe_votes(imdb_votes)}")
+                with st.container():
+                    st.markdown(
+                        f'<div id="{metrics_anchor_id}"></div>',
+                        unsafe_allow_html=True,
+                    )
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("IMDb", _safe_number_to_str(imdb_rating))
+                    m1.caption(f"Votos IMDb: {_safe_votes(imdb_votes)}")
 
-            rt_str = _safe_number_to_str(rt_score)
-            m2.metric("RT", f"{rt_str}%" if rt_str != "N/A" else "N/A")
+                    rt_str = _safe_number_to_str(rt_score)
+                    m2.metric("RT", f"{rt_str}%" if rt_str != "N/A" else "N/A")
 
-            m3.metric("Metacritic", _safe_metacritic(metacritic))
+                    m3.metric("Metacritic", _safe_metacritic(metacritic))
 
-            if imdb_url or plex_url:
-                action_cols = st.columns(2, gap="small")
-                with action_cols[0]:
+        if not is_modal and (
+            imdb_url or plex_url or imdb_rating or rt_score or metacritic
+        ):
+            with st.container():
+                st.markdown(
+                    f'<div id="{action_group_anchor_id}"></div>',
+                    unsafe_allow_html=True,
+                )
+                group_cols = st.columns([1, 2], gap="small")
+                with group_cols[0]:
                     if imdb_url:
                         st.markdown(
                             f'<a class="detail-action" href="{imdb_url}">🎬 Ver en IMDb</a>',
                             unsafe_allow_html=True,
                         )
-                with action_cols[1]:
                     if plex_url:
                         st.markdown(
                             f'<a class="detail-action" href="{plex_url}">📺 Ver en Plex</a>',
                             unsafe_allow_html=True,
                         )
+                with group_cols[1]:
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("IMDb", _safe_number_to_str(imdb_rating))
+                    rt_str = _safe_number_to_str(rt_score)
+                    m2.metric("RT", f"{rt_str}%" if rt_str != "N/A" else "N/A")
+                    m3.metric("Metacritic", _safe_metacritic(metacritic))
 
         if _is_nonempty_str(summary_text):
             st.markdown("---")

@@ -22,14 +22,18 @@ from typing import Any, Sequence
 import pandas as pd
 import streamlit as st
 
-from frontend.components import aggrid_with_row_click, render_detail_card
+from frontend.components import (
+    aggrid_with_row_click,
+    render_decision_chip_styles,
+    render_detail_card,
+)
 from frontend.config_front_charts import get_show_numeric_filters
 
 _DECISION_LABELS: dict[str, str] = {
-    "DELETE": "🟥 DELETE",
-    "MAYBE": "🟨 MAYBE",
-    "KEEP": "🟩 KEEP",
-    "UNKNOWN": "⬜ UNKNOWN",
+    "DELETE": "DELETE",
+    "MAYBE": "MAYBE",
+    "KEEP": "KEEP",
+    "UNKNOWN": "UNKNOWN",
 }
 
 
@@ -104,8 +108,6 @@ def _apply_range_filter(
 
 
 def render(df_all: pd.DataFrame) -> None:
-    st.write("### Todas")
-
     if not isinstance(df_all, pd.DataFrame) or df_all.empty:
         st.info("No hay datos para mostrar.")
         return
@@ -143,6 +145,12 @@ def render(df_all: pd.DataFrame) -> None:
             decisions,
             format_func=_decision_label,
             key="dec_filter_all_movies",
+        )
+        colorize = bool(st.session_state.get("grid_colorize_rows", True))
+        render_decision_chip_styles(
+            "decision-chips-all-movies",
+            enabled=colorize,
+            selected_values=list(dec_filter),
         )
 
     with col_f3:
@@ -286,11 +294,12 @@ def render(df_all: pd.DataFrame) -> None:
     df_view = _apply_range_filter(df_view, "rt_score", rt_range, rt_default)
     df_view = _apply_range_filter(df_view, "file_size_gb", size_range, size_default)
 
-    st.write(f"Resultados: {len(df_view)} película(s)")
-
     if df_view.empty:
         st.info("No hay resultados que coincidan con los filtros actuales.")
         return
+
+    def _results_caption(count: int, _total: int, _has_search: bool) -> str:
+        return f"Resultados: {count} película(s)"
 
     col_grid, col_detail = st.columns([2, 1])
 
@@ -309,6 +318,7 @@ def render(df_all: pd.DataFrame) -> None:
                 "rt_score",
             ],
             auto_select_first=True,
+            toolbar_caption_builder=_results_caption,
         )
 
     with col_detail:

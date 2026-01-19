@@ -346,7 +346,7 @@ def directors_from_omdb_json_or_cache(omdb_raw: object, imdb_id: object) -> list
     return _directors_from_cache(imdb_id, cache)
 
 
-def explode_genres_from_omdb_json(df: pd.DataFrame) -> pd.DataFrame:
+def explode_genres_from_omdb_json(df: pd.DataFrame, *_: object) -> pd.DataFrame:
     """
     Construye un DataFrame “exploded” por género usando la columna omdb_json.
 
@@ -354,6 +354,7 @@ def explode_genres_from_omdb_json(df: pd.DataFrame) -> pd.DataFrame:
       las mismas columnas + 'genre'.
     - Si omdb_json no es parseable o no tiene 'Genre', se ignora esa fila.
     - Si omdb_json no aporta datos, intenta usar data/omdb_cache.json por imdb_id.
+    - Se ignoran argumentos extra para compatibilidad hacia atras.
 
     Returns:
         DataFrame con una fila por (película, género) y columna 'genre'.
@@ -499,8 +500,8 @@ def decision_color(
         f"{field}:N",
         title="Decisión",
         scale=alt.Scale(
-            domain=["DELETE", "KEEP", "MAYBE", "UNKNOWN"],
-            range=[use["DELETE"], use["KEEP"], use["MAYBE"], use["UNKNOWN"]],
+            domain=["DELETE", "MAYBE", "KEEP", "UNKNOWN"],
+            range=[use["DELETE"], use["MAYBE"], use["KEEP"], use["UNKNOWN"]],
         ),
     )
 
