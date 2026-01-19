@@ -1836,7 +1836,9 @@ div[data-testid="stVerticalBlock"]:has(#{detail_anchor_id}) [data-testid="stMetr
 
                     m3.metric("Metacritic", _safe_metacritic(metacritic))
 
-        if not is_modal and (imdb_url or plex_url or imdb_rating or rt_score or metacritic):
+        if not is_modal and (
+            imdb_url or plex_url or imdb_rating or rt_score or metacritic
+        ):
             with st.container():
                 st.markdown(
                     f'<div id="{action_group_anchor_id}"></div>',

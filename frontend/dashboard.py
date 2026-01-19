@@ -494,6 +494,26 @@ div[data-testid="stDialog"] [data-testid="stCheckbox"] label,
 div[data-testid="stDialog"] [data-testid="stCheckbox"] span {{
   color: var(--mc-text-1) !important;
 }}
+div[data-testid="stExpander"] > details {{
+  background: transparent !important;
+}}
+div[data-testid="stExpander"] > details > summary {{
+  background: var(--mc-panel-bg) !important;
+  border: 1px solid var(--mc-panel-border) !important;
+  border-radius: 10px;
+  color: var(--mc-text-1) !important;
+  padding: 0.35rem 0.75rem !important;
+}}
+div[data-testid="stExpander"] > details[open] > summary {{
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}}
+div[data-testid="stExpander"] div[data-testid="stExpanderDetails"] {{
+  background: var(--mc-card-bg) !important;
+  border: 1px solid var(--mc-panel-border) !important;
+  border-top: 0 !important;
+  border-radius: 0 0 10px 10px;
+}}
 div[data-testid="stSelectbox"] label,
 div[data-testid="stMultiSelect"] label,
 div[data-testid="stTextInput"] label,
@@ -1355,13 +1375,31 @@ div[data-testid="stVerticalBlock"]:has(#summary-card-anchor) .summary-grid--colo
         else "N/A"
     )
     summary_cards = [
-        ("Películas", format_count_size(summary["total_count"], summary["total_size_gb"]), "neutral"),
-        ("KEEP", format_count_size(summary["keep_count"], summary["keep_size_gb"]), "keep"),
-        ("DELETE", format_count_size(summary["delete_count"], summary["delete_size_gb"]), "delete"),
-        ("MAYBE", format_count_size(summary["maybe_count"], summary["maybe_size_gb"]), "maybe"),
+        (
+            "Películas",
+            format_count_size(summary["total_count"], summary["total_size_gb"]),
+            "neutral",
+        ),
+        (
+            "KEEP",
+            format_count_size(summary["keep_count"], summary["keep_size_gb"]),
+            "keep",
+        ),
+        (
+            "DELETE",
+            format_count_size(summary["delete_count"], summary["delete_size_gb"]),
+            "delete",
+        ),
+        (
+            "MAYBE",
+            format_count_size(summary["maybe_count"], summary["maybe_size_gb"]),
+            "maybe",
+        ),
         ("IMDb medio (analizado)", imdb_value, "neutral"),
     ]
-    grid_class = "summary-grid summary-grid--colorize" if colorize_rows else "summary-grid"
+    grid_class = (
+        "summary-grid summary-grid--colorize" if colorize_rows else "summary-grid"
+    )
     cards_html = "\n".join(
         f'<div class="summary-card summary-card--{variant}">'
         f'<div class="summary-label">{label}</div>'
@@ -1476,30 +1514,34 @@ def _config_body() -> None:
 
 
 dialog_fn: Any = getattr(st, "dialog", None)
-_config_dialog: Callable[[], None] | None = None
+_config_dialog_fn: Callable[[], None] | None = None
 if callable(dialog_fn):
-    dialog_fn = cast(Callable[[str], Callable[[Callable[[], None]], Callable[[], None]]], dialog_fn)
+    dialog_fn = cast(
+        Callable[[str], Callable[[Callable[[], None]], Callable[[], None]]], dialog_fn
+    )
 
     @dialog_fn("Configuracion")
-    def _config_dialog() -> None:
+    def _config_dialog_impl() -> None:
         _config_body()
+
+    _config_dialog_fn = _config_dialog_impl
 
 
 def _open_config() -> None:
     _ensure_config_defaults()
-    if _config_dialog is not None:
-        _config_dialog()
+    if _config_dialog_fn is not None:
+        _config_dialog_fn()
     else:
         _render_config_container(_config_body)
 
 
 if config_clicked:
-    if _config_dialog is not None:
+    if _config_dialog_fn is not None:
         _open_config()
     else:
         st.session_state["config_open"] = True
 
-if _config_dialog is None and st.session_state.get("config_open"):
+if _config_dialog_fn is None and st.session_state.get("config_open"):
     _open_config()
 
 # Auto-apply summary semaforo colors when enabled.

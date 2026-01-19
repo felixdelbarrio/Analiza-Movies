@@ -54,11 +54,15 @@ VIEW_OPTIONS: Final[list[str]] = [
     "Rating IMDb por decisión",
 ]
 
+DECISION_ORDER: Final[list[str]] = ["DELETE", "MAYBE", "KEEP", "UNKNOWN"]
+
 IMDB_OUTLIER_HIGH: Final[float] = 8.5
 IMDB_OUTLIER_LOW: Final[float] = 5.0
 IMDB_REFERENCE: Final[float] = 7.0
 RT_REFERENCE: Final[float] = 60.0
 METACRITIC_REFERENCE: Final[float] = 60.0
+DELETE_WEIGHT: Final[float] = 3.0
+MAYBE_WEIGHT: Final[float] = 1.0
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 AltChart = Any
@@ -374,6 +378,13 @@ def _chart(chart: AltChart) -> AltChart:
     return chart
 
 
+def _caption_bullets(lines: list[str]) -> None:
+    if not lines:
+        return
+    for line in lines:
+        st.caption(f"- {line}")
+
+
 def _chart_png_bytes(chart: AltChart) -> bytes | None:
     try:
         import io
@@ -462,6 +473,7 @@ def _render_view(
     min_n_libs: int,
     boxplot_horizontal: bool,
     compare_libs: list[str],
+    show_insights: bool = True,
 ) -> AltChart | None:
     chart_export: AltChart | None = None
     tokens = _theme_tokens()
@@ -482,23 +494,134 @@ def _render_view(
             .reset_index()
             .rename(columns={"title": "count"})
         )
+        agg["decision"] = pd.Categorical(
+            agg["decision"], categories=DECISION_ORDER, ordered=True
+        )
+        agg = agg.sort_values("decision")
+        agg["decision_rank"] = (
+            agg["decision"]
+            .astype("string")
+            .map({key: idx for idx, key in enumerate(DECISION_ORDER)})
+            .fillna(len(DECISION_ORDER))
+        )
+        total_count = float(agg["count"].sum())
+        agg["count_share"] = agg["count"] / total_count if total_count else 0.0
 
         if agg.empty:
             st.info("No hay datos para la distribucion por decision. Revisa filtros.")
             return None
 
-        chart = (
-            alt.Chart(agg)
-            .mark_bar()
+        if show_insights:
+            insights = _decision_distribution_insights(agg, df_g)
+            _caption_bullets(insights)
+
+        size_share = pd.Series(0.0, index=agg.index, dtype=float)
+        size_gb = pd.Series(0.0, index=agg.index, dtype=float)
+        if "file_size_gb" in df_g.columns:
+            size_agg = (
+                df_g.groupby("decision", dropna=False)["file_size_gb"]
+                .sum()
+                .reset_index()
+            )
+            agg = agg.merge(size_agg, on="decision", how="left")
+            agg["file_size_gb"] = pd.to_numeric(
+                agg["file_size_gb"], errors="coerce"
+            ).fillna(0)
+            total_size = float(agg["file_size_gb"].sum())
+            size_gb = agg["file_size_gb"]
+            if total_size > 0:
+                size_share = agg["file_size_gb"] / total_size
+            else:
+                size_share = pd.Series(0.0, index=agg.index, dtype=float)
+        agg["size_gb"] = size_gb
+        agg["size_share"] = size_share
+
+        metric_points = pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "decision": agg["decision"].astype("string"),
+                        "metric": "Titulos",
+                        "value": agg["count_share"],
+                        "count": agg["count"],
+                        "size_gb": agg["size_gb"],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "decision": agg["decision"].astype("string"),
+                        "metric": "Espacio",
+                        "value": agg["size_share"],
+                        "count": agg["count"],
+                        "size_gb": agg["size_gb"],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
+
+        metric_points["metric"] = pd.Categorical(
+            metric_points["metric"], categories=["Titulos", "Espacio"], ordered=True
+        )
+        axis_pct = alt.Axis(title="Proporción", format=".0%")
+        base = alt.Chart(metric_points).encode(
+            x=alt.X("metric:N", title="Métrica", sort=["Titulos", "Espacio"]),
+            y=alt.Y(
+                "value:Q",
+                title="Proporción",
+                axis=axis_pct,
+                scale=alt.Scale(domain=[0, 1]),
+            ),
+            color=_decision_color(),
+            detail="decision:N",
+        )
+        lines = (
+            base.mark_line(strokeWidth=4)
+            .encode(opacity=alt.condition(dec_sel, alt.value(0.85), alt.value(0.2)))
+            .add_params(dec_sel)
+        )
+        points = (
+            base.mark_point(filled=True, size=120)
             .encode(
-                x=alt.X("decision:N", title="Decisión"),
-                y=alt.Y("count:Q", title="Número de películas"),
-                color=_decision_color(),
-                tooltip=["decision", "count"],
-                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.2)),
+                opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.3)),
+                tooltip=[
+                    alt.Tooltip("decision:N", title="Decision"),
+                    alt.Tooltip("metric:N", title="Métrica"),
+                    alt.Tooltip("value:Q", title="Proporción", format=".1%"),
+                    alt.Tooltip("count:Q", title="Peliculas", format=".0f"),
+                    alt.Tooltip("size_gb:Q", title="Tamano (GB)", format=".2f"),
+                ],
             )
             .add_params(dec_sel)
         )
+        label_offsets = {
+            "DELETE": 0.018,
+            "MAYBE": -0.018,
+            "KEEP": 0.02,
+            "UNKNOWN": -0.02,
+        }
+        label_points = metric_points[metric_points["metric"] == "Espacio"].copy()
+        label_points["label_share"] = (
+            label_points["value"]
+            + label_points["decision"].map(label_offsets).fillna(0)
+        ).clip(lower=0.0, upper=1.0)
+        label_points["label"] = (
+            label_points["decision"]
+            + " "
+            + (label_points["value"] * 100).round(1).astype(str)
+            + "%"
+        )
+        labels = (
+            alt.Chart(label_points)
+            .mark_text(align="left", dx=8, fontWeight="bold")
+            .encode(
+                x=alt.X("metric:N", sort=["Titulos", "Espacio"]),
+                y=alt.Y("label_share:Q"),
+                text="label:N",
+                color=_decision_color(),
+            )
+        )
+        chart = lines + points + labels
         chart = _chart(chart)
         chart_export = chart
 
@@ -511,6 +634,10 @@ def _render_view(
         if data.empty:
             st.info("No hay ratings IMDb validos para mostrar. Revisa filtros.")
             return None
+
+        if show_insights:
+            insights = _imdb_decision_insights(data, imdb_ref)
+            _caption_bullets(insights)
 
         bin_spec = alt.Bin(step=0.5, extent=[0, 10])
         base = (
@@ -535,7 +662,7 @@ def _render_view(
             .encode(x=alt.datum(imdb_ref))
         )
         chart = (base + ref_line).facet(
-            column=alt.Column("decision:N", title="Decision")
+            column=alt.Column("decision:N", title="Decision", sort=DECISION_ORDER)
         )
         chart = chart.resolve_scale(y="independent")
         chart = _chart(chart)
@@ -550,6 +677,10 @@ def _render_view(
         if data.empty:
             st.info("No hay suficientes datos de IMDb y RT. Revisa filtros.")
             return None
+
+        if show_insights:
+            insights = _imdb_rt_insights(data, imdb_ref, rt_ref)
+            _caption_bullets(insights)
 
         data = _mark_imdb_outliers(data, low=outlier_low, high=outlier_high)
         base = (
@@ -607,6 +738,10 @@ def _render_view(
         if data.empty:
             st.info("No hay suficientes datos de IMDb y Metacritic. Revisa filtros.")
             return None
+
+        if show_insights:
+            insights = _imdb_metacritic_insights(data, imdb_ref, meta_ref)
+            _caption_bullets(insights)
 
         data = _mark_imdb_outliers(data, low=outlier_low, high=outlier_high)
         base = (
@@ -675,6 +810,10 @@ def _render_view(
             .rename(columns={"title": "count"})
         )
 
+        if show_insights:
+            insights = _decade_distribution_insights(agg)
+            _caption_bullets(insights)
+
         chart = (
             alt.Chart(agg)
             .mark_bar()
@@ -712,11 +851,25 @@ def _render_view(
             st.info("No hay datos suficientes para los generos seleccionados.")
             return None
 
+        stats = _genre_distribution_stats(agg)
+        order = None
+        if not stats.empty:
+            order = stats.sort_values(
+                ["prune_share", "keep_share"], ascending=[False, True]
+            )["genre"].tolist()
+
+        if st.session_state.get("charts_view") != "Dashboard":
+            st.markdown(f"**{view}**")
+
+        if show_insights and not stats.empty:
+            insights = _genre_distribution_insights(stats)
+            _caption_bullets(insights)
+
         chart = (
             alt.Chart(agg)
             .mark_bar()
             .encode(
-                x=alt.X("genre:N", title="Género"),
+                x=alt.X("genre:N", title="Género", sort=order),
                 y=alt.Y("count:Q", title="Número de películas", stack="normalize"),
                 color=_decision_color(),
                 tooltip=["genre", "decision", "count"],
@@ -742,11 +895,29 @@ def _render_view(
             st.info("No hay datos de tamano de archivos. Revisa filtros.")
             return None
 
+        agg["decision"] = agg["decision"].fillna("UNKNOWN")
+        agg["file_size_gb"] = pd.to_numeric(
+            agg["file_size_gb"], errors="coerce"
+        ).fillna(0)
+        stats = _space_by_library_stats(agg)
+        order = None
+        if not stats.empty:
+            order = stats.sort_values(
+                ["prune_share", "keep_share"], ascending=[False, True]
+            )["library"].tolist()
+
+        if st.session_state.get("charts_view") != "Dashboard":
+            st.markdown(f"**{view}**")
+
+        if show_insights and not stats.empty:
+            insights = _space_by_library_insights(stats)
+            _caption_bullets(insights)
+
         chart_space = (
             alt.Chart(agg)
             .mark_bar()
             .encode(
-                x=alt.X("library:N", title="Biblioteca"),
+                x=alt.X("library:N", title="Biblioteca", sort=order),
                 y=alt.Y("file_size_gb:Q", title="Tamano (GB)", stack="normalize"),
                 color=_decision_color(),
                 tooltip=[
@@ -760,16 +931,6 @@ def _render_view(
         )
         chart_space = _chart(chart_space)
         chart_export = chart_space
-
-        total_space = float(agg["file_size_gb"].sum())
-        space_delete = float(agg.loc[agg["decision"] == "DELETE", "file_size_gb"].sum())
-        space_maybe = float(agg.loc[agg["decision"] == "MAYBE", "file_size_gb"].sum())
-
-        st.markdown(
-            f"- Espacio total: **{total_space:.2f} GB**\n"
-            f"- DELETE: **{space_delete:.2f} GB**\n"
-            f"- MAYBE: **{space_maybe:.2f} GB**"
-        )
 
     # 8) Boxplot IMDb por biblioteca
     elif view == "Boxplot IMDb por biblioteca":
@@ -815,25 +976,24 @@ def _render_view(
         order = stats.sort_values("imdb_median", ascending=False)["library"].tolist()
         top3 = stats.head(3)
         bottom3 = stats.tail(3)
-        st.caption(
+        boxplot_insights = [
             "Top medianas: "
             + ", ".join(
                 [f"{row.library} ({row.imdb_median:.1f})" for row in top3.itertuples()]
-            )
-            + " | "
-            + "Bottom medianas: "
+            ),
+            "Bottom medianas: "
             + ", ".join(
                 [
                     f"{row.library} ({row.imdb_median:.1f})"
                     for row in bottom3.itertuples()
                 ]
-            )
-        )
+            ),
+        ]
         if len(compare_libs) == 2:
             comp = stats[stats["library"].isin(compare_libs)].copy()
             if len(comp) == 2:
                 delta = comp.iloc[0]["imdb_median"] - comp.iloc[1]["imdb_median"]
-                st.caption(
+                boxplot_insights.append(
                     f"Comparacion: {compare_libs[0]} vs {compare_libs[1]} | "
                     f"Delta mediana IMDb: {delta:.2f}"
                 )
@@ -853,6 +1013,8 @@ def _render_view(
                     )
                 )
                 comp_chart = _chart(comp_chart)
+        if show_insights:
+            _caption_bullets(boxplot_insights)
 
         tooltip_common = [
             alt.Tooltip("library:N", title="Biblioteca"),
@@ -953,27 +1115,45 @@ def _render_view(
             st.info("No se encontraron directores. Revisa filtros o datos de OMDb.")
             return None
 
+        stats = _director_ranking_stats(agg)
+        if stats.empty:
+            st.info("No hay datos suficientes para el ranking de directores.")
+            return None
+
         min_movies = min_movies_directors
         top_n = top_n_directors
-        agg = agg[agg["count_total"] >= min_movies]
+        stats = stats[stats["total_count"] >= min_movies]
 
-        if agg.empty:
+        if stats.empty:
             st.info("No hay directores que cumplan el minimo. Revisa filtros.")
             return None
 
-        order = (
-            agg.drop_duplicates("director_list")
-            .sort_values("imdb_mean", ascending=False)["director_list"]
-            .tolist()
-        )
-        top_directors = order[:top_n]
-        agg_top = agg[agg["director_list"].isin(top_directors)]
+        if st.session_state.get("charts_view") != "Dashboard":
+            st.markdown("**Ranking de directores (peores peliculas)**")
 
-        chart = (
+        if show_insights:
+            insights = _director_ranking_insights(stats)
+            _caption_bullets(insights)
+
+        ordered_stats = stats.sort_values(
+            ["prune_score", "imdb_mean"], ascending=[False, True]
+        )
+        selected = ordered_stats.head(min(top_n, len(ordered_stats))).copy()
+        order = selected["director_list"].tolist()
+
+        best_scoring = selected.sort_values("imdb_mean", ascending=False).iloc[0][
+            "director_list"
+        ]
+        if order and order[-1] != best_scoring and order[0] != best_scoring:
+            order = [name for name in order if name != best_scoring] + [best_scoring]
+
+        agg_top = agg[agg["director_list"].isin(order)]
+
+        chart_bars = (
             alt.Chart(agg_top)
             .mark_bar()
             .encode(
-                x=alt.X("director_list:N", title="Director", sort=top_directors),
+                x=alt.X("director_list:N", title="Director", sort=order),
                 y=alt.Y("count:Q", title="Peliculas"),
                 color=_decision_color(),
                 tooltip=[
@@ -987,6 +1167,36 @@ def _render_view(
             )
             .add_params(dec_sel)
         )
+        imdb_layer_data = stats[stats["director_list"].isin(order)].copy()
+        imdb_layer_data = imdb_layer_data[pd.notna(imdb_layer_data["imdb_mean"])]
+        imdb_axis = alt.Axis(
+            orient="right",
+            title="IMDb medio",
+            titleColor=accent_color,
+            labelColor=accent_color,
+            tickColor=accent_color,
+            domainColor=accent_color,
+        )
+        imdb_line = (
+            alt.Chart(imdb_layer_data)
+            .mark_line(color=accent_color, strokeWidth=2)
+            .encode(
+                x=alt.X("director_list:N", sort=order),
+                y=alt.Y(
+                    "imdb_mean:Q",
+                    axis=imdb_axis,
+                    scale=alt.Scale(domain=[0, 10]),
+                ),
+                tooltip=[
+                    alt.Tooltip("director_list:N", title="Director"),
+                    alt.Tooltip("imdb_mean:Q", title="IMDb medio", format=".1f"),
+                    alt.Tooltip("total_count:Q", title="Total", format=".0f"),
+                    alt.Tooltip("prune_count:Q", title="DELETE+MAYBE", format=".0f"),
+                    alt.Tooltip("keep_count:Q", title="KEEP", format=".0f"),
+                ],
+            )
+        )
+        chart = (chart_bars + imdb_line).resolve_scale(y="independent")
         chart = _chart(chart)
         chart_export = chart
 
@@ -1000,14 +1210,27 @@ def _render_view(
             )
             return None
 
-        top_n = top_n_words
-        df_top = df_words.head(top_n)
+        stats = _word_ranking_stats(df_words)
+        if stats.empty:
+            st.info("No hay datos suficientes para el ranking de palabras.")
+            return None
+
+        stats = stats.sort_values(
+            ["score", "maybe_count", "delete_count"], ascending=[False, False, False]
+        )
+        top_n = min(top_n_words, len(stats))
+        top_words = stats.head(top_n)["word"].tolist()
+        df_top = df_words[df_words["word"].isin(top_words)]
+
+        if show_insights:
+            insights = _word_ranking_insights(stats.head(top_n))
+            _caption_bullets(insights)
 
         chart = (
             alt.Chart(df_top)
             .mark_bar()
             .encode(
-                x=alt.X("word:N", title="Palabra"),
+                x=alt.X("word:N", title="Palabra", sort=top_words),
                 y=alt.Y("count:Q", title="Frecuencia"),
                 color=_decision_color(),
                 tooltip=["word", "decision", "count"],
@@ -1019,6 +1242,771 @@ def _render_view(
         chart_export = chart
 
     return chart_export
+
+
+def _format_pct(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
+def _format_num(value: float | int | None, fmt: str = ".1f") -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return format(float(value), fmt)
+
+
+def _weighted_revision(delete_value: Any, maybe_value: Any) -> Any:
+    return delete_value * DELETE_WEIGHT + maybe_value * MAYBE_WEIGHT
+
+
+def _corr_strength(value: float) -> str:
+    abs_value = abs(value)
+    if abs_value >= 0.7:
+        return "alta"
+    if abs_value >= 0.4:
+        return "moderada"
+    if abs_value >= 0.2:
+        return "baja"
+    return "muy baja"
+
+
+def _imdb_metacritic_insights(
+    data: pd.DataFrame,
+    imdb_ref: float,
+    meta_ref: float,
+) -> list[str]:
+    lines: list[str] = []
+    if data.empty:
+        return lines
+
+    imdb_raw = pd.to_numeric(data["imdb_rating"], errors="coerce")
+    meta_raw = pd.to_numeric(data["metacritic_score"], errors="coerce")
+    mask = imdb_raw.notna() & meta_raw.notna()
+    total = int(mask.sum())
+    if total <= 0:
+        return lines
+
+    imdb_scaled = imdb_raw[mask] * 10
+    meta = meta_raw[mask]
+    gap = imdb_scaled - meta
+
+    within_10 = int((gap.abs() <= 10).sum())
+    big_gap = int((gap.abs() >= 20).sum())
+
+    line_parts: list[str] = []
+    if total > 1:
+        corr = imdb_scaled.corr(meta)
+        if pd.notna(corr):
+            strength = _corr_strength(corr)
+            line_parts.append(f"Relacion IMDb vs Metacritic: r={corr:.2f} ({strength})")
+    line_parts.append(
+        f"Alineacion: {_format_pct(within_10 / total)} ({within_10}) dentro de +/-10 pts"
+    )
+    if line_parts:
+        lines.append(" | ".join(line_parts))
+
+    median_gap = float(gap.median())
+    if median_gap >= 0:
+        gap_label = f"Brecha mediana: IMDb esta +{median_gap:.1f} pts sobre Metacritic"
+    else:
+        gap_label = (
+            f"Brecha mediana: Metacritic esta +{abs(median_gap):.1f} pts sobre IMDb"
+        )
+    lines.append(
+        f"{gap_label} | Discrepancias fuertes: "
+        f"{_format_pct(big_gap / total)} ({big_gap}) >= 20 pts"
+    )
+
+    consensus_high = int(((imdb_raw >= imdb_ref) & (meta_raw >= meta_ref) & mask).sum())
+    consensus_low = int(((imdb_raw < imdb_ref) & (meta_raw < meta_ref) & mask).sum())
+    lines.append(
+        "Consenso en umbrales: "
+        f"{_format_pct(consensus_high / total)} ({consensus_high}) por encima de ambos "
+        f"(IMDb >= {imdb_ref:.1f}, Metacritic >= {meta_ref:.0f}) | "
+        f"{_format_pct(consensus_low / total)} ({consensus_low}) por debajo de ambos"
+    )
+
+    return lines
+
+
+def _imdb_rt_insights(
+    data: pd.DataFrame,
+    imdb_ref: float,
+    rt_ref: float,
+) -> list[str]:
+    lines: list[str] = []
+    if data.empty:
+        return lines
+
+    imdb_raw = pd.to_numeric(data["imdb_rating"], errors="coerce")
+    rt_raw = pd.to_numeric(data["rt_score"], errors="coerce")
+    mask = imdb_raw.notna() & rt_raw.notna()
+    total = int(mask.sum())
+    if total <= 0:
+        return lines
+
+    imdb_scaled = imdb_raw[mask] * 10
+    rt = rt_raw[mask]
+    gap = imdb_scaled - rt
+
+    within_10 = int((gap.abs() <= 10).sum())
+    big_gap = int((gap.abs() >= 20).sum())
+
+    line_parts: list[str] = []
+    if total > 1:
+        corr = imdb_scaled.corr(rt)
+        if pd.notna(corr):
+            strength = _corr_strength(corr)
+            line_parts.append(f"Relacion IMDb vs RT: r={corr:.2f} ({strength})")
+    line_parts.append(
+        f"Alineacion: {_format_pct(within_10 / total)} ({within_10}) dentro de +/-10 pts"
+    )
+    if line_parts:
+        lines.append(" | ".join(line_parts))
+
+    median_gap = float(gap.median())
+    if median_gap >= 0:
+        gap_label = f"Brecha mediana: IMDb esta +{median_gap:.1f} pts sobre RT"
+    else:
+        gap_label = f"Brecha mediana: RT esta +{abs(median_gap):.1f} pts sobre IMDb"
+    lines.append(
+        f"{gap_label} | Discrepancias fuertes: "
+        f"{_format_pct(big_gap / total)} ({big_gap}) >= 20 pts"
+    )
+
+    consensus_high = int(((imdb_raw >= imdb_ref) & (rt_raw >= rt_ref) & mask).sum())
+    consensus_low = int(((imdb_raw < imdb_ref) & (rt_raw < rt_ref) & mask).sum())
+    lines.append(
+        "Consenso en umbrales: "
+        f"{_format_pct(consensus_high / total)} ({consensus_high}) por encima de ambos "
+        f"(IMDb >= {imdb_ref:.1f}, RT >= {rt_ref:.0f}) | "
+        f"{_format_pct(consensus_low / total)} ({consensus_low}) por debajo de ambos"
+    )
+
+    return lines
+
+
+def _imdb_decision_insights(data: pd.DataFrame, imdb_ref: float) -> list[str]:
+    lines: list[str] = []
+    if data.empty:
+        return lines
+
+    data = data.copy()
+    data["imdb_rating"] = pd.to_numeric(data["imdb_rating"], errors="coerce")
+    data = data.dropna(subset=["imdb_rating", "decision"])
+    if data.empty:
+        return lines
+
+    stats = (
+        data.groupby("decision", dropna=False)["imdb_rating"]
+        .agg(count="count", mean="mean", median="median")
+        .reset_index()
+    )
+    above_ref = (
+        data.assign(above_ref=data["imdb_rating"] >= imdb_ref)
+        .groupby("decision", dropna=False)["above_ref"]
+        .sum()
+        .rename("above_ref")
+        .reset_index()
+    )
+    stats = stats.merge(above_ref, on="decision", how="left")
+    stats["above_ref"] = stats["above_ref"].fillna(0)
+    stats["above_share"] = stats["above_ref"] / stats["count"]
+
+    stats = stats.sort_values("median", ascending=False)
+    best = stats.iloc[0]
+    worst = stats.iloc[-1]
+    best_decision = str(best["decision"])
+    worst_decision = str(worst["decision"])
+    best_median = best["median"]
+    worst_median = worst["median"]
+    best_count = int(best["count"])
+    worst_count = int(worst["count"])
+
+    if len(stats) > 1:
+        lines.append(
+            "Mejor mediana: "
+            f"{best_decision} ({_format_num(best_median)}, {best_count} titulos)"
+            " | "
+            "Peor mediana: "
+            f"{worst_decision} ({_format_num(worst_median)}, {worst_count} titulos)"
+        )
+        if pd.notna(best_median) and pd.notna(worst_median):
+            delta = float(best_median - worst_median)
+            lines.append(f"Brecha de mediana: {delta:.1f} puntos IMDb")
+    else:
+        lines.append(
+            f"Mediana IMDb: {best_decision} ({_format_num(best_median)}, {best_count} titulos)"
+        )
+
+    top_above = stats.sort_values("above_share", ascending=False).iloc[0]
+    line_parts = [
+        f"Sobre umbral IMDb >= {imdb_ref:.1f}: "
+        f"{top_above['decision']} {_format_pct(top_above['above_share'])} "
+        f"({int(top_above['above_ref'])})"
+    ]
+    if len(stats) > 1:
+        bottom_above = stats.sort_values("above_share", ascending=True).iloc[0]
+        if bottom_above["decision"] != top_above["decision"]:
+            line_parts.append(
+                f"Menor: {bottom_above['decision']} "
+                f"{_format_pct(bottom_above['above_share'])} "
+                f"({int(bottom_above['above_ref'])})"
+            )
+    lines.append(" | ".join(line_parts))
+
+    return lines
+
+
+def _decade_distribution_insights(agg: pd.DataFrame) -> list[str]:
+    if agg.empty:
+        return []
+
+    data = agg.copy()
+    data["decision"] = data["decision"].fillna("UNKNOWN")
+    data["count"] = pd.to_numeric(data["count"], errors="coerce").fillna(0)
+
+    totals = data.groupby("decade_label", dropna=False)["count"].sum()
+    if totals.empty:
+        return []
+
+    stats = pd.DataFrame({"total_count": totals})
+    stats["delete_count"] = (
+        data[data["decision"] == "DELETE"]
+        .groupby("decade_label", dropna=False)["count"]
+        .sum()
+    )
+    stats["maybe_count"] = (
+        data[data["decision"] == "MAYBE"]
+        .groupby("decade_label", dropna=False)["count"]
+        .sum()
+    )
+    stats["prune_count"] = (
+        data[data["decision"].isin(["DELETE", "MAYBE"])]
+        .groupby("decade_label", dropna=False)["count"]
+        .sum()
+    )
+    stats["keep_count"] = (
+        data[data["decision"] == "KEEP"]
+        .groupby("decade_label", dropna=False)["count"]
+        .sum()
+    )
+    stats["unknown_count"] = (
+        data[data["decision"] == "UNKNOWN"]
+        .groupby("decade_label", dropna=False)["count"]
+        .sum()
+    )
+    stats = stats.fillna(0)
+    stats = stats[stats["total_count"] > 0]
+    if stats.empty:
+        return []
+
+    stats["prune_score"] = _weighted_revision(
+        stats["delete_count"], stats["maybe_count"]
+    )
+    total_score = stats["prune_score"] + stats["keep_count"] + stats["unknown_count"]
+    stats["prune_share"] = stats["prune_score"] / total_score
+    stats["keep_share"] = stats["keep_count"] / total_score
+    stats["unknown_share"] = stats["unknown_count"] / total_score
+    stats = stats.reset_index()
+
+    top_prune_share = stats.sort_values("prune_share", ascending=False).iloc[0]
+    top_keep_share = stats.sort_values("keep_share", ascending=False).iloc[0]
+    top_total = stats.sort_values("total_count", ascending=False).iloc[0]
+
+    total_prune = float(stats["prune_score"].sum())
+    top3_prune = float(
+        stats.sort_values("prune_score", ascending=False).head(3)["prune_score"].sum()
+    )
+    total_unknown = float(stats["unknown_count"].sum())
+
+    lines: list[str] = []
+    lines.append(
+        "Mayor % en revision: "
+        f"{top_prune_share.decade_label} ({_format_pct(top_prune_share.prune_share)} | "
+        f"{int(top_prune_share.prune_count)} titulos)"
+        " | "
+        "Mayor % KEEP: "
+        f"{top_keep_share.decade_label} ({_format_pct(top_keep_share.keep_share)} | "
+        f"{int(top_keep_share.keep_count)} titulos)"
+    )
+
+    line_parts = [
+        "Decada con mas volumen: "
+        f"{top_total.decade_label} ({int(top_total.total_count)} titulos)"
+    ]
+    if total_prune > 0:
+        line_parts.append(
+            "Revision concentrada: top 3 = "
+            f"{_format_pct(top3_prune / total_prune)} ({int(top3_prune)} puntos)"
+        )
+    else:
+        line_parts.append("Sin titulos en revision")
+
+    if total_unknown > 0:
+        top_unknown = stats.sort_values("unknown_share", ascending=False).iloc[0]
+        line_parts.append(
+            "Mayor UNKNOWN: "
+            f"{top_unknown.decade_label} "
+            f"({_format_pct(top_unknown.unknown_share)} | "
+            f"{int(top_unknown.unknown_count)} titulos)"
+        )
+    lines.append(" | ".join(line_parts))
+
+    return lines
+
+
+def _space_by_library_stats(agg: pd.DataFrame) -> pd.DataFrame:
+    if agg.empty:
+        return pd.DataFrame()
+
+    data = agg.copy()
+    data["decision"] = data["decision"].fillna("UNKNOWN")
+    data["file_size_gb"] = pd.to_numeric(data["file_size_gb"], errors="coerce").fillna(
+        0
+    )
+
+    totals = data.groupby("library", dropna=False)["file_size_gb"].sum()
+    if totals.empty:
+        return pd.DataFrame()
+
+    stats = pd.DataFrame({"total_gb": totals})
+    stats["delete_gb"] = (
+        data[data["decision"] == "DELETE"]
+        .groupby("library", dropna=False)["file_size_gb"]
+        .sum()
+    )
+    stats["maybe_gb"] = (
+        data[data["decision"] == "MAYBE"]
+        .groupby("library", dropna=False)["file_size_gb"]
+        .sum()
+    )
+    stats["prune_gb"] = (
+        data[data["decision"].isin(["DELETE", "MAYBE"])]
+        .groupby("library", dropna=False)["file_size_gb"]
+        .sum()
+    )
+    stats["keep_gb"] = (
+        data[data["decision"] == "KEEP"]
+        .groupby("library", dropna=False)["file_size_gb"]
+        .sum()
+    )
+    stats["unknown_gb"] = (
+        data[data["decision"] == "UNKNOWN"]
+        .groupby("library", dropna=False)["file_size_gb"]
+        .sum()
+    )
+    stats = stats.fillna(0)
+    stats = stats[stats["total_gb"] > 0]
+    if stats.empty:
+        return stats
+
+    stats["prune_score_gb"] = _weighted_revision(stats["delete_gb"], stats["maybe_gb"])
+    total_score = stats["prune_score_gb"] + stats["keep_gb"] + stats["unknown_gb"]
+    stats["prune_share"] = stats["prune_score_gb"] / total_score
+    stats["keep_share"] = stats["keep_gb"] / total_score
+    stats["unknown_share"] = stats["unknown_gb"] / total_score
+    stats = stats.reset_index()
+    return stats
+
+
+def _space_by_library_insights(stats: pd.DataFrame) -> list[str]:
+    if stats.empty:
+        return []
+
+    top_prune_share = stats.sort_values("prune_share", ascending=False).iloc[0]
+    top_keep_share = stats.sort_values("keep_share", ascending=False).iloc[0]
+    top_total = stats.sort_values("total_gb", ascending=False).iloc[0]
+
+    total_prune = float(stats["prune_score_gb"].sum())
+    top3_prune = float(
+        stats.sort_values("prune_score_gb", ascending=False)
+        .head(3)["prune_score_gb"]
+        .sum()
+    )
+
+    lines: list[str] = []
+    lines.append(
+        "Mayor % en revision: "
+        f"{top_prune_share.library} ({_format_pct(top_prune_share.prune_share)} | "
+        f"{top_prune_share.prune_score_gb:.1f} GB ponderados)"
+        " | "
+        "Mayor % KEEP: "
+        f"{top_keep_share.library} ({_format_pct(top_keep_share.keep_share)} | "
+        f"{top_keep_share.keep_gb:.1f} GB)"
+    )
+
+    line_parts = [
+        f"Biblioteca mas grande: {top_total.library} ({top_total.total_gb:.1f} GB)"
+    ]
+    if total_prune > 0:
+        line_parts.append(
+            "Revision concentrada: top 3 = "
+            f"{_format_pct(top3_prune / total_prune)} ({top3_prune:.1f} GB ponderados)"
+        )
+    else:
+        line_parts.append("Sin espacio en revision")
+    lines.append(" | ".join(line_parts))
+
+    return lines
+
+
+def _genre_distribution_stats(agg: pd.DataFrame) -> pd.DataFrame:
+    if agg.empty:
+        return pd.DataFrame()
+
+    data = agg.copy()
+    data["decision"] = data["decision"].fillna("UNKNOWN")
+    data["count"] = pd.to_numeric(data["count"], errors="coerce").fillna(0)
+
+    totals = data.groupby("genre", dropna=False)["count"].sum()
+    if totals.empty:
+        return pd.DataFrame()
+
+    stats = pd.DataFrame({"total_count": totals})
+    stats["delete_count"] = (
+        data[data["decision"] == "DELETE"].groupby("genre", dropna=False)["count"].sum()
+    )
+    stats["maybe_count"] = (
+        data[data["decision"] == "MAYBE"].groupby("genre", dropna=False)["count"].sum()
+    )
+    stats["prune_count"] = (
+        data[data["decision"].isin(["DELETE", "MAYBE"])]
+        .groupby("genre", dropna=False)["count"]
+        .sum()
+    )
+    stats["keep_count"] = (
+        data[data["decision"] == "KEEP"].groupby("genre", dropna=False)["count"].sum()
+    )
+    stats["unknown_count"] = (
+        data[data["decision"] == "UNKNOWN"]
+        .groupby("genre", dropna=False)["count"]
+        .sum()
+    )
+    stats = stats.fillna(0)
+    stats = stats[stats["total_count"] > 0]
+    if stats.empty:
+        return stats
+
+    stats["prune_score"] = _weighted_revision(
+        stats["delete_count"], stats["maybe_count"]
+    )
+    total_score = stats["prune_score"] + stats["keep_count"] + stats["unknown_count"]
+    stats["prune_share"] = stats["prune_score"] / total_score
+    stats["keep_share"] = stats["keep_count"] / total_score
+    stats["unknown_share"] = stats["unknown_count"] / total_score
+    stats = stats.reset_index()
+    return stats
+
+
+def _genre_distribution_insights(stats: pd.DataFrame) -> list[str]:
+    if stats.empty:
+        return []
+
+    top_prune_share = stats.sort_values("prune_share", ascending=False).iloc[0]
+    top_keep_share = stats.sort_values("keep_share", ascending=False).iloc[0]
+    top_total = stats.sort_values("total_count", ascending=False).iloc[0]
+
+    total_prune = float(stats["prune_score"].sum())
+    top3_prune = float(
+        stats.sort_values("prune_score", ascending=False).head(3)["prune_score"].sum()
+    )
+    total_unknown = float(stats["unknown_count"].sum())
+
+    lines: list[str] = []
+    lines.append(
+        "Mayor % en revision: "
+        f"{top_prune_share.genre} ({_format_pct(top_prune_share.prune_share)} | "
+        f"{int(top_prune_share.prune_count)} titulos)"
+        " | "
+        "Mayor % KEEP: "
+        f"{top_keep_share.genre} ({_format_pct(top_keep_share.keep_share)} | "
+        f"{int(top_keep_share.keep_count)} titulos)"
+    )
+
+    line_parts: list[str] = []
+    if total_prune > 0:
+        line_parts.append(
+            "Revision concentrada: top 3 = "
+            f"{_format_pct(top3_prune / total_prune)} ({int(top3_prune)} puntos)"
+        )
+    else:
+        line_parts.append("Sin titulos en revision")
+
+    if total_unknown > 0:
+        top_unknown = stats.sort_values("unknown_share", ascending=False).iloc[0]
+        line_parts.append(
+            "Mayor UNKNOWN: "
+            f"{top_unknown.genre} ({_format_pct(top_unknown.unknown_share)} | "
+            f"{int(top_unknown.unknown_count)} titulos)"
+        )
+    else:
+        line_parts.append(
+            f"Mayor volumen total: {top_total.genre} ({int(top_total.total_count)} titulos)"
+        )
+    lines.append(" | ".join(line_parts))
+
+    return lines
+
+
+def _director_ranking_stats(agg: pd.DataFrame) -> pd.DataFrame:
+    if agg.empty:
+        return pd.DataFrame()
+
+    data = agg.copy()
+    data["decision"] = data["decision"].fillna("UNKNOWN")
+    data["count"] = pd.to_numeric(data["count"], errors="coerce").fillna(0)
+
+    totals = data.groupby("director_list", dropna=False)["count"].sum()
+    if totals.empty:
+        return pd.DataFrame()
+
+    stats = pd.DataFrame({"total_count": totals})
+    stats["delete_count"] = (
+        data[data["decision"] == "DELETE"]
+        .groupby("director_list", dropna=False)["count"]
+        .sum()
+    )
+    stats["maybe_count"] = (
+        data[data["decision"] == "MAYBE"]
+        .groupby("director_list", dropna=False)["count"]
+        .sum()
+    )
+    stats["prune_count"] = (
+        data[data["decision"].isin(["DELETE", "MAYBE"])]
+        .groupby("director_list", dropna=False)["count"]
+        .sum()
+    )
+    stats["keep_count"] = (
+        data[data["decision"] == "KEEP"]
+        .groupby("director_list", dropna=False)["count"]
+        .sum()
+    )
+    stats["unknown_count"] = (
+        data[data["decision"] == "UNKNOWN"]
+        .groupby("director_list", dropna=False)["count"]
+        .sum()
+    )
+    stats = stats.fillna(0)
+    stats = stats[stats["total_count"] > 0]
+    if stats.empty:
+        return stats
+
+    stats["prune_score"] = _weighted_revision(
+        stats["delete_count"], stats["maybe_count"]
+    )
+    total_score = stats["prune_score"] + stats["keep_count"] + stats["unknown_count"]
+    stats["prune_share"] = stats["prune_score"] / total_score
+    stats["keep_share"] = stats["keep_count"] / total_score
+    stats["balance"] = stats["prune_share"] - stats["keep_share"]
+
+    imdb_mean = data.drop_duplicates("director_list")[
+        ["director_list", "imdb_mean"]
+    ].set_index("director_list")
+    stats = stats.join(imdb_mean, how="left")
+    stats = stats.reset_index()
+    return stats
+
+
+def _director_ranking_insights(stats: pd.DataFrame) -> list[str]:
+    if stats.empty:
+        return []
+
+    worst = stats.sort_values(
+        ["prune_score", "imdb_mean"], ascending=[False, True]
+    ).iloc[0]
+    best_score = stats.sort_values("imdb_mean", ascending=False).iloc[0]
+    top_volume = stats.sort_values("total_count", ascending=False).iloc[0]
+
+    total_prune = float(stats["prune_score"].sum())
+    top3_prune = float(
+        stats.sort_values("prune_score", ascending=False).head(3)["prune_score"].sum()
+    )
+
+    lines: list[str] = []
+    lines.append(
+        "Mas titulos en revision: "
+        f"{worst.director_list} (DELETE {int(worst.delete_count)}, "
+        f"MAYBE {int(worst.maybe_count)} | "
+        f"{_format_pct(worst.prune_share)})"
+        " | "
+        "Mejor scoring: "
+        f"{best_score.director_list} (IMDb {best_score.imdb_mean:.1f})"
+    )
+
+    line_parts = [
+        "Mayor volumen: "
+        f"{top_volume.director_list} ({int(top_volume.total_count)} titulos, "
+        f"{_format_pct(top_volume.prune_share)} en revision)"
+    ]
+    if pd.notna(worst.imdb_mean) and pd.notna(best_score.imdb_mean):
+        delta = float(best_score.imdb_mean - worst.imdb_mean)
+        line_parts.append(f"Brecha de score: {delta:.1f} IMDb")
+    if total_prune > 0:
+        line_parts.append(
+            "Revision concentrada: top 3 = "
+            f"{_format_pct(top3_prune / total_prune)} ({int(top3_prune)} puntos)"
+        )
+    else:
+        line_parts.append("Sin titulos en revision")
+    lines.append(" | ".join(line_parts))
+
+    return lines
+
+
+def _word_ranking_stats(df_words: pd.DataFrame) -> pd.DataFrame:
+    if df_words.empty:
+        return pd.DataFrame()
+
+    pivot = (
+        df_words.pivot_table(
+            index="word",
+            columns="decision",
+            values="count",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+        .copy()
+    )
+    if pivot.empty:
+        return pd.DataFrame()
+
+    delete_series = (
+        pivot["DELETE"]
+        if "DELETE" in pivot.columns
+        else pd.Series(0, index=pivot.index)
+    )
+    maybe_series = (
+        pivot["MAYBE"] if "MAYBE" in pivot.columns else pd.Series(0, index=pivot.index)
+    )
+    pivot["delete_count"] = pd.to_numeric(delete_series, errors="coerce").fillna(0)
+    pivot["maybe_count"] = pd.to_numeric(maybe_series, errors="coerce").fillna(0)
+    pivot["total_prune"] = pivot["delete_count"] + pivot["maybe_count"]
+    pivot = pivot[pivot["total_prune"] > 0]
+    if pivot.empty:
+        return pd.DataFrame()
+
+    pivot["score"] = _weighted_revision(pivot["delete_count"], pivot["maybe_count"])
+    pivot["delete_share"] = (
+        _weighted_revision(pivot["delete_count"], 0) / pivot["score"]
+    )
+    pivot["maybe_share"] = _weighted_revision(0, pivot["maybe_count"]) / pivot["score"]
+    return pivot
+
+
+def _word_ranking_insights(stats: pd.DataFrame) -> list[str]:
+    if stats.empty:
+        return []
+
+    top_score = stats.sort_values("score", ascending=False).iloc[0]
+    top_delete_ratio = stats.sort_values("delete_share", ascending=False).iloc[0]
+    top_maybe_ratio = stats.sort_values("maybe_share", ascending=False).iloc[0]
+
+    total_score = float(stats["score"].sum())
+    top3_score = float(
+        stats.sort_values("score", ascending=False).head(3)["score"].sum()
+    )
+
+    lines: list[str] = []
+    lines.append(
+        "Palabra mas critica: "
+        f"{top_score.word} (DELETE {int(top_score.delete_count)}, "
+        f"MAYBE {int(top_score.maybe_count)})"
+        " | "
+        "Revision mas decisiva: "
+        f"{top_delete_ratio.word} ({_format_pct(top_delete_ratio.delete_share)} DELETE)"
+    )
+    lines.append(
+        "Mayor indecision: "
+        f"{top_maybe_ratio.word} ({_format_pct(top_maybe_ratio.maybe_share)} MAYBE)"
+        " | "
+        f"Concentracion: top 3 = {_format_pct(top3_score / total_score)} del peso"
+    )
+
+    return lines
+
+
+def _decision_distribution_insights(
+    agg: pd.DataFrame,
+    df_g: pd.DataFrame,
+) -> list[str]:
+    lines: list[str] = []
+    if agg.empty or "decision" not in agg.columns or "count" not in agg.columns:
+        return lines
+
+    total = int(agg["count"].sum())
+    if total <= 0:
+        return lines
+
+    counts = {key: 0 for key in DECISION_ORDER}
+    for _, row in agg.iterrows():
+        decision = str(row.get("decision"))
+        if decision in counts:
+            counts[decision] += int(row.get("count", 0))
+
+    prune_total = counts["DELETE"] + counts["MAYBE"]
+    keep_total = counts["KEEP"]
+    unknown_total = counts["UNKNOWN"]
+
+    primary_parts: list[str] = []
+    if prune_total:
+        primary_parts.append(
+            f"DELETE + MAYBE: {_format_pct(prune_total / total)} ({prune_total})"
+        )
+    else:
+        primary_parts.append("DELETE + MAYBE: 0")
+    if keep_total:
+        primary_parts.append(f"KEEP: {_format_pct(keep_total / total)} ({keep_total})")
+    if unknown_total:
+        primary_parts.append(
+            f"UNKNOWN: {_format_pct(unknown_total / total)} ({unknown_total})"
+        )
+    if primary_parts:
+        lines.append(" | ".join(primary_parts))
+
+    secondary_parts: list[str] = []
+    if "file_size_gb" in df_g.columns:
+        sizes = pd.to_numeric(df_g["file_size_gb"], errors="coerce")
+        total_size = float(sizes.fillna(0).sum())
+        if total_size > 0:
+            mask_prune = df_g["decision"].isin(["DELETE", "MAYBE"])
+            prune_size = float(sizes[mask_prune].fillna(0).sum())
+            secondary_parts.append(
+                "Espacio en revisión: "
+                f"{prune_size:.1f} GB ({_format_pct(prune_size / total_size)})"
+            )
+            if prune_total > 0:
+                avg_prune = prune_size / prune_total
+                secondary_parts.append(f"Tamaño medio: {avg_prune:.1f} GB")
+            size_by_dec = (
+                df_g.groupby("decision", dropna=False)["file_size_gb"].sum().to_dict()
+            )
+            count_share = {
+                key: (counts[key] / total if total else 0.0) for key in DECISION_ORDER
+            }
+            size_share = {
+                key: (float(size_by_dec.get(key, 0.0)) / total_size)
+                for key in DECISION_ORDER
+            }
+            deltas = {key: size_share[key] - count_share[key] for key in DECISION_ORDER}
+            main_delta = max(deltas.items(), key=lambda item: abs(item[1]))
+            secondary_parts.append(
+                "Brecha tamaño vs títulos: "
+                f"{main_delta[0]} {main_delta[1] * 100:+.1f} pp"
+            )
+    else:
+        if prune_total > 0:
+            ratio = max(1, int(round(total / prune_total)))
+            secondary_parts.append(f"1 de cada {ratio} títulos está en revisión")
+        else:
+            secondary_parts.append("Sin títulos en revisión actualmente")
+
+    if secondary_parts:
+        lines.append(" | ".join(secondary_parts[:2]))
+        if len(secondary_parts) > 2:
+            lines.append(secondary_parts[2])
+
+    return lines
 
 
 def _auto_insights(df: pd.DataFrame) -> list[str]:
@@ -1129,7 +2117,7 @@ def render(df_all: pd.DataFrame) -> None:
             if "decision" in df_g.columns:
                 decisions = _ordered_options(
                     df_g["decision"],
-                    ["KEEP", "MAYBE", "DELETE", "UNKNOWN"],
+                    DECISION_ORDER,
                 )
                 if decisions:
                     selected_decisions = st.multiselect(
@@ -1142,7 +2130,9 @@ def render(df_all: pd.DataFrame) -> None:
                     render_decision_chip_styles(
                         "decision-chips-charts",
                         enabled=colorize,
-                        selected_values=list(selected_decisions) if selected_decisions else [],
+                        selected_values=(
+                            list(selected_decisions) if selected_decisions else []
+                        ),
                     )
         if show_numeric_filters:
             has_view_filters = view in {
@@ -1166,7 +2156,7 @@ def render(df_all: pd.DataFrame) -> None:
                     key="charts_min_movies_directors",
                 )
                 top_n_directors = st.slider(
-                    "Top N directores por IMDb medio",
+                    "Directores a mostrar (peor -> mejor)",
                     5,
                     50,
                     20,
@@ -1174,7 +2164,11 @@ def render(df_all: pd.DataFrame) -> None:
                 )
             elif view == "Palabras más frecuentes en títulos DELETE/MAYBE":
                 top_n_words = st.slider(
-                    "Top N palabras", 5, 50, 20, key="charts_top_n_words"
+                    "Top N palabras (peor -> mejor)",
+                    5,
+                    50,
+                    20,
+                    key="charts_top_n_words",
                 )
             elif view == "Boxplot IMDb por biblioteca":
                 num_libs = (
@@ -1283,7 +2277,7 @@ def render(df_all: pd.DataFrame) -> None:
         exec_cols = st.columns(len(exec_views))
         for exec_view, col in zip(exec_views, exec_cols, strict=False):
             with col:
-                st.caption(exec_view)
+                st.markdown(f"**{exec_view}**")
                 _render_view(
                     exec_view,
                     df_g,
@@ -1302,6 +2296,7 @@ def render(df_all: pd.DataFrame) -> None:
                     min_n_libs=min_n_libs,
                     boxplot_horizontal=boxplot_horizontal,
                     compare_libs=compare_libs,
+                    show_insights=True,
                 )
         insights = _auto_insights(df_g)
         if insights:

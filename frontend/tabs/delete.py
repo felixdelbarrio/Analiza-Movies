@@ -58,6 +58,8 @@ def _decision_label(value: object) -> str:
     if isinstance(label, str):
         return label
     return str(value)
+
+
 _DECISION_ROW_STYLE = JsCode(
     """
 function(params) {
