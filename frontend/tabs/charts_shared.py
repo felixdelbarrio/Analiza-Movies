@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from frontend.config_front_theme import get_front_theme, normalize_theme_key
-from frontend.data_utils import decision_color
+from frontend.data_utils import dataframe_signature, decision_color
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 AltChart = Any
@@ -81,7 +81,13 @@ _BOXPLOT_GRADIENTS: Final[dict[str, tuple[str, str, str]]] = {
 def _cache_data_decorator() -> Callable[[_F], _F]:
     cache_fn = getattr(st, "cache_data", None)
     if callable(cache_fn):
-        return cast(Callable[[_F], _F], cache_fn(show_spinner=False))
+        return cast(
+            Callable[[_F], _F],
+            cache_fn(
+                show_spinner=False,
+                hash_funcs={pd.DataFrame: dataframe_signature},
+            ),
+        )
     cache_fn = getattr(st, "cache", None)
     if callable(cache_fn):
         return cast(Callable[[_F], _F], cache_fn)

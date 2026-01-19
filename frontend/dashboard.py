@@ -63,7 +63,11 @@ from frontend.config_front_theme import (  # noqa: E402
     normalize_theme_key,
     save_front_theme,
 )
-from frontend.data_utils import add_derived_columns, format_count_size  # noqa: E402
+from frontend.data_utils import (  # noqa: E402
+    add_derived_columns,
+    attach_data_version,
+    format_count_size,
+)
 from frontend.front_api_client import (  # noqa: E402
     ApiClientError,
     fetch_metadata_fix_df,
@@ -892,7 +896,7 @@ def _read_report_filtered_cached(path_str: str, mtime_ns: int) -> pd.DataFrame:
     for col in TEXT_COLUMNS:
         if col in df.columns:
             df[col] = df[col].astype("string")
-    return df
+    return add_derived_columns(df)
 
 
 def _read_csv_or_raise(path: Path, *, label: str) -> pd.DataFrame:
@@ -951,12 +955,15 @@ def _fetch_report_filtered_cached(
     page_size: int,
     query: str | None = None,
 ) -> pd.DataFrame | None:
-    return fetch_report_filtered_df(
+    df = fetch_report_filtered_df(
         base_url=base_url,
         timeout_s=timeout_s,
         page_size=page_size,
         query=query,
     )
+    if df is None:
+        return None
+    return add_derived_columns(df)
 
 
 def _debug_banner(*, df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> None:
@@ -972,6 +979,28 @@ def _debug_banner(*, df_all: pd.DataFrame, df_filtered: pd.DataFrame | None) -> 
         f"mode={FRONT_MODE} all={len(df_all)} filtered={f_rows} | "
         f"REPORT_ALL={REPORT_ALL_PATH} | REPORT_FILTERED={REPORT_FILTERED_PATH} | META_FIX={METADATA_FIX_PATH}"
     )
+
+
+def _attach_data_versions(
+    *,
+    df_all: pd.DataFrame,
+    df_filtered: pd.DataFrame | None,
+) -> None:
+    """
+    Añade un data_version estable para cacheos ligeros en frontend.
+    """
+    if FRONT_MODE == "disk":
+        all_hint = _mtime_ns(REPORT_ALL_PATH)
+        attach_data_version(df_all, source="disk", hint=all_hint)
+        if df_filtered is not None:
+            filt_hint = _mtime_ns(REPORT_FILTERED_PATH)
+            attach_data_version(df_filtered, source="disk_filtered", hint=filt_hint)
+        return
+
+    api_hint = f"{FRONT_API_BASE_URL}:{FRONT_API_PAGE_SIZE}"
+    attach_data_version(df_all, source="api", hint=api_hint)
+    if df_filtered is not None:
+        attach_data_version(df_filtered, source="api_filtered", hint=api_hint)
 
 
 def _bool_switch(label: str, *, key: str, value: bool, help: str | None = None) -> bool:
@@ -1215,6 +1244,7 @@ if df_all_any is None:
     raise RuntimeError("df_all is None")
 df_all = cast(pd.DataFrame, df_all_any)
 
+_attach_data_versions(df_all=df_all, df_filtered=df_filtered)
 _debug_banner(df_all=df_all, df_filtered=df_filtered)
 
 pending_params = st.session_state.pop(PENDING_DETAIL_KEY, None)
