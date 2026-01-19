@@ -29,6 +29,7 @@ from frontend.config_front_charts import (
     get_show_chart_thresholds,
     get_show_numeric_filters,
 )
+from frontend.tabs.charts_data import _mark_imdb_outliers
 from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
@@ -40,6 +41,7 @@ from frontend.tabs.charts_shared import (
     RT_REFERENCE,
     _chart_png_bytes,
     _chart_svg_bytes,
+    _movie_tooltips,
     _ordered_options,
 )
 from frontend.tabs.charts_views import (
@@ -68,6 +70,8 @@ VIEW_OPTIONS: Final[list[str]] = [
     "Boxplot IMDb por biblioteca",
     "Rating IMDb por decisión",
 ]
+
+_REEXPORTED: tuple[object, ...] = (_mark_imdb_outliers, _movie_tooltips)
 
 
 def _render_view(
