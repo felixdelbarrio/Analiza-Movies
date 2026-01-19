@@ -499,8 +499,8 @@ def decision_color(
         f"{field}:N",
         title="Decisión",
         scale=alt.Scale(
-            domain=["DELETE", "KEEP", "MAYBE", "UNKNOWN"],
-            range=[use["DELETE"], use["KEEP"], use["MAYBE"], use["UNKNOWN"]],
+            domain=["DELETE", "MAYBE", "KEEP", "UNKNOWN"],
+            range=[use["DELETE"], use["MAYBE"], use["KEEP"], use["UNKNOWN"]],
         ),
     )
 
