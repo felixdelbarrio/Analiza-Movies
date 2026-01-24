@@ -275,7 +275,11 @@ div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) {
   border-radius: 14px;
   padding: 0.6rem 0.75rem 0.75rem;
   margin-top: 0.9rem;
-  text-align: left;
+  text-align: left !important;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) [data-testid="stMarkdownContainer"],
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) ~ div[data-testid="stVerticalBlock"] [data-testid="stMarkdownContainer"] {
+  text-align: left !important;
 }
 div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) .mc-chart-downloads-title {
   margin: 0 0 0.55rem 0;
@@ -283,27 +287,32 @@ div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) .mc-chart-dow
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--mc-text-3);
-  text-align: left;
+  text-align: left !important;
 }
-div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="stHorizontalBlock"] {
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="stHorizontalBlock"],
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) ~ div[data-testid="stVerticalBlock"] div[data-testid="stHorizontalBlock"] {
   display: flex;
-  flex-wrap: nowrap;
-  justify-content: flex-start;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  justify-content: flex-start !important;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.6rem !important;
   overflow-x: auto;
   padding-bottom: 0.25rem;
 }
-div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="column"] {
-  flex: 0 0 auto;
-  width: auto !important;
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="column"],
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) ~ div[data-testid="stVerticalBlock"] div[data-testid="column"] {
+  flex: 0 0 auto !important;
+  width: max-content !important;
+  min-width: 0 !important;
 }
-div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="column"] > div {
-  width: auto !important;
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="column"] > div,
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) ~ div[data-testid="stVerticalBlock"] div[data-testid="column"] > div {
+  width: max-content !important;
 }
 div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) [data-testid="stDownloadButton"] button {
-  width: auto;
-  white-space: nowrap;
+  width: auto !important;
+  white-space: nowrap !important;
 }
 </style>
 """,
