@@ -46,7 +46,7 @@ from frontend.config_front_theme import (
     is_dark_theme,
     normalize_theme_key,
 )
-from frontend.data_utils import safe_json_loads_single
+from frontend.data_utils import dataframe_signature, safe_json_loads_single
 
 RowDict = dict[str, Any]
 GridCaptionBuilder = Callable[[int, int, bool], str | None]
@@ -713,13 +713,48 @@ def _row_matches_detail_json(
     return False
 
 
+_SEARCH_EXCLUDE_COLS: set[str] = {"omdb_json", "plex_ta"}
+
+
+def _searchable_columns(df: pd.DataFrame) -> list[str]:
+    return [col for col in df.columns if col not in _SEARCH_EXCLUDE_COLS]
+
+
+def _get_search_blob_cache() -> dict[str, object]:
+    cache = st.session_state.get("grid_search_blob_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+        st.session_state["grid_search_blob_cache"] = cache
+    return cache
+
+
+def _build_search_blob(df: pd.DataFrame, cols: Sequence[str]) -> pd.Series:
+    if not cols:
+        return pd.Series([""] * len(df), index=df.index, dtype="string")
+    df_str = df.loc[:, cols].astype("string", copy=False).fillna("")
+    blob = df_str.agg(" ".join, axis=1)
+    return blob.astype("string").str.lower()
+
+
+def _get_search_blob(df: pd.DataFrame, cols: Sequence[str]) -> pd.Series:
+    signature = dataframe_signature(df)
+    key = (signature, tuple(cols))
+    cache = _get_search_blob_cache()
+    cached_key = cache.get("key")
+    cached_blob = cache.get("blob")
+    if cached_key == key and isinstance(cached_blob, pd.Series):
+        blob_series = cast(pd.Series[Any], cached_blob)
+        if blob_series.index.equals(df.index):
+            return blob_series
+    blob = _build_search_blob(df, cols)
+    cache.clear()
+    cache["key"] = key
+    cache["blob"] = blob
+    return blob
+
+
 def _df_signature_for_search(df: pd.DataFrame) -> int:
-    try:
-        idx_hash = pd.util.hash_pandas_object(df.index, index=False).sum()
-    except Exception:
-        idx_hash = len(df)
-    cols_sig = hash(tuple(df.columns))
-    return hash((cols_sig, int(idx_hash)))
+    return dataframe_signature(df)
 
 
 def _get_detail_search_cache() -> dict[tuple[str, int], list[Any]]:
@@ -728,6 +763,29 @@ def _get_detail_search_cache() -> dict[tuple[str, int], list[Any]]:
         cache = {}
         st.session_state["grid_detail_search_cache"] = cache
     return cache
+
+
+def _get_csv_export_cache(key_suffix: str) -> dict[str, object]:
+    state_key = f"grid_csv_export_cache_{key_suffix}"
+    cache = st.session_state.get(state_key)
+    if not isinstance(cache, dict):
+        cache = {}
+        st.session_state[state_key] = cache
+    return cache
+
+
+def _cached_csv_bytes(df: pd.DataFrame, *, key_suffix: str) -> bytes:
+    signature = dataframe_signature(df)
+    cache = _get_csv_export_cache(key_suffix)
+    if cache.get("sig") == signature:
+        cached = cache.get("data")
+        if isinstance(cached, (bytes, bytearray)):
+            return bytes(cached)
+    data: bytes = df.to_csv(index=False).encode("utf-8")
+    cache.clear()
+    cache["sig"] = signature
+    cache["data"] = data
+    return data
 
 
 def _apply_text_search(df: pd.DataFrame, query: str) -> pd.DataFrame:
@@ -739,13 +797,14 @@ def _apply_text_search(df: pd.DataFrame, query: str) -> pd.DataFrame:
     if not terms:
         return df
 
-    df_str = df.astype("string", copy=False)
+    cols = _searchable_columns(df)
+    search_blob = _get_search_blob(df, cols)
     mask_any = pd.Series(True, index=df.index)
     for term in terms:
-        mask = df_str.apply(
-            lambda col, t=term: col.str.contains(t, case=False, regex=False, na=False)
+        term_lc = term.lower()
+        mask_any = mask_any & search_blob.str.contains(
+            term_lc, case=False, regex=False, na=False
         )
-        mask_any = mask_any & mask.any(axis=1)
     terms_lc = [t.lower() for t in terms]
 
     if not mask_any.all():
@@ -871,7 +930,7 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) .grid-caption {{
             df_view = _apply_text_search(df, search_query)
 
         with col_download:
-            csv_export = df_view.to_csv(index=False).encode("utf-8")
+            csv_export = _cached_csv_bytes(df_view, key_suffix=key_suffix)
             st.download_button(
                 "⬇️",
                 data=csv_export,

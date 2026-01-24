@@ -192,6 +192,76 @@ def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ============================================================================
+# Firmas ligeras para cacheo en frontend
+# ============================================================================
+
+
+def _index_signature(index: pd.Index) -> int:
+    if isinstance(index, pd.RangeIndex):
+        return hash((index.start, index.stop, index.step))
+    size = len(index)
+    if size <= 100:
+        try:
+            return hash(tuple(index.tolist()))
+        except Exception:
+            return hash(size)
+    head = index[:50].tolist()
+    tail = index[-50:].tolist()
+    return hash((size, tuple(head), tuple(tail)))
+
+
+def dataframe_signature(df: pd.DataFrame) -> int:
+    """
+    Firma barata para cacheo (usa attrs si existe).
+
+    - Si df.attrs["data_version"] existe, lo usa como base.
+    - Si no, mezcla tamaño, columnas e índice.
+    """
+    version = df.attrs.get("data_version")
+    cols_sig = hash(tuple(df.columns))
+    idx_sig = _index_signature(df.index)
+    if version is not None:
+        return hash((str(version), cols_sig, idx_sig, len(df)))
+    return hash((len(df), cols_sig, idx_sig))
+
+
+def attach_data_version(
+    df: pd.DataFrame,
+    *,
+    source: str,
+    hint: str | int | None = None,
+    sample_rows: int = 250,
+) -> str:
+    """
+    Asigna una version de datos estable en df.attrs["data_version"].
+
+    Se calcula a partir de una muestra de filas para evitar hashes costosos.
+    """
+    existing = df.attrs.get("data_version")
+    if existing is not None:
+        return str(existing)
+
+    if df.empty:
+        sample_sig = 0
+    else:
+        sample = df
+        if len(df) > sample_rows * 2:
+            sample = pd.concat([df.head(sample_rows), df.tail(sample_rows)])
+        try:
+            sample_sig = int(pd.util.hash_pandas_object(sample, index=True).sum())
+        except Exception:
+            sample_sig = hash((len(df), tuple(df.columns)))
+
+    parts = [source]
+    if hint is not None:
+        parts.append(str(hint))
+    parts.append(str(sample_sig))
+    version = "|".join(parts)
+    df.attrs["data_version"] = version
+    return version
+
+
+# ============================================================================
 # Explosión de géneros desde omdb_json
 # ============================================================================
 

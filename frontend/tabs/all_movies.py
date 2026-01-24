@@ -21,6 +21,7 @@ from typing import Any, Sequence
 
 import pandas as pd
 import streamlit as st
+from pandas.api.types import is_numeric_dtype
 
 from frontend.components import (
     aggrid_with_row_click,
@@ -28,6 +29,7 @@ from frontend.components import (
     render_detail_card,
 )
 from frontend.config_front_charts import get_show_numeric_filters
+from frontend.data_utils import dataframe_signature
 
 _DECISION_LABELS: dict[str, str] = {
     "DELETE": "DELETE",
@@ -74,15 +76,41 @@ def _safe_unique_sorted(df: pd.DataFrame, col: str) -> list[str]:
     return out
 
 
-def _numeric_bounds(df: pd.DataFrame, col: str) -> tuple[float, float] | None:
-    if col not in df.columns:
-        return None
+_FILTER_BOUNDS_COLS: tuple[str, ...] = (
+    "year",
+    "imdb_rating",
+    "imdb_votes",
+    "metacritic_score",
+    "rt_score",
+    "file_size_gb",
+)
 
-    series = pd.to_numeric(df[col], errors="coerce").dropna()
-    if series.empty:
-        return None
 
-    return float(series.min()), float(series.max())
+def _build_filter_profile(df: pd.DataFrame) -> dict[str, object]:
+    bounds: dict[str, tuple[float, float]] = {}
+    for col in _FILTER_BOUNDS_COLS:
+        if col not in df.columns:
+            continue
+        series = df[col]
+        if not is_numeric_dtype(series):
+            series = pd.to_numeric(series, errors="coerce")
+        series = series.dropna()
+        if series.empty:
+            continue
+        bounds[col] = (float(series.min()), float(series.max()))
+    return {"libraries": _safe_unique_sorted(df, "library"), "bounds": bounds}
+
+
+def _get_filter_profile(df: pd.DataFrame) -> dict[str, object]:
+    signature = dataframe_signature(df)
+    cache = st.session_state.get("all_movies_filter_profile")
+    if isinstance(cache, dict) and cache.get("sig") == signature:
+        cached = cache.get("value")
+        if isinstance(cached, dict):
+            return cached
+    profile = _build_filter_profile(df)
+    st.session_state["all_movies_filter_profile"] = {"sig": signature, "value": profile}
+    return profile
 
 
 def _apply_range_filter(
@@ -130,8 +158,15 @@ def render(df_all: pd.DataFrame) -> None:
 
     col_f1, col_f2, col_f3 = st.columns([1, 1, 1.4])
 
-    with col_f1:
+    profile = _get_filter_profile(df_all)
+    libraries = profile.get("libraries")
+    bounds = profile.get("bounds")
+    if not isinstance(libraries, list):
         libraries = _safe_unique_sorted(df_all, "library")
+    if not isinstance(bounds, dict):
+        bounds = {}
+
+    with col_f1:
         lib_filter: Sequence[str] = st.multiselect(
             "Biblioteca",
             libraries,
@@ -161,7 +196,7 @@ def render(df_all: pd.DataFrame) -> None:
             col_s1, col_s2 = st.columns(2)
 
             with col_s1:
-                year_bounds = _numeric_bounds(df_all, "year")
+                year_bounds = bounds.get("year")
                 if year_bounds is not None:
                     min_year = int(year_bounds[0])
                     max_year = int(year_bounds[1])
@@ -179,7 +214,7 @@ def render(df_all: pd.DataFrame) -> None:
                             key="year_range_all_movies",
                         )
 
-                imdb_bounds = _numeric_bounds(df_all, "imdb_rating")
+                imdb_bounds = bounds.get("imdb_rating")
                 if imdb_bounds is not None:
                     min_imdb, max_imdb = imdb_bounds
                     imdb_default = (min_imdb, max_imdb)
@@ -197,7 +232,7 @@ def render(df_all: pd.DataFrame) -> None:
                             key="imdb_range_all_movies",
                         )
 
-                votes_bounds = _numeric_bounds(df_all, "imdb_votes")
+                votes_bounds = bounds.get("imdb_votes")
                 if votes_bounds is not None:
                     min_votes = int(votes_bounds[0])
                     max_votes = int(votes_bounds[1])
@@ -218,7 +253,7 @@ def render(df_all: pd.DataFrame) -> None:
                         )
 
             with col_s2:
-                metacritic_bounds = _numeric_bounds(df_all, "metacritic_score")
+                metacritic_bounds = bounds.get("metacritic_score")
                 if metacritic_bounds is not None:
                     min_meta, max_meta = metacritic_bounds
                     metacritic_default = (min_meta, max_meta)
@@ -236,7 +271,7 @@ def render(df_all: pd.DataFrame) -> None:
                             key="metacritic_range_all_movies",
                         )
 
-                rt_bounds = _numeric_bounds(df_all, "rt_score")
+                rt_bounds = bounds.get("rt_score")
                 if rt_bounds is not None:
                     min_rt, max_rt = rt_bounds
                     rt_default = (min_rt, max_rt)
@@ -254,7 +289,7 @@ def render(df_all: pd.DataFrame) -> None:
                             key="rt_range_all_movies",
                         )
 
-                size_bounds = _numeric_bounds(df_all, "file_size_gb")
+                size_bounds = bounds.get("file_size_gb")
                 if size_bounds is not None:
                     min_size, max_size = size_bounds
                     size_default = (min_size, max_size)
