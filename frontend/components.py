@@ -778,10 +778,10 @@ def _cached_csv_bytes(df: pd.DataFrame, *, key_suffix: str) -> bytes:
     signature = dataframe_signature(df)
     cache = _get_csv_export_cache(key_suffix)
     if cache.get("sig") == signature:
-        data = cache.get("data")
-        if isinstance(data, (bytes, bytearray)):
-            return bytes(data)
-    data = df.to_csv(index=False).encode("utf-8")
+        cached = cache.get("data")
+        if isinstance(cached, (bytes, bytearray)):
+            return bytes(cached)
+    data: bytes = df.to_csv(index=False).encode("utf-8")
     cache.clear()
     cache["sig"] = signature
     cache["data"] = data
