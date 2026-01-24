@@ -189,6 +189,7 @@ def _chart(chart: AltChart) -> AltChart:
     Wrapper para mostrar graficos siempre a ancho completo.
     """
     chart = _apply_chart_theme(chart)
+    chart = chart.properties(padding={"top": 14, "left": 8, "right": 8, "bottom": 8})
     st.altair_chart(chart, width="stretch")
     return chart
 

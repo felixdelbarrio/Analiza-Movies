@@ -201,6 +201,134 @@ def _auto_insights(df: pd.DataFrame) -> list[str]:
     return insights[:3]
 
 
+def _apply_dashboard_card_styles() -> None:
+    st.markdown(
+        """
+<style>
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) {
+  background: var(--mc-card-bg);
+  border: 1px solid var(--mc-card-border);
+  border-radius: 18px;
+  padding: 0.85rem 0.95rem 0.95rem;
+  box-shadow: var(--mc-card-shadow);
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 0.85rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(130deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0) 55%);
+  pointer-events: none;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) > div {
+  position: relative;
+  z-index: 1;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) .mc-chart-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) .mc-chart-card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) .mc-chart-card-badge {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.58rem;
+  color: var(--mc-text-3);
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: var(--mc-tag-bg);
+  border: 1px solid var(--mc-tag-border);
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) .mc-chart-card-heading {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--mc-text-1);
+  font-family: var(--mc-font-display);
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) .mc-chart-card-index {
+  font-size: 0.7rem;
+  color: var(--mc-text-3);
+  border: 1px solid var(--mc-panel-border);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  background: var(--mc-panel-bg);
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) [data-testid="stCaption"] {
+  color: var(--mc-text-3);
+  margin-bottom: 0.35rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) [data-testid="stVegaLiteChart"] {
+  margin-top: 0.8rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) {
+  background: var(--mc-panel-bg);
+  border: 1px solid var(--mc-panel-border);
+  border-radius: 14px;
+  padding: 0.6rem 0.75rem 0.75rem;
+  margin-top: 0.9rem;
+  text-align: left;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) .mc-chart-downloads-title {
+  margin: 0 0 0.55rem 0;
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--mc-text-3);
+  text-align: left;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="stHorizontalBlock"] {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 0.6rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="column"] {
+  flex: 0 0 auto;
+  width: auto !important;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="column"] > div {
+  width: auto !important;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) [data-testid="stDownloadButton"] button {
+  width: auto;
+  white-space: nowrap;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_dashboard_card_header(title: str, *, badge: str, index: int | None) -> None:
+    index_html = (
+        f'<span class="mc-chart-card-index">{index:02d}</span>' if index else ""
+    )
+    st.markdown(
+        f"""
+<div class="mc-chart-card-header">
+  <div class="mc-chart-card-title">
+    <span class="mc-chart-card-badge">{badge}</span>
+    <h3 class="mc-chart-card-heading">{title}</h3>
+  </div>
+  {index_html}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 def render(df_all: pd.DataFrame) -> None:
     """
     Renderiza la pestaña 5: Gráficos.
@@ -431,44 +559,7 @@ def render(df_all: pd.DataFrame) -> None:
         st.info("No hay datos tras aplicar filtros. Revisa filtros.")
         return
 
-    if show_exec:
-        available_exec = [v for v in VIEW_OPTIONS if v != "Dashboard"]
-        exec_views = get_dashboard_views(available_exec)
-        exec_views = exec_views[:3]
-        exec_cols = st.columns(len(exec_views))
-        for exec_view, col in zip(exec_views, exec_cols, strict=False):
-            with col:
-                st.markdown(f"**{exec_view}**")
-                _render_view(
-                    exec_view,
-                    df_g,
-                    lib_sel=lib_sel,
-                    dec_sel=dec_sel,
-                    imdb_ref=imdb_ref,
-                    rt_ref=rt_ref,
-                    meta_ref=meta_ref,
-                    outlier_low=outlier_low,
-                    outlier_high=outlier_high,
-                    top_n_genres=top_n_genres,
-                    min_movies_directors=min_movies_directors,
-                    top_n_directors=top_n_directors,
-                    top_n_words=top_n_words,
-                    top_n_libs=top_n_libs,
-                    min_n_libs=min_n_libs,
-                    boxplot_horizontal=boxplot_horizontal,
-                    compare_libs=compare_libs,
-                    show_insights=True,
-                )
-        insights = _auto_insights(df_g)
-        if insights:
-            st.markdown("**Insights automaticos**")
-            for item in insights:
-                st.write(f"- {item}")
-        return
-
-    chart_export = _render_view(
-        view,
-        df_g,
+    render_kwargs = dict(
         lib_sel=lib_sel,
         dec_sel=dec_sel,
         imdb_ref=imdb_ref,
@@ -486,31 +577,104 @@ def render(df_all: pd.DataFrame) -> None:
         compare_libs=compare_libs,
     )
 
-    if chart_export is not None:
-        st.markdown("**Descargas**")
-        if export_csv:
-            csv_data = df_g.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "Descargar CSV filtrado",
-                csv_data,
-                file_name="charts_filtered.csv",
-                mime="text/csv",
-            )
-        svg_bytes = _chart_svg_bytes(chart_export)
-        if svg_bytes:
-            st.download_button(
-                "Descargar SVG del grafico",
-                svg_bytes,
-                file_name="chart.svg",
-                mime="image/svg+xml",
-            )
-        png_bytes = _chart_png_bytes(chart_export)
-        if png_bytes:
-            st.download_button(
-                "Descargar PNG del grafico",
-                png_bytes,
-                file_name="chart.png",
-                mime="image/png",
-            )
-        if not svg_bytes and not png_bytes:
-            st.info("Export no disponible: requiere dependencias extra de Altair.")
+    if show_exec:
+        _apply_dashboard_card_styles()
+        available_exec = [v for v in VIEW_OPTIONS if v != "Dashboard"]
+        exec_views = get_dashboard_views(available_exec)
+        exec_views = exec_views[:3]
+        exec_cols = st.columns(len(exec_views))
+        for index, (exec_view, col) in enumerate(
+            zip(exec_views, exec_cols, strict=False), start=1
+        ):
+            with col:
+                with st.container():
+                    st.markdown(
+                        '<div class="mc-chart-card-anchor"></div>',
+                        unsafe_allow_html=True,
+                    )
+                    _render_dashboard_card_header(
+                        exec_view, badge="Dashboard", index=index
+                    )
+                    _render_view(exec_view, df_g, show_insights=True, **render_kwargs)
+        insights = _auto_insights(df_g)
+        if insights:
+            with st.container():
+                st.markdown(
+                    '<div class="mc-chart-card-anchor"></div>',
+                    unsafe_allow_html=True,
+                )
+                _render_dashboard_card_header(
+                    "Insights automaticos", badge="Insights", index=None
+                )
+                st.markdown("\n".join(f"- {item}" for item in insights))
+        return
+
+    _apply_dashboard_card_styles()
+    with st.container():
+        st.markdown(
+            '<div class="mc-chart-card-anchor"></div>',
+            unsafe_allow_html=True,
+        )
+        _render_dashboard_card_header(view, badge="Vista", index=None)
+        chart_export = _render_view(
+            view,
+            df_g,
+            **render_kwargs,
+        )
+
+        if chart_export is not None:
+            download_items: list[tuple[str, bytes, str, str]] = []
+            if export_csv:
+                download_items.append(
+                    (
+                        "Descargar CSV filtrado",
+                        df_g.to_csv(index=False).encode("utf-8"),
+                        "charts_filtered.csv",
+                        "text/csv",
+                    )
+                )
+            svg_bytes = _chart_svg_bytes(chart_export)
+            if svg_bytes:
+                download_items.append(
+                    (
+                        "Descargar SVG del grafico",
+                        svg_bytes,
+                        "chart.svg",
+                        "image/svg+xml",
+                    )
+                )
+            png_bytes = _chart_png_bytes(chart_export)
+            if png_bytes:
+                download_items.append(
+                    (
+                        "Descargar PNG del grafico",
+                        png_bytes,
+                        "chart.png",
+                        "image/png",
+                    )
+                )
+            if download_items:
+                with st.container():
+                    st.markdown(
+                        '<div class="mc-chart-downloads-anchor"></div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        '<p class="mc-chart-downloads-title">Descargas</p>',
+                        unsafe_allow_html=True,
+                    )
+                    download_cols = st.columns(len(download_items))
+                    for (label, data, filename, mime), col in zip(
+                        download_items, download_cols, strict=False
+                    ):
+                        with col:
+                            st.download_button(
+                                label,
+                                data,
+                                file_name=filename,
+                                mime=mime,
+                            )
+                    if not svg_bytes and not png_bytes:
+                        st.caption(
+                            "Export PNG/SVG no disponible: requiere dependencias extra de Altair."
+                        )
