@@ -465,7 +465,13 @@ def render(
         st.info("No hay filas que coincidan con los filtros actuales.")
         return
 
-    df_view = add_derived_columns(df_view)
+    needs_derived = False
+    if "file_size_gb" not in df_view.columns and "file_size" in df_view.columns:
+        needs_derived = True
+    if "metacritic_score" not in df_view.columns and "omdb_json" in df_view.columns:
+        needs_derived = True
+    if needs_derived:
+        df_view = add_derived_columns(df_view)
 
     desired_order = [
         "title",
