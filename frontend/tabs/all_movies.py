@@ -398,13 +398,16 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) [data-testid="stRadio"] div
 """,
         unsafe_allow_html=True,
     )
-    return st.radio(
+    return cast(
+        str,
+        st.radio(
         "Vista",
         ["Tabla", "Carátulas"],
         horizontal=True,
         key="all_movies_view_mode",
         label_visibility="collapsed",
         format_func=lambda value: "Lista" if value == "Tabla" else "Mosaico",
+        ),
     )
 
 
