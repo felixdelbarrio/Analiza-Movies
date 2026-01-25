@@ -110,10 +110,18 @@ def _rerun() -> None:
 
 
 def _columns_with_gap(
-    spec: Sequence[int], *, gap: Literal["small", "medium", "large"]
+    spec: Sequence[int],
+    *,
+    gap: Literal["small", "medium", "large"],
+    vertical_alignment: Literal["top", "center", "bottom"] | None = None,
 ) -> Sequence[Any]:
     try:
-        return cast(Sequence[Any], st.columns(spec, gap=gap))
+        if vertical_alignment is None:
+            return cast(Sequence[Any], st.columns(spec, gap=gap))
+        return cast(
+            Sequence[Any],
+            st.columns(spec, gap=gap, vertical_alignment=vertical_alignment),
+        )
     except TypeError:
         return cast(Sequence[Any], st.columns(spec))
 
@@ -888,6 +896,8 @@ def render_grid_toolbar(
     show_search: bool = True,
     caption_builder: GridCaptionBuilder | None = None,
     return_download_slot: Literal[False] = False,
+    right_extras: Callable[[], None] | None = None,
+    inline_search: bool = False,
 ) -> tuple[pd.DataFrame, str, int]: ...
 
 
@@ -905,6 +915,8 @@ def render_grid_toolbar(
     show_search: bool = True,
     caption_builder: GridCaptionBuilder | None = None,
     return_download_slot: Literal[True],
+    right_extras: Callable[[], None] | None = None,
+    inline_search: bool = False,
 ) -> tuple[pd.DataFrame, str, int, Any | None]: ...
 
 
@@ -921,6 +933,8 @@ def render_grid_toolbar(
     show_search: bool = True,
     caption_builder: GridCaptionBuilder | None = None,
     return_download_slot: bool = False,
+    right_extras: Callable[[], None] | None = None,
+    inline_search: bool = False,
 ) -> tuple[pd.DataFrame, str, int] | tuple[pd.DataFrame, str, int, Any | None]:
     def _default_caption(count: int, total: int, has_search: bool) -> str:
         if has_search:
@@ -935,35 +949,77 @@ def render_grid_toolbar(
         f"""
 <div id="{anchor_id}" style="display:none;"></div>
 <style>
-div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="stBaseButton-secondary"],
-div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseButton-secondary"] {{
-  background: transparent !important;
-  border: 0 !important;
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] {{
+  align-items: center;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}}
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {{
+  display: flex;
+  align-items: center;
+}}
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] button[data-testid="stBaseButton-secondary"],
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] button[data-testid="baseButton-secondary"],
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] [data-testid="stDownloadButton"] button {{
+  background: var(--mc-button-bg) !important;
+  border: 1px solid var(--mc-button-border) !important;
   box-shadow: none !important;
   padding: 0 !important;
-  min-width: 0 !important;
-  height: auto !important;
-  border-radius: 0 !important;
+  min-width: 42px !important;
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 12px !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }}
-div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="stBaseButton-secondary"] > div,
-div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseButton-secondary"] > div {{
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] button[data-testid="stBaseButton-secondary"] > div,
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] button[data-testid="baseButton-secondary"] > div,
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] [data-testid="stDownloadButton"] button > div {{
   padding: 0 !important;
 }}
-div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="stBaseButton-secondary"] span,
-div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseButton-secondary"] span {{
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] button[data-testid="stBaseButton-secondary"] span,
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] button[data-testid="baseButton-secondary"] span,
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] [data-testid="stDownloadButton"] button span {{
   font-size: 1.1rem;
   line-height: 1;
 }}
-div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="stBaseButton-secondary"]:hover,
-div[data-testid="stVerticalBlock"]:has(#{anchor_id}) button[data-testid="baseButton-secondary"]:hover {{
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] button[data-testid="stBaseButton-secondary"]:hover,
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] button[data-testid="baseButton-secondary"]:hover,
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] [data-testid="stDownloadButton"] button:hover {{
   filter: brightness(1.1);
-  background: transparent !important;
+  background: var(--mc-button-hover-bg) !important;
 }}
-div[data-testid="stVerticalBlock"]:has(#{anchor_id}) .grid-caption {{
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] .grid-caption {{
   text-align: left;
   font-size: 0.8rem;
   opacity: 0.7;
-  margin-top: 0.1rem;
+  margin-top: 0;
+  height: 42px;
+  display: flex;
+  align-items: center;
+}}
+div[data-testid="stMarkdown"]:has(#{anchor_id}-extra) ~ div[data-testid="stHorizontalBlock"] {{
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}}
+div[data-testid="stMarkdown"]:has(#{anchor_id}-extra) ~ div[data-testid="stHorizontalBlock"] [data-testid="stRadio"] {{
+  margin-left: auto;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}}
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] input {{
+  height: 42px !important;
+}}
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] [data-testid="stTextInput"] {{
+  margin-bottom: 0 !important;
+}}
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div[data-testid="stHorizontalBlock"] + div[data-testid="stHorizontalBlock"] {{
+  margin-top: 0 !important;
+}}
+div[data-testid="stMarkdown"]:has(#{anchor_id}) + div + div {{
+  margin-top: 0 !important;
 }}
 </style>
 """,
@@ -975,49 +1031,89 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) .grid-caption {{
 
     search_key = f"grid_search_{key_suffix}"
     search_open_key = f"grid_search_open_{key_suffix}"
-    if show_search and search_open_key not in st.session_state:
+    if show_search and search_open_key not in st.session_state and not inline_search:
         st.session_state[search_open_key] = False
 
-    col_left, col_right = st.columns([10, 1])
+    if right_extras and inline_search:
+        col_left, col_right = st.columns([6, 4], vertical_alignment="center")
+    elif right_extras:
+        col_left, col_right = st.columns([7, 3], vertical_alignment="center")
+    else:
+        col_left, col_right = st.columns([10, 1], vertical_alignment="center")
 
     with col_left:
         left_slot = st.empty()
 
     with col_right:
         col_search: Any = None
+        col_extra: Any | None = None
         download_slot: Any | None = None
         if show_search:
-            col_search, col_download = _columns_with_gap([1, 1], gap="small")
+            if right_extras:
+                widths = [2, 2, 1] if inline_search else [3, 1, 1]
+                col_extra, col_search, col_download = _columns_with_gap(
+                    widths, gap="small", vertical_alignment="center"
+                )
+            else:
+                widths = [3, 1] if inline_search else [1, 1]
+                col_search, col_download = _columns_with_gap(
+                    widths, gap="small", vertical_alignment="center"
+                )
         else:
-            col_download = _columns_with_gap([1], gap="small")[0]
+            if right_extras:
+                col_extra, col_download = _columns_with_gap(
+                    [3, 1], gap="small", vertical_alignment="center"
+                )
+            else:
+                col_download = _columns_with_gap(
+                    [1], gap="small", vertical_alignment="center"
+                )[0]
+
+        if right_extras and col_extra is not None:
+            with col_extra:
+                st.markdown(
+                    f'<div id="{anchor_id}-extra" style="display:none;"></div>',
+                    unsafe_allow_html=True,
+                )
+                right_extras()
 
         if show_search and col_search is not None:
             with col_search:
-                if st.button(
-                    "🔍",
-                    help=search_label,
-                    key=f"grid_search_btn_{key_suffix}",
-                    type="secondary",
-                ):
-                    is_open = bool(st.session_state.get(search_open_key, False))
-                    st.session_state[search_open_key] = not is_open
-                    if is_open:
-                        st.session_state[search_key] = ""
+                if inline_search:
+                    st.text_input(
+                        search_label,
+                        key=search_key,
+                        placeholder=search_placeholder,
+                        label_visibility="collapsed",
+                        help=search_help,
+                    )
+                else:
+                    if st.button(
+                        "🔍",
+                        help=search_label,
+                        key=f"grid_search_btn_{key_suffix}",
+                        type="secondary",
+                    ):
+                        is_open = bool(st.session_state.get(search_open_key, False))
+                        st.session_state[search_open_key] = not is_open
+                        if is_open:
+                            st.session_state[search_key] = ""
 
-            search_query = str(st.session_state.get(search_key, "") or "")
-            df_view = _apply_text_search(df, search_query)
+        search_query = str(st.session_state.get(search_key, "") or "")
+        df_view = _apply_text_search(df, search_query)
 
         with col_download:
             download_slot = st.empty()
 
-    if show_search and bool(st.session_state.get(search_open_key, False)):
-        st.text_input(
-            search_label,
-            key=search_key,
-            placeholder=search_placeholder,
-            label_visibility="collapsed",
-            help=search_help,
-        )
+    if show_search and not inline_search:
+        if bool(st.session_state.get(search_open_key, False)):
+            st.text_input(
+                search_label,
+                key=search_key,
+                placeholder=search_placeholder,
+                label_visibility="collapsed",
+                help=search_help,
+            )
 
     if caption_builder is None:
         caption_builder = _default_caption
@@ -1050,6 +1146,8 @@ def aggrid_with_row_click(
     auto_select_first: bool = False,
     show_toolbar: bool = True,
     toolbar_caption_builder: GridCaptionBuilder | None = None,
+    toolbar_right_extra: Callable[[], None] | None = None,
+    toolbar_state: tuple[pd.DataFrame, str, int, Any | None] | None = None,
 ) -> Optional[dict[str, Any]]:
     """
     Muestra un AgGrid con selección de una sola fila.
@@ -1077,20 +1175,23 @@ def aggrid_with_row_click(
     search_query = ""
     grid_height = 520
     download_slot: Any | None = None
-    if show_toolbar:
+    if toolbar_state is not None:
+        df_view, search_query, grid_height, download_slot = toolbar_state
+    elif show_toolbar:
         df_view, search_query, grid_height, download_slot = render_grid_toolbar(
             df_view,
             key_suffix=key_suffix,
             download_filename=f"{key_suffix}_table.csv",
             caption_builder=toolbar_caption_builder,
             return_download_slot=True,
+            right_extras=toolbar_right_extra,
         )
-        if df_view.empty:
-            if search_query.strip():
-                st.info("No hay filas que coincidan con la búsqueda.")
-            else:
-                st.info("No hay datos para mostrar.")
-            return None
+    if df_view.empty:
+        if search_query.strip():
+            st.info("No hay filas que coincidan con la búsqueda.")
+        else:
+            st.info("No hay datos para mostrar.")
+        return None
 
     gb = GridOptionsBuilder.from_dataframe(df_view)
     gb.configure_selection(selection_mode="single", use_checkbox=False)
