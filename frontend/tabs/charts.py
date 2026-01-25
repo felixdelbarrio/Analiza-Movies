@@ -182,13 +182,47 @@ def _render_view(
     return None
 
 
-def _auto_insights(df: pd.DataFrame) -> list[str]:
+def _auto_insights(df: pd.DataFrame, *, imdb_ref: float) -> list[str]:
     insights: list[str] = []
+    total_count = int(len(df))
+    if total_count <= 0:
+        return insights
+
+    sizes: pd.Series | None = None
+    total_size = None
+    if "file_size_gb" in df.columns:
+        sizes = pd.to_numeric(df["file_size_gb"], errors="coerce")
+        total_size = float(sizes.fillna(0).sum())
+
+    if total_size is not None:
+        insights.append(
+            f"🔎 Escaneo inteligente: {total_count} titulos | {total_size:.1f} GB."
+        )
+    else:
+        insights.append(f"🔎 Escaneo inteligente: {total_count} titulos.")
+
     if "decision" in df.columns:
         counts = df["decision"].value_counts(dropna=False)
         if not counts.empty:
             top_dec = counts.index[0]
-            insights.append(f"Decision con mas titulos: {top_dec} ({counts.iloc[0]}).")
+            prune = int(counts.get("DELETE", 0) + counts.get("MAYBE", 0))
+            keep = int(counts.get("KEEP", 0))
+            prune_share = (prune / total_count) if total_count else 0.0
+            insights.append(
+                f"✅ Estado actual: KEEP {keep} | En revision {prune} ({prune_share:.1%})."
+            )
+            insights.append(
+                f"👁️ Decision dominante: {top_dec} ({counts.iloc[0]} titulos)."
+            )
+
+            if sizes is not None and total_size is not None and total_size > 0:
+                mask_prune = df["decision"].isin(["DELETE", "MAYBE"])
+                prune_size = float(sizes[mask_prune].fillna(0).sum())
+                prune_size_share = prune_size / total_size
+                insights.append(
+                    f"⚡ Alerta espacio: {prune_size:.1f} GB en revision ({prune_size_share:.1%})."
+                )
+
     if "library" in df.columns and "imdb_rating" in df.columns:
         stats = (
             df.dropna(subset=["library", "imdb_rating"])
@@ -199,18 +233,53 @@ def _auto_insights(df: pd.DataFrame) -> list[str]:
         if not stats.empty:
             top_lib = stats.index[0]
             bot_lib = stats.index[-1]
-            insights.append(
-                f"Biblioteca con mejor mediana IMDb: {top_lib} ({stats.iloc[0]:.1f})."
-            )
             if top_lib != bot_lib:
                 insights.append(
-                    f"Biblioteca con peor mediana IMDb: {bot_lib} ({stats.iloc[-1]:.1f})."
+                    "🏆 Calidad por biblioteca: "
+                    f"{top_lib} ({stats.iloc[0]:.1f}) | ⚠️ {bot_lib} ({stats.iloc[-1]:.1f})."
                 )
-    if "imdb_rating" in df.columns:
+            else:
+                insights.append(
+                    f"🏆 Calidad por biblioteca: {top_lib} ({stats.iloc[0]:.1f})."
+                )
+
+        low_mask = pd.to_numeric(df["imdb_rating"], errors="coerce") < imdb_ref
+        low_count = int(low_mask.fillna(False).sum())
+        if total_count > 0:
+            insights.append(
+                f"🚨 Riesgo calidad: {low_count} titulos bajo IMDb {imdb_ref:.1f} ({low_count / total_count:.1%})."
+            )
+
+        if sizes is not None:
+            waste_df = df.copy()
+            waste_df["file_size_gb"] = sizes
+            waste_df["imdb_rating"] = pd.to_numeric(
+                waste_df["imdb_rating"], errors="coerce"
+            )
+            waste_df = waste_df.dropna(subset=["file_size_gb", "imdb_rating"])
+            waste_df["waste_score"] = (
+                waste_df["file_size_gb"]
+                * (imdb_ref - waste_df["imdb_rating"]).clip(lower=0)
+            )
+            waste_df = waste_df[waste_df["waste_score"] > 0]
+            if not waste_df.empty:
+                top = waste_df.sort_values("waste_score", ascending=False).head(3)
+                parts: list[str] = []
+                for _, row in top.iterrows():
+                    title = str(row.get("title", "")).strip() or "Sin titulo"
+                    size_gb = float(row.get("file_size_gb", 0.0))
+                    imdb_val = float(row.get("imdb_rating", 0.0))
+                    parts.append(f"{title} ({size_gb:.1f} GB, IMDb {imdb_val:.1f})")
+                if parts:
+                    insights.append(
+                        "💡 Candidatos a aligerar (alto peso, baja nota): "
+                        + " | ".join(parts)
+                    )
+    if "imdb_rating" in df.columns and len(insights) < 6:
         mean_imdb = pd.to_numeric(df["imdb_rating"], errors="coerce").mean()
         if pd.notna(mean_imdb):
-            insights.append(f"IMDb medio global: {mean_imdb:.2f}.")
-    return insights[:3]
+            insights.append(f"📊 IMDb medio global: {mean_imdb:.2f}.")
+    return insights[:6]
 
 
 def _apply_dashboard_card_styles() -> None:
@@ -336,12 +405,15 @@ def _render_dashboard_card_header(title: str, *, badge: str, index: int | None) 
     index_html = (
         f'<span class="mc-chart-card-index">{index:02d}</span>' if index else ""
     )
+    heading_html = (
+        f'<h3 class="mc-chart-card-heading">{title}</h3>' if badge != title else ""
+    )
     st.markdown(
         f"""
 <div class="mc-chart-card-header">
   <div class="mc-chart-card-title">
     <span class="mc-chart-card-badge">{badge}</span>
-    <h3 class="mc-chart-card-heading">{title}</h3>
+    {heading_html}
   </div>
   {index_html}
 </div>
@@ -614,10 +686,10 @@ def render(df_all: pd.DataFrame) -> None:
                         unsafe_allow_html=True,
                     )
                     _render_dashboard_card_header(
-                        exec_view, badge="Dashboard", index=index
+                        exec_view, badge=exec_view, index=index
                     )
                     _render_view(exec_view, df_g, show_insights=True, **render_kwargs)
-        insights = _auto_insights(df_g)
+        insights = _auto_insights(df_g, imdb_ref=imdb_ref)
         if insights:
             with st.container():
                 st.markdown(
@@ -625,7 +697,7 @@ def render(df_all: pd.DataFrame) -> None:
                     unsafe_allow_html=True,
                 )
                 _render_dashboard_card_header(
-                    "Insights automaticos", badge="Insights", index=None
+                    "Insights automaticos", badge="Insights automaticos", index=None
                 )
                 st.markdown("\n".join(f"- {item}" for item in insights))
         return
@@ -636,7 +708,7 @@ def render(df_all: pd.DataFrame) -> None:
             '<div class="mc-chart-card-anchor"></div>',
             unsafe_allow_html=True,
         )
-        _render_dashboard_card_header(view, badge="Vista", index=None)
+        _render_dashboard_card_header(view, badge=view, index=None)
         chart_export = _render_view(
             view,
             df_g,

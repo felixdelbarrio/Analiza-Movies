@@ -14,7 +14,7 @@ Principios
 - Keys únicas en widgets para evitar colisiones entre pestañas/vistas.
 
 Notas de compatibilidad (st_aggrid)
-- Se usa update_on=["selectionChanged"] (en lugar de GridUpdateMode.*).
+- Se usa update_on con eventos (en lugar de GridUpdateMode.*).
 - Se aplica autoSizeStrategy recomendado por st_aggrid.
 
 Nota importante (Pyright/Pylance)
@@ -788,6 +788,48 @@ def _cached_csv_bytes(df: pd.DataFrame, *, key_suffix: str) -> bytes:
     return data
 
 
+def _grid_response_df(
+    grid_response: Mapping[str, Any], fallback: pd.DataFrame
+) -> pd.DataFrame:
+    data = grid_response.get("data")
+    grid_df: pd.DataFrame | None = None
+    if isinstance(data, pd.DataFrame):
+        grid_df = data
+    elif isinstance(data, (list, tuple)):
+        try:
+            grid_df = pd.DataFrame(list(data))
+        except Exception:
+            grid_df = None
+    elif isinstance(data, dict):
+        try:
+            grid_df = pd.DataFrame(data)
+        except Exception:
+            grid_df = None
+
+    if grid_df is None:
+        return fallback
+
+    if not grid_df.empty and list(grid_df.columns) != list(fallback.columns):
+        ordered = [c for c in fallback.columns if c in grid_df.columns]
+        if ordered:
+            grid_df = grid_df[ordered]
+    elif grid_df.empty and list(grid_df.columns) != list(fallback.columns):
+        grid_df = grid_df.reindex(columns=fallback.columns)
+
+    return grid_df
+
+
+def _restrict_export_columns(
+    df: pd.DataFrame, *, preferred_cols: Sequence[str]
+) -> pd.DataFrame:
+    if not preferred_cols:
+        return df
+    cols = [c for c in preferred_cols if c in df.columns]
+    if not cols:
+        return df
+    return df[cols]
+
+
 def _apply_text_search(df: pd.DataFrame, query: str) -> pd.DataFrame:
     query = query.strip()
     if not query:
@@ -844,7 +886,11 @@ def render_grid_toolbar(
     ),
     show_search: bool = True,
     caption_builder: GridCaptionBuilder | None = None,
-) -> tuple[pd.DataFrame, str, int]:
+    return_download_slot: bool = False,
+) -> (
+    tuple[pd.DataFrame, str, int]
+    | tuple[pd.DataFrame, str, int, Any | None]
+):
     def _default_caption(count: int, total: int, has_search: bool) -> str:
         if has_search:
             return f"Filas: {count} / {total}"
@@ -908,6 +954,7 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) .grid-caption {{
 
     with col_right:
         col_search: Any = None
+        download_slot: Any | None = None
         if show_search:
             col_search, col_download = _columns_with_gap([1, 1], gap="small")
         else:
@@ -930,15 +977,7 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) .grid-caption {{
             df_view = _apply_text_search(df, search_query)
 
         with col_download:
-            csv_export = _cached_csv_bytes(df_view, key_suffix=key_suffix)
-            st.download_button(
-                "⬇️",
-                data=csv_export,
-                file_name=download_filename,
-                mime="text/csv",
-                key=f"grid_download_{key_suffix}",
-                help="Descargar CSV",
-            )
+            download_slot = st.empty()
 
     if show_search and bool(st.session_state.get(search_open_key, False)):
         st.text_input(
@@ -961,6 +1000,8 @@ div[data-testid="stVerticalBlock"]:has(#{anchor_id}) .grid-caption {{
 
     grid_height = 520
 
+    if return_download_slot:
+        return df_view, search_query, grid_height, download_slot
     return df_view, search_query, grid_height
 
 
@@ -1004,12 +1045,14 @@ def aggrid_with_row_click(
 
     search_query = ""
     grid_height = 520
+    download_slot: Any | None = None
     if show_toolbar:
-        df_view, search_query, grid_height = render_grid_toolbar(
+        df_view, search_query, grid_height, download_slot = render_grid_toolbar(
             df_view,
             key_suffix=key_suffix,
             download_filename=f"{key_suffix}_table.csv",
             caption_builder=toolbar_caption_builder,
+            return_download_slot=True,
         )
         if df_view.empty:
             if search_query.strip():
@@ -1181,10 +1224,9 @@ function(params) {
     aggrid_fn = cast(AgGridCallable, getattr(st_aggrid_mod, "AgGrid"))
 
     theme_key = _current_theme_key()
-    grid_response = aggrid_fn(
-        df_view.copy(),
+    aggrid_kwargs: dict[str, Any] = dict(
         gridOptions=grid_options,
-        update_on=["selectionChanged"],
+        update_on=["selectionChanged", "filterChanged", "sortChanged"],
         enable_enterprise_modules=False,
         theme=_aggrid_theme(),
         custom_css=_aggrid_custom_css(),
@@ -1192,6 +1234,30 @@ function(params) {
         allow_unsafe_jscode=True,
         key=f"aggrid_{key_suffix}_{int(colorize_rows)}_{theme_key}",
     )
+    data_return_mode = getattr(st_aggrid_mod, "DataReturnMode", None)
+    if data_return_mode is not None:
+        aggrid_kwargs["data_return_mode"] = data_return_mode.FILTERED_AND_SORTED
+    else:
+        aggrid_kwargs["data_return_mode"] = "FILTERED_AND_SORTED"
+
+    try:
+        grid_response = aggrid_fn(df_view.copy(), **aggrid_kwargs)
+    except TypeError:
+        aggrid_kwargs.pop("data_return_mode", None)
+        grid_response = aggrid_fn(df_view.copy(), **aggrid_kwargs)
+
+    if download_slot is not None:
+        export_df = _grid_response_df(grid_response, df_view)
+        export_df = _restrict_export_columns(export_df, preferred_cols=visible_cols)
+        csv_export = export_df.to_csv(index=False).encode("utf-8")
+        download_slot.download_button(
+            "⬇️",
+            data=csv_export,
+            file_name=f"{key_suffix}_table.csv",
+            mime="text/csv",
+            key=f"grid_download_{key_suffix}",
+            help="Descargar CSV",
+        )
 
     selected_raw = grid_response.get("selected_rows")
     selected_rows = _normalize_selected_rows(selected_raw)
