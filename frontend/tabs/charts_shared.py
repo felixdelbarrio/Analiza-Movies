@@ -5,6 +5,7 @@ Shared helpers and constants for charts rendering.
 from __future__ import annotations
 
 from typing import Any, Callable, Final, Iterable, TypeVar, cast
+from urllib.parse import urlencode
 
 import altair as alt
 import pandas as pd
@@ -160,7 +161,7 @@ def _apply_chart_theme(chart: AltChart) -> AltChart:
 
     return (
         chart.properties(background=bg)
-        .configure_view(fill=bg, stroke=border, strokeWidth=1)
+        .configure_view(fill=bg, stroke=border, strokeWidth=1, clip=False)
         .configure_axis(
             labelColor=text,
             titleColor=text_strong,
@@ -189,6 +190,7 @@ def _chart(chart: AltChart) -> AltChart:
     Wrapper para mostrar graficos siempre a ancho completo.
     """
     chart = _apply_chart_theme(chart)
+    chart = chart.properties(padding={"top": 24, "left": 12, "right": 12, "bottom": 24})
     st.altair_chart(chart, width="stretch")
     return chart
 
@@ -282,6 +284,65 @@ def _format_num(value: float | int | None, fmt: str = ".1f") -> str:
     if value is None or pd.isna(value):
         return "N/A"
     return format(float(value), fmt)
+
+
+def _all_movies_link(label: str, **filters: object) -> str:
+    params: dict[str, str] = {}
+
+    def _as_list(raw: object) -> list[str]:
+        if raw is None:
+            return []
+        if isinstance(raw, (list, tuple, set)):
+            return [str(item).strip() for item in raw if str(item).strip()]
+        raw_str = str(raw).strip()
+        return [raw_str] if raw_str else []
+
+    decisions = _as_list(filters.get("decisions"))
+    if decisions:
+        params["am_dec"] = "|".join(decisions)
+
+    libraries = _as_list(filters.get("libraries"))
+    if libraries:
+        params["am_lib"] = "|".join(libraries)
+
+    genres = _as_list(filters.get("genres"))
+    if genres:
+        params["am_genre"] = "|".join(genres)
+
+    directors = _as_list(filters.get("directors"))
+    if directors:
+        params["am_director"] = "|".join(directors)
+
+    title = filters.get("title")
+    if title is not None and str(title).strip():
+        params["am_title"] = str(title).strip()
+
+    def _num(key: str, param: str, fmt: str) -> None:
+        value = filters.get(key)
+        if value is None:
+            return
+        try:
+            value_f = float(str(value))
+            params[param] = format(value_f, fmt)
+        except (TypeError, ValueError):
+            return
+
+    _num("imdb_min", "am_imdb_min", ".2f")
+    _num("imdb_max", "am_imdb_max", ".2f")
+    _num("size_min", "am_size_min", ".2f")
+    _num("size_max", "am_size_max", ".2f")
+    _num("year_min", "am_year_min", ".0f")
+    _num("year_max", "am_year_max", ".0f")
+    _num("votes_min", "am_votes_min", ".0f")
+    _num("votes_max", "am_votes_max", ".0f")
+    _num("meta_min", "am_meta_min", ".0f")
+    _num("meta_max", "am_meta_max", ".0f")
+    _num("rt_min", "am_rt_min", ".0f")
+    _num("rt_max", "am_rt_max", ".0f")
+
+    if not params:
+        return ""
+    return f"[{label}](?{urlencode(params)})"
 
 
 def _weighted_revision(delete_value: Any, maybe_value: Any) -> Any:

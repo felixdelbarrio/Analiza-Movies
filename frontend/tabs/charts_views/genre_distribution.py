@@ -10,6 +10,7 @@ from frontend.tabs.charts_data import _genres_agg
 from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
+    _all_movies_link,
     _caption_bullets,
     _chart,
     _decision_color,
@@ -81,14 +82,26 @@ def _genre_distribution_insights(stats: pd.DataFrame) -> list[str]:
     total_unknown = float(stats["unknown_count"].sum())
 
     lines: list[str] = []
+    link_prune = _all_movies_link(
+        "Ver en Todas",
+        genres=[str(top_prune_share.genre)],
+        decisions=["DELETE", "MAYBE"],
+    )
+    link_keep = _all_movies_link(
+        "Ver en Todas",
+        genres=[str(top_keep_share.genre)],
+        decisions=["KEEP"],
+    )
     lines.append(
         "Mayor % en revision: "
         f"{top_prune_share.genre} ({_format_pct(top_prune_share.prune_share)} | "
         f"{int(top_prune_share.prune_count)} titulos)"
-        " | "
-        "Mayor % KEEP: "
+        + (f" {link_prune}" if link_prune else "")
+        + " | "
+        + "Mayor % KEEP: "
         f"{top_keep_share.genre} ({_format_pct(top_keep_share.keep_share)} | "
         f"{int(top_keep_share.keep_count)} titulos)"
+        + (f" {link_keep}" if link_keep else "")
     )
 
     line_parts: list[str] = []
@@ -102,14 +115,25 @@ def _genre_distribution_insights(stats: pd.DataFrame) -> list[str]:
 
     if total_unknown > 0:
         top_unknown = stats.sort_values("unknown_share", ascending=False).iloc[0]
+        link_unknown = _all_movies_link(
+            "Ver en Todas",
+            genres=[str(top_unknown.genre)],
+            decisions=["UNKNOWN"],
+        )
         line_parts.append(
             "Mayor UNKNOWN: "
             f"{top_unknown.genre} ({_format_pct(top_unknown.unknown_share)} | "
             f"{int(top_unknown.unknown_count)} titulos)"
+            + (f" {link_unknown}" if link_unknown else "")
         )
     else:
+        link_total = _all_movies_link(
+            "Ver en Todas",
+            genres=[str(top_total.genre)],
+        )
         line_parts.append(
             f"Mayor volumen total: {top_total.genre} ({int(top_total.total_count)} titulos)"
+            + (f" {link_total}" if link_total else "")
         )
     lines.append(" | ".join(line_parts))
 

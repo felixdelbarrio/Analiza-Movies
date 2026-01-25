@@ -9,6 +9,7 @@ import streamlit as st
 from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
+    _all_movies_link,
     _caption_bullets,
     _chart,
     _chart_accents,
@@ -113,6 +114,16 @@ def render(
                 )
             )
             comp_chart = _chart(comp_chart)
+    if not top3.empty:
+        top_lib = str(top3.iloc[0]["library"])
+        link_top = _all_movies_link("Ver en Todas", libraries=[top_lib])
+        if link_top:
+            boxplot_insights.append(f"Biblioteca top: {top_lib}. {link_top}")
+    if not bottom3.empty:
+        bottom_lib = str(bottom3.iloc[0]["library"])
+        link_bottom = _all_movies_link("Ver en Todas", libraries=[bottom_lib])
+        if link_bottom:
+            boxplot_insights.append(f"Biblioteca bottom: {bottom_lib}. {link_bottom}")
     if show_insights:
         _caption_bullets(boxplot_insights)
 
@@ -140,7 +151,7 @@ def render(
                     "library:N",
                     title="Biblioteca",
                     sort=order,
-                    axis=alt.Axis(labelAngle=-45, labelLimit=140),
+                    axis=alt.Axis(labelAngle=90, labelLimit=140),
                 )
                 if not horizontal
                 else alt.X("imdb_rating:Q", title="IMDb rating (0-10)")
@@ -185,7 +196,7 @@ def render(
                 alt.X(
                     "library:N",
                     sort=order,
-                    axis=alt.Axis(labelAngle=-45, labelLimit=140),
+                    axis=alt.Axis(labelAngle=90, labelLimit=140),
                 )
                 if not horizontal
                 else alt.X("imdb_jitter:Q")

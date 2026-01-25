@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import altair as alt
 import pandas as pd
 import streamlit as st
@@ -9,6 +10,7 @@ import streamlit as st
 from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
+    _all_movies_link,
     _caption_bullets,
     _chart,
     _decision_color,
@@ -16,6 +18,14 @@ from frontend.tabs.charts_shared import (
     _requires_columns,
     _weighted_revision,
 )
+
+
+def _decade_range(label: str) -> tuple[int, int] | None:
+    match = re.search(r"(\\d{4})", str(label))
+    if not match:
+        return None
+    decade = int(match.group(1))
+    return decade, decade + 9
 
 
 def _decade_distribution_insights(agg: pd.DataFrame) -> list[str]:
@@ -81,19 +91,54 @@ def _decade_distribution_insights(agg: pd.DataFrame) -> list[str]:
     total_unknown = float(stats["unknown_count"].sum())
 
     lines: list[str] = []
+    prune_range = _decade_range(top_prune_share.decade_label)
+    keep_range = _decade_range(top_keep_share.decade_label)
+    prune_link = (
+        _all_movies_link(
+            "Ver en Todas",
+            year_min=prune_range[0],
+            year_max=prune_range[1],
+            decisions=["DELETE", "MAYBE"],
+        )
+        if prune_range
+        else ""
+    )
+    keep_link = (
+        _all_movies_link(
+            "Ver en Todas",
+            year_min=keep_range[0],
+            year_max=keep_range[1],
+            decisions=["KEEP"],
+        )
+        if keep_range
+        else ""
+    )
     lines.append(
         "Mayor % en revision: "
         f"{top_prune_share.decade_label} ({_format_pct(top_prune_share.prune_share)} | "
         f"{int(top_prune_share.prune_count)} titulos)"
-        " | "
-        "Mayor % KEEP: "
+        + (f" {prune_link}" if prune_link else "")
+        + " | "
+        + "Mayor % KEEP: "
         f"{top_keep_share.decade_label} ({_format_pct(top_keep_share.keep_share)} | "
         f"{int(top_keep_share.keep_count)} titulos)"
+        + (f" {keep_link}" if keep_link else "")
     )
 
+    total_range = _decade_range(top_total.decade_label)
+    total_link = (
+        _all_movies_link(
+            "Ver en Todas",
+            year_min=total_range[0],
+            year_max=total_range[1],
+        )
+        if total_range
+        else ""
+    )
     line_parts = [
         "Decada con mas volumen: "
         f"{top_total.decade_label} ({int(top_total.total_count)} titulos)"
+        + (f" {total_link}" if total_link else "")
     ]
     if total_prune > 0:
         line_parts.append(
@@ -105,11 +150,23 @@ def _decade_distribution_insights(agg: pd.DataFrame) -> list[str]:
 
     if total_unknown > 0:
         top_unknown = stats.sort_values("unknown_share", ascending=False).iloc[0]
+        unknown_range = _decade_range(top_unknown.decade_label)
+        unknown_link = (
+            _all_movies_link(
+                "Ver en Todas",
+                year_min=unknown_range[0],
+                year_max=unknown_range[1],
+                decisions=["UNKNOWN"],
+            )
+            if unknown_range
+            else ""
+        )
         line_parts.append(
             "Mayor UNKNOWN: "
             f"{top_unknown.decade_label} "
             f"({_format_pct(top_unknown.unknown_share)} | "
             f"{int(top_unknown.unknown_count)} titulos)"
+            + (f" {unknown_link}" if unknown_link else "")
         )
     lines.append(" | ".join(line_parts))
 

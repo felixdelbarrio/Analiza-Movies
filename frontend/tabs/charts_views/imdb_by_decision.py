@@ -10,6 +10,7 @@ from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
     DECISION_ORDER,
+    _all_movies_link,
     _caption_bullets,
     _chart,
     _decision_color,
@@ -75,18 +76,27 @@ def _imdb_decision_insights(data: pd.DataFrame, imdb_ref: float) -> list[str]:
         )
 
     top_above = stats.sort_values("above_share", ascending=False).iloc[0]
+    top_decision = str(top_above["decision"])
+    link_high = _all_movies_link(
+        "Ver en Todas", decisions=[top_decision], imdb_min=imdb_ref
+    )
     line_parts = [
         f"Sobre umbral IMDb >= {imdb_ref:.1f}: "
-        f"{top_above['decision']} {_format_pct(top_above['above_share'])} "
-        f"({int(top_above['above_ref'])})"
+        f"{top_decision} {_format_pct(top_above['above_share'])} "
+        f"({int(top_above['above_ref'])})" + (f" {link_high}" if link_high else "")
     ]
     if len(stats) > 1:
         bottom_above = stats.sort_values("above_share", ascending=True).iloc[0]
         if bottom_above["decision"] != top_above["decision"]:
+            bottom_decision = str(bottom_above["decision"])
+            link_low = _all_movies_link(
+                "Ver en Todas", decisions=[bottom_decision], imdb_max=imdb_ref
+            )
             line_parts.append(
-                f"Menor: {bottom_above['decision']} "
+                f"Menor: {bottom_decision} "
                 f"{_format_pct(bottom_above['above_share'])} "
                 f"({int(bottom_above['above_ref'])})"
+                + (f" {link_low}" if link_low else "")
             )
     lines.append(" | ".join(line_parts))
 
