@@ -10,11 +10,14 @@ from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
     DECISION_ORDER,
+    FONT_BODY,
     _caption_bullets,
     _chart,
     _decision_color,
     _format_pct,
     _requires_columns,
+    _theme_tokens,
+    _token,
 )
 
 
@@ -40,18 +43,22 @@ def _decision_distribution_insights(
     keep_total = counts["KEEP"]
     unknown_total = counts["UNKNOWN"]
 
+    lines.append("Anillo exterior: títulos. Anillo interior: espacio (GB).")
+
     primary_parts: list[str] = []
     if prune_total:
         primary_parts.append(
-            f"DELETE + MAYBE: {_format_pct(prune_total / total)} ({prune_total})"
+            f"En revisión: {prune_total} títulos ({_format_pct(prune_total / total)})"
         )
     else:
-        primary_parts.append("DELETE + MAYBE: 0")
+        primary_parts.append("En revisión: 0")
     if keep_total:
-        primary_parts.append(f"KEEP: {_format_pct(keep_total / total)} ({keep_total})")
+        primary_parts.append(
+            f"KEEP: {keep_total} títulos ({_format_pct(keep_total / total)})"
+        )
     if unknown_total:
         primary_parts.append(
-            f"UNKNOWN: {_format_pct(unknown_total / total)} ({unknown_total})"
+            f"UNKNOWN: {unknown_total} títulos ({_format_pct(unknown_total / total)})"
         )
     if primary_parts:
         lines.append(" | ".join(primary_parts))
@@ -69,23 +76,7 @@ def _decision_distribution_insights(
             )
             if prune_total > 0:
                 avg_prune = prune_size / prune_total
-                secondary_parts.append(f"Tamaño medio: {avg_prune:.1f} GB")
-            size_by_dec = (
-                df_g.groupby("decision", dropna=False)["file_size_gb"].sum().to_dict()
-            )
-            count_share = {
-                key: (counts[key] / total if total else 0.0) for key in DECISION_ORDER
-            }
-            size_share = {
-                key: (float(size_by_dec.get(key, 0.0)) / total_size)
-                for key in DECISION_ORDER
-            }
-            deltas = {key: size_share[key] - count_share[key] for key in DECISION_ORDER}
-            main_delta = max(deltas.items(), key=lambda item: abs(item[1]))
-            secondary_parts.append(
-                "Brecha tamaño vs títulos: "
-                f"{main_delta[0]} {main_delta[1] * 100:+.1f} pp"
-            )
+                secondary_parts.append(f"Tamaño medio en revision: {avg_prune:.1f} GB")
     else:
         if prune_total > 0:
             ratio = max(1, int(round(total / prune_total)))
@@ -156,90 +147,94 @@ def render(
     agg["size_gb"] = size_gb
     agg["size_share"] = size_share
 
-    metric_points = pd.concat(
-        [
-            pd.DataFrame(
-                {
-                    "decision": agg["decision"].astype("string"),
-                    "metric": "Titulos",
-                    "value": agg["count_share"],
-                    "count": agg["count"],
-                    "size_gb": agg["size_gb"],
-                }
-            ),
-            pd.DataFrame(
-                {
-                    "decision": agg["decision"].astype("string"),
-                    "metric": "Espacio",
-                    "value": agg["size_share"],
-                    "count": agg["count"],
-                    "size_gb": agg["size_gb"],
-                }
-            ),
-        ],
-        ignore_index=True,
+    ring_titles = agg.copy()
+    ring_titles["metric"] = "Titulos"
+    ring_titles["share"] = ring_titles["count_share"]
+
+    ring_space = agg.copy()
+    ring_space["metric"] = "Espacio"
+    ring_space["share"] = ring_space["size_share"]
+
+    has_size = bool("file_size_gb" in df_g.columns and float(agg["size_gb"].sum()) > 0)
+
+    tokens = _theme_tokens()
+    border = _token(tokens, "panel_border", "#1f2532")
+    text_strong = _token(tokens, "text_1", "#f1f5f9")
+
+    tooltip = [
+        alt.Tooltip("decision:N", title="Decision"),
+        alt.Tooltip("metric:N", title="Anillo"),
+        alt.Tooltip("share:Q", title="Proporción", format=".1%"),
+        alt.Tooltip("count:Q", title="Titulos", format=".0f"),
+        alt.Tooltip("size_gb:Q", title="Tamano (GB)", format=".2f"),
+    ]
+
+    base = alt.Chart(ring_titles).encode(
+        theta=alt.Theta("share:Q", stack=True),
+        color=_decision_color(),
+        order=alt.Order("decision_rank:Q"),
+        tooltip=tooltip,
+    )
+    outer_ring = (
+        base.mark_arc(
+            innerRadius=120,
+            outerRadius=175,
+            cornerRadius=5,
+            padAngle=0.01,
+            stroke=border,
+            strokeWidth=1.2,
+        )
+        .encode(opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.25)))
+        .add_params(dec_sel)
     )
 
-    metric_points["metric"] = pd.Categorical(
-        metric_points["metric"], categories=["Titulos", "Espacio"], ordered=True
-    )
-    axis_pct = alt.Axis(title="Proporción", format=".0%")
-    base = alt.Chart(metric_points).encode(
-        x=alt.X("metric:N", title="Métrica", sort=["Titulos", "Espacio"]),
-        y=alt.Y(
-            "value:Q",
-            title="Proporción",
-            axis=axis_pct,
-            scale=alt.Scale(domain=[0, 1]),
-        ),
+    inner_ring = alt.Chart(ring_space).encode(
+        theta=alt.Theta("share:Q", stack=True),
         color=_decision_color(),
-        detail="decision:N",
+        order=alt.Order("decision_rank:Q"),
+        tooltip=tooltip,
     )
-    lines = (
-        base.mark_line(strokeWidth=4)
-        .encode(opacity=alt.condition(dec_sel, alt.value(0.85), alt.value(0.2)))
-        .add_params(dec_sel)
-    )
-    points = (
-        base.mark_point(filled=True, size=120)
-        .encode(
-            opacity=alt.condition(dec_sel, alt.value(1), alt.value(0.3)),
-            tooltip=[
-                alt.Tooltip("decision:N", title="Decision"),
-                alt.Tooltip("metric:N", title="Métrica"),
-                alt.Tooltip("value:Q", title="Proporción", format=".1%"),
-                alt.Tooltip("count:Q", title="Peliculas", format=".0f"),
-                alt.Tooltip("size_gb:Q", title="Tamano (GB)", format=".2f"),
-            ],
+    inner_ring = (
+        inner_ring.mark_arc(
+            innerRadius=70,
+            outerRadius=110,
+            cornerRadius=4,
+            padAngle=0.01,
+            stroke=border,
+            strokeWidth=1.0,
         )
+        .encode(opacity=alt.condition(dec_sel, alt.value(0.9), alt.value(0.2)))
         .add_params(dec_sel)
     )
-    label_offsets = {
-        "DELETE": 0.018,
-        "MAYBE": -0.018,
-        "KEEP": 0.02,
-        "UNKNOWN": -0.02,
-    }
-    label_points = metric_points[metric_points["metric"] == "Espacio"].copy()
-    label_points["label_share"] = (
-        label_points["value"] + label_points["decision"].map(label_offsets).fillna(0)
-    ).clip(lower=0.0, upper=1.0)
-    label_points["label"] = (
-        label_points["decision"]
+
+    label_data = ring_titles[ring_titles["share"] >= 0.06].copy()
+    label_data["label"] = (
+        label_data["decision"]
         + " "
-        + (label_points["value"] * 100).round(1).astype(str)
+        + (label_data["share"] * 100).round(1).astype(str)
         + "%"
     )
+    label_points = label_data.copy()
+    label_points["label_radius"] = label_points["decision"].map(
+        {"KEEP": 170, "DELETE": 182, "MAYBE": 182, "UNKNOWN": 182}
+    ).fillna(182)
     labels = (
         alt.Chart(label_points)
-        .mark_text(align="left", dx=8, fontWeight="bold")
+        .mark_text(fontWeight="bold", font=FONT_BODY, fontSize=11)
         .encode(
-            x=alt.X("metric:N", sort=["Titulos", "Espacio"]),
-            y=alt.Y("label_share:Q"),
+            theta=alt.Theta("share:Q", stack=True),
+            radius=alt.Radius("label_radius:Q"),
             text="label:N",
-            color=_decision_color(),
+            color=alt.value(text_strong),
         )
     )
-    chart = lines + points + labels
+
+    chart = outer_ring + labels
+    if has_size:
+        chart = inner_ring + outer_ring + labels
+    chart = chart.properties(
+        height=420,
+        padding={"top": 32, "left": 12, "right": 12, "bottom": 36},
+    )
     chart = _chart(chart)
     return chart

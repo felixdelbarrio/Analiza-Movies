@@ -160,7 +160,7 @@ def _apply_chart_theme(chart: AltChart) -> AltChart:
 
     return (
         chart.properties(background=bg)
-        .configure_view(fill=bg, stroke=border, strokeWidth=1)
+        .configure_view(fill=bg, stroke=border, strokeWidth=1, clip=False)
         .configure_axis(
             labelColor=text,
             titleColor=text_strong,
@@ -189,7 +189,9 @@ def _chart(chart: AltChart) -> AltChart:
     Wrapper para mostrar graficos siempre a ancho completo.
     """
     chart = _apply_chart_theme(chart)
-    chart = chart.properties(padding={"top": 14, "left": 8, "right": 8, "bottom": 8})
+    chart = chart.properties(
+        padding={"top": 24, "left": 12, "right": 12, "bottom": 24}
+    )
     st.altair_chart(chart, width="stretch")
     return chart
 

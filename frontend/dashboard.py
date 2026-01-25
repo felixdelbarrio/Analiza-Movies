@@ -536,6 +536,7 @@ div[data-baseweb="textarea"] > div {{
   background-color: var(--mc-input-bg) !important;
   border: 1px solid var(--mc-input-border) !important;
   box-shadow: none !important;
+  min-height: 44px;
 }}
 div[data-baseweb="input"] > div:focus-within,
 div[data-baseweb="select"] > div:focus-within,
@@ -547,6 +548,8 @@ div[data-baseweb="input"] input,
 div[data-baseweb="textarea"] textarea {{
   color: var(--mc-input-text) !important;
   caret-color: var(--mc-input-text);
+  height: 44px;
+  line-height: 44px;
 }}
 div[data-baseweb="input"] input::placeholder,
 div[data-baseweb="textarea"] textarea::placeholder {{
@@ -556,6 +559,11 @@ div[data-baseweb="select"] div[role="combobox"],
 div[data-baseweb="select"] span,
 div[data-baseweb="select"] input {{
   color: var(--mc-input-text) !important;
+}}
+div[data-baseweb="select"] div[role="combobox"] {{
+  min-height: 44px;
+  display: flex;
+  align-items: center;
 }}
 div[data-baseweb="select"] {{
   color: var(--mc-input-text) !important;

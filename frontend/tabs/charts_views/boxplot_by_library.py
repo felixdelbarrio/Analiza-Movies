@@ -140,7 +140,7 @@ def render(
                     "library:N",
                     title="Biblioteca",
                     sort=order,
-                    axis=alt.Axis(labelAngle=-45, labelLimit=140),
+                    axis=alt.Axis(labelAngle=90, labelLimit=140),
                 )
                 if not horizontal
                 else alt.X("imdb_rating:Q", title="IMDb rating (0-10)")
@@ -185,7 +185,7 @@ def render(
                 alt.X(
                     "library:N",
                     sort=order,
-                    axis=alt.Axis(labelAngle=-45, labelLimit=140),
+                    axis=alt.Axis(labelAngle=90, labelLimit=140),
                 )
                 if not horizontal
                 else alt.X("imdb_jitter:Q")

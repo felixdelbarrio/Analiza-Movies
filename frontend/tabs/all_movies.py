@@ -329,6 +329,17 @@ def render(df_all: pd.DataFrame) -> None:
     df_view = _apply_range_filter(df_view, "rt_score", rt_range, rt_default)
     df_view = _apply_range_filter(df_view, "file_size_gb", size_range, size_default)
 
+    if "file_size_gb" in df_view.columns:
+        size_series = pd.to_numeric(df_view["file_size_gb"], errors="coerce")
+        df_view = (
+            df_view.assign(_sort_size=size_series)
+            .sort_values("_sort_size", ascending=False, na_position="last")
+            .drop(columns=["_sort_size"])
+        )
+    initial_sort_model: list[dict[str, Any]] | None = None
+    if "file_size_gb" in df_view.columns:
+        initial_sort_model = [{"colId": "file_size_gb", "sort": "desc"}]
+
     if df_view.empty:
         st.info("No hay resultados que coincidan con los filtros actuales.")
         return
@@ -352,6 +363,7 @@ def render(df_all: pd.DataFrame) -> None:
                 "imdb_votes",
                 "rt_score",
             ],
+            initial_sort_model=initial_sort_model,
             auto_select_first=True,
             toolbar_caption_builder=_results_caption,
         )

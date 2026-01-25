@@ -54,6 +54,8 @@ from frontend.tabs.charts_views import (
     imdb_vs_metacritic,
     imdb_vs_rt,
     space_by_library,
+    value_per_gb,
+    waste_map,
     word_ranking,
 )
 
@@ -61,6 +63,8 @@ VIEW_OPTIONS: Final[list[str]] = [
     "Dashboard",
     "Ratings IMDb vs Metacritic",
     "Ratings IMDb vs RT",
+    "Mapa de desperdicio",
+    "Valor por GB",
     "Distribución por decisión",
     "Espacio ocupado por biblioteca/decisión",
     "Distribución por década",
@@ -97,6 +101,14 @@ def _render_view(
 ) -> AltChart | None:
     if view == "Distribución por decisión":
         return decision_distribution.render(
+            df_g, dec_sel=dec_sel, show_insights=show_insights
+        )
+    if view == "Mapa de desperdicio":
+        return waste_map.render(
+            df_g, dec_sel=dec_sel, imdb_ref=imdb_ref, show_insights=show_insights
+        )
+    if view == "Valor por GB":
+        return value_per_gb.render(
             df_g, dec_sel=dec_sel, show_insights=show_insights
         )
     if view == "Rating IMDb por decisión":

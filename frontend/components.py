@@ -974,6 +974,7 @@ def aggrid_with_row_click(
     key_suffix: str,
     *,
     visible_order: Sequence[str] | None = None,
+    initial_sort_model: list[dict[str, Any]] | None = None,
     auto_select_first: bool = False,
     show_toolbar: bool = True,
     toolbar_caption_builder: GridCaptionBuilder | None = None,
@@ -1025,6 +1026,7 @@ def aggrid_with_row_click(
         wrapHeaderText=True,
         autoHeaderHeight=True,
         defaultColDef={
+            "sortable": True,
             "cellStyle": {
                 "display": "flex",
                 "alignItems": "center",
@@ -1033,6 +1035,8 @@ def aggrid_with_row_click(
             }
         },
     )
+    if initial_sort_model:
+        gb.configure_grid_options(sortModel=initial_sort_model)
 
     colorize_rows = bool(st.session_state.get("grid_colorize_rows", True))
     if colorize_rows:
