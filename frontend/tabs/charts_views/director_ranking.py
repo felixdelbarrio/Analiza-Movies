@@ -10,6 +10,7 @@ from frontend.tabs.charts_data import _director_decision_stats
 from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
+    _all_movies_link,
     _caption_bullets,
     _chart,
     _chart_accents,
@@ -94,20 +95,35 @@ def _director_ranking_insights(stats: pd.DataFrame) -> list[str]:
     )
 
     lines: list[str] = []
+    link_worst = _all_movies_link(
+        "Ver en Todas",
+        directors=[str(worst.director_list)],
+        decisions=["DELETE", "MAYBE"],
+    )
+    link_best = _all_movies_link(
+        "Ver en Todas", directors=[str(best_score.director_list)]
+    )
     lines.append(
         "Mas titulos en revision: "
         f"{worst.director_list} (DELETE {int(worst.delete_count)}, "
         f"MAYBE {int(worst.maybe_count)} | "
         f"{_format_pct(worst.prune_share)})"
-        " | "
-        "Mejor scoring: "
+        + (f" {link_worst}" if link_worst else "")
+        + " | "
+        + "Mejor scoring: "
         f"{best_score.director_list} (IMDb {best_score.imdb_mean:.1f})"
+        + (f" {link_best}" if link_best else "")
     )
 
+    link_volume = _all_movies_link(
+        "Ver en Todas",
+        directors=[str(top_volume.director_list)],
+    )
     line_parts = [
         "Mayor volumen: "
         f"{top_volume.director_list} ({int(top_volume.total_count)} titulos, "
         f"{_format_pct(top_volume.prune_share)} en revision)"
+        + (f" {link_volume}" if link_volume else "")
     ]
     if pd.notna(worst.imdb_mean) and pd.notna(best_score.imdb_mean):
         delta = float(best_score.imdb_mean - worst.imdb_mean)

@@ -9,6 +9,7 @@ import streamlit as st
 from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
+    _all_movies_link,
     _caption_bullets,
     _chart,
     _decision_color,
@@ -88,18 +89,31 @@ def _space_by_library_insights(stats: pd.DataFrame) -> list[str]:
     )
 
     lines: list[str] = []
+    link_prune = _all_movies_link(
+        "Ver revisión",
+        libraries=[str(top_prune_share.library)],
+        decisions=["DELETE", "MAYBE"],
+    )
+    link_keep = _all_movies_link(
+        "Ver KEEP",
+        libraries=[str(top_keep_share.library)],
+        decisions=["KEEP"],
+    )
     lines.append(
         "Mayor % en revision: "
         f"{top_prune_share.library} ({_format_pct(top_prune_share.prune_share)} | "
         f"{top_prune_share.prune_score_gb:.1f} GB ponderados)"
-        " | "
-        "Mayor % KEEP: "
+        + (f" {link_prune}" if link_prune else "")
+        + " | "
+        + "Mayor % KEEP: "
         f"{top_keep_share.library} ({_format_pct(top_keep_share.keep_share)} | "
-        f"{top_keep_share.keep_gb:.1f} GB)"
+        f"{top_keep_share.keep_gb:.1f} GB)" + (f" {link_keep}" if link_keep else "")
     )
 
+    link_total = _all_movies_link("Ver en Todas", libraries=[str(top_total.library)])
     line_parts = [
         f"Biblioteca mas grande: {top_total.library} ({top_total.total_gb:.1f} GB)"
+        + (f" {link_total}" if link_total else "")
     ]
     if total_prune > 0:
         line_parts.append(

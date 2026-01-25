@@ -10,7 +10,7 @@ Importante (anti-circular-import):
 - Lo importamos dentro de render() (lazy import) para evitar ciclos backend<->frontend.
 
 Notas st_aggrid:
-- update_on=["selectionChanged"] (en lugar de GridUpdateMode)
+- update_on con eventos (en lugar de GridUpdateMode)
 - autoSizeStrategy = {"type": "fitGridWidth"}
 
 Nota importante (Pyright/Pylance)
@@ -32,7 +32,12 @@ import pandas as pd
 import streamlit as st
 from st_aggrid import GridOptionsBuilder, JsCode
 
-from frontend.components import render_decision_chip_styles, render_grid_toolbar
+from frontend.components import (
+    _grid_response_df,
+    _restrict_export_columns,
+    render_decision_chip_styles,
+    render_grid_toolbar,
+)
 from frontend.config_front_theme import (
     get_front_theme,
     is_dark_theme,
@@ -488,11 +493,12 @@ def render(
     ordered_cols = visible_cols + [c for c in df_view.columns if c not in visible_cols]
     df_view = df_view[ordered_cols]
 
-    df_view, search_query, grid_height = render_grid_toolbar(
+    df_view, search_query, grid_height, download_slot = render_grid_toolbar(
         df_view,
         key_suffix="delete",
         download_filename="delete_table.csv",
         show_search=False,
+        return_download_slot=True,
     )
     if df_view.empty:
         if search_query.strip():
@@ -657,10 +663,9 @@ function(params) {
 
     colorize_rows = bool(st.session_state.get("grid_colorize_rows", True))
     theme_key = _current_theme_key()
-    grid_response = aggrid_fn(
-        df_view.copy(),
+    aggrid_kwargs: dict[str, Any] = dict(
         gridOptions=grid_options,
-        update_on=["selectionChanged"],
+        update_on=["selectionChanged", "filterChanged", "sortChanged"],
         enable_enterprise_modules=False,
         theme=_aggrid_theme(),
         custom_css=_aggrid_custom_css(),
@@ -668,6 +673,30 @@ function(params) {
         allow_unsafe_jscode=True,
         key=f"aggrid_delete_{int(colorize_rows)}_{theme_key}",
     )
+    data_return_mode = getattr(st_aggrid_mod, "DataReturnMode", None)
+    if data_return_mode is not None:
+        aggrid_kwargs["data_return_mode"] = data_return_mode.FILTERED_AND_SORTED
+    else:
+        aggrid_kwargs["data_return_mode"] = "FILTERED_AND_SORTED"
+
+    try:
+        grid_response = aggrid_fn(df_view.copy(), **aggrid_kwargs)
+    except TypeError:
+        aggrid_kwargs.pop("data_return_mode", None)
+        grid_response = aggrid_fn(df_view.copy(), **aggrid_kwargs)
+
+    if download_slot is not None:
+        export_df = _grid_response_df(grid_response, df_view)
+        export_df = _restrict_export_columns(export_df, preferred_cols=visible_cols)
+        csv_export = export_df.to_csv(index=False).encode("utf-8")
+        download_slot.download_button(
+            "⬇️",
+            data=csv_export,
+            file_name="delete_table.csv",
+            mime="text/csv",
+            key="grid_download_delete",
+            help="Descargar CSV",
+        )
 
     selected_rows = _normalize_selected_rows(grid_response.get("selected_rows"))
 

@@ -39,6 +39,7 @@ from frontend.tabs.charts_shared import (
     IMDB_REFERENCE,
     METACRITIC_REFERENCE,
     RT_REFERENCE,
+    _all_movies_link,
     _chart_png_bytes,
     _chart_svg_bytes,
     _movie_tooltips,
@@ -54,6 +55,8 @@ from frontend.tabs.charts_views import (
     imdb_vs_metacritic,
     imdb_vs_rt,
     space_by_library,
+    value_per_gb,
+    waste_map,
     word_ranking,
 )
 
@@ -61,6 +64,8 @@ VIEW_OPTIONS: Final[list[str]] = [
     "Dashboard",
     "Ratings IMDb vs Metacritic",
     "Ratings IMDb vs RT",
+    "Mapa de desperdicio",
+    "Valor por GB",
     "Distribución por decisión",
     "Espacio ocupado por biblioteca/decisión",
     "Distribución por década",
@@ -99,6 +104,12 @@ def _render_view(
         return decision_distribution.render(
             df_g, dec_sel=dec_sel, show_insights=show_insights
         )
+    if view == "Mapa de desperdicio":
+        return waste_map.render(
+            df_g, dec_sel=dec_sel, imdb_ref=imdb_ref, show_insights=show_insights
+        )
+    if view == "Valor por GB":
+        return value_per_gb.render(df_g, dec_sel=dec_sel, show_insights=show_insights)
     if view == "Rating IMDb por decisión":
         return imdb_by_decision.render(
             df_g, dec_sel=dec_sel, imdb_ref=imdb_ref, show_insights=show_insights
@@ -170,13 +181,58 @@ def _render_view(
     return None
 
 
-def _auto_insights(df: pd.DataFrame) -> list[str]:
+def _auto_insights(df: pd.DataFrame, *, imdb_ref: float) -> list[str]:
     insights: list[str] = []
+    total_count = int(len(df))
+    if total_count <= 0:
+        return insights
+
+    sizes: pd.Series | None = None
+    total_size = None
+    if "file_size_gb" in df.columns:
+        sizes_local = pd.to_numeric(df["file_size_gb"], errors="coerce")
+        sizes = sizes_local
+        total_size = float(sizes_local.fillna(0).sum())
+
+    size_threshold = None
+    if sizes is not None:
+        sizes_valid = sizes.dropna()
+        if not sizes_valid.empty:
+            size_threshold = float(sizes_valid.quantile(0.75))
+
+    if total_size is not None:
+        insights.append(
+            f"🧠 Lectura inteligente: {total_count} titulos | {total_size:.1f} GB."
+        )
+    else:
+        insights.append(f"🧠 Lectura inteligente: {total_count} titulos.")
+
     if "decision" in df.columns:
         counts = df["decision"].value_counts(dropna=False)
         if not counts.empty:
-            top_dec = counts.index[0]
-            insights.append(f"Decision con mas titulos: {top_dec} ({counts.iloc[0]}).")
+            prune = int(counts.get("DELETE", 0) + counts.get("MAYBE", 0))
+            keep = int(counts.get("KEEP", 0))
+            prune_share = (prune / total_count) if total_count else 0.0
+            ratio = max(1, int(round(total_count / prune))) if prune else None
+            if prune:
+                insights.append(
+                    f"📌 En revision: {prune} titulos ({prune_share:.1%}) → 1 de cada {ratio} pide decision."
+                )
+
+            if sizes is not None and total_size is not None and total_size > 0:
+                mask_prune = df["decision"].isin(["DELETE", "MAYBE"])
+                prune_size = float(sizes[mask_prune].fillna(0).sum())
+                prune_size_share = prune_size / total_size
+                link = _all_movies_link("Ver en Todas", decisions=["DELETE", "MAYBE"])
+                insights.append(
+                    f"🔥 Podrias ganar {prune_size:.1f} GB hoy limpiando revision "
+                    f"({prune_size_share:.1%} del espacio). {link}"
+                )
+            else:
+                insights.append(
+                    f"✅ Estado actual: KEEP {keep} | En revision {prune} ({prune_share:.1%})."
+                )
+
     if "library" in df.columns and "imdb_rating" in df.columns:
         stats = (
             df.dropna(subset=["library", "imdb_rating"])
@@ -187,18 +243,210 @@ def _auto_insights(df: pd.DataFrame) -> list[str]:
         if not stats.empty:
             top_lib = stats.index[0]
             bot_lib = stats.index[-1]
-            insights.append(
-                f"Biblioteca con mejor mediana IMDb: {top_lib} ({stats.iloc[0]:.1f})."
-            )
             if top_lib != bot_lib:
+                link = _all_movies_link("Ver en Todas", libraries=[str(bot_lib)])
                 insights.append(
-                    f"Biblioteca con peor mediana IMDb: {bot_lib} ({stats.iloc[-1]:.1f})."
+                    "🏆 Pulso de calidad: "
+                    f"{top_lib} lidera ({stats.iloc[0]:.1f}) | ⚠️ {bot_lib} es la mas debil ({stats.iloc[-1]:.1f}). {link}"
                 )
-    if "imdb_rating" in df.columns:
+            else:
+                insights.append(
+                    f"🏆 Pulso de calidad: {top_lib} lidera ({stats.iloc[0]:.1f})."
+                )
+
+        low_mask = pd.to_numeric(df["imdb_rating"], errors="coerce") < imdb_ref
+        low_count = int(low_mask.fillna(False).sum())
+        if total_count > 0:
+            link = _all_movies_link("Ver en Todas", imdb_max=imdb_ref)
+            if sizes is not None:
+                low_size = float(sizes[low_mask.fillna(False)].fillna(0).sum())
+                insights.append(
+                    f"🚨 Riesgo calidad: {low_count} titulos < IMDb {imdb_ref:.1f} "
+                    f"ocupan {low_size:.1f} GB. {link}"
+                )
+            else:
+                insights.append(
+                    f"🚨 Riesgo calidad: {low_count} titulos < IMDb {imdb_ref:.1f} "
+                    f"({low_count / total_count:.1%}). {link}"
+                )
+
+        if sizes is not None:
+            waste_df = df.copy()
+            waste_df["file_size_gb"] = sizes
+            waste_df["imdb_rating"] = pd.to_numeric(
+                waste_df["imdb_rating"], errors="coerce"
+            )
+            waste_df = waste_df.dropna(subset=["file_size_gb", "imdb_rating"])
+            waste_df["waste_score"] = waste_df["file_size_gb"] * (
+                imdb_ref - waste_df["imdb_rating"]
+            ).clip(lower=0)
+            waste_df = waste_df[waste_df["waste_score"] > 0]
+            if not waste_df.empty:
+                top = waste_df.sort_values("waste_score", ascending=False).head(3)
+                parts: list[str] = []
+                for _, row in top.iterrows():
+                    title = str(row.get("title", "")).strip() or "Sin titulo"
+                    size_gb = float(row.get("file_size_gb", 0.0))
+                    imdb_val = float(row.get("imdb_rating", 0.0))
+                    parts.append(f"{title} ({size_gb:.1f} GB, IMDb {imdb_val:.1f})")
+                if parts:
+                    link = ""
+                    if size_threshold is not None:
+                        link = _all_movies_link(
+                            "Ver en Todas",
+                            imdb_max=imdb_ref,
+                            size_min=size_threshold,
+                        )
+                    insights.append(
+                        "💡 Wow instantaneo: estos 3 pesan mucho y aportan poco → "
+                        + " | ".join(parts)
+                        + (f" {link}" if link else "")
+                    )
+    if "imdb_rating" in df.columns and len(insights) < 6:
         mean_imdb = pd.to_numeric(df["imdb_rating"], errors="coerce").mean()
         if pd.notna(mean_imdb):
-            insights.append(f"IMDb medio global: {mean_imdb:.2f}.")
-    return insights[:3]
+            insights.append(f"📊 Calidad media global: IMDb {mean_imdb:.2f}.")
+    return insights[:6]
+
+
+def _apply_dashboard_card_styles() -> None:
+    st.markdown(
+        """
+<style>
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) {
+  background: var(--mc-card-bg);
+  border: 1px solid var(--mc-card-border);
+  border-radius: 18px;
+  padding: 0.85rem 0.95rem 0.95rem;
+  box-shadow: var(--mc-card-shadow);
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 0.85rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(130deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0) 55%);
+  pointer-events: none;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) > div {
+  position: relative;
+  z-index: 1;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) .mc-chart-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) .mc-chart-card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) .mc-chart-card-badge {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.58rem;
+  color: var(--mc-text-3);
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: var(--mc-tag-bg);
+  border: 1px solid var(--mc-tag-border);
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) .mc-chart-card-heading {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--mc-text-1);
+  font-family: var(--mc-font-display);
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) .mc-chart-card-index {
+  font-size: 0.7rem;
+  color: var(--mc-text-3);
+  border: 1px solid var(--mc-panel-border);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  background: var(--mc-panel-bg);
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) [data-testid="stCaption"] {
+  color: var(--mc-text-3);
+  margin-bottom: 0.35rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-card-anchor) [data-testid="stVegaLiteChart"] {
+  margin-top: 0.8rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) {
+  background: var(--mc-panel-bg);
+  border: 1px solid var(--mc-panel-border);
+  border-radius: 14px;
+  padding: 0.6rem 0.75rem 0.75rem;
+  margin-top: 0.9rem;
+  text-align: left !important;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) [data-testid="stMarkdownContainer"],
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) ~ div[data-testid="stVerticalBlock"] [data-testid="stMarkdownContainer"] {
+  text-align: left !important;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) .mc-chart-downloads-title {
+  margin: 0 0 0.55rem 0;
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--mc-text-3);
+  text-align: left !important;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="stHorizontalBlock"],
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) ~ div[data-testid="stVerticalBlock"] div[data-testid="stHorizontalBlock"] {
+  display: flex;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  justify-content: flex-start !important;
+  align-items: center;
+  gap: 0.6rem !important;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="column"],
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) ~ div[data-testid="stVerticalBlock"] div[data-testid="column"] {
+  flex: 0 0 auto !important;
+  width: max-content !important;
+  min-width: 0 !important;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) div[data-testid="column"] > div,
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) ~ div[data-testid="stVerticalBlock"] div[data-testid="column"] > div {
+  width: max-content !important;
+}
+div[data-testid="stVerticalBlock"]:has(.mc-chart-downloads-anchor) [data-testid="stDownloadButton"] button {
+  width: auto !important;
+  white-space: nowrap !important;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_dashboard_card_header(title: str, *, badge: str, index: int | None) -> None:
+    index_html = (
+        f'<span class="mc-chart-card-index">{index:02d}</span>' if index else ""
+    )
+    heading_html = (
+        f'<h3 class="mc-chart-card-heading">{title}</h3>' if badge != title else ""
+    )
+    st.markdown(
+        f"""
+<div class="mc-chart-card-header">
+  <div class="mc-chart-card-title">
+    <span class="mc-chart-card-badge">{badge}</span>
+    {heading_html}
+  </div>
+  {index_html}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
 
 def render(df_all: pd.DataFrame) -> None:
@@ -431,44 +679,7 @@ def render(df_all: pd.DataFrame) -> None:
         st.info("No hay datos tras aplicar filtros. Revisa filtros.")
         return
 
-    if show_exec:
-        available_exec = [v for v in VIEW_OPTIONS if v != "Dashboard"]
-        exec_views = get_dashboard_views(available_exec)
-        exec_views = exec_views[:3]
-        exec_cols = st.columns(len(exec_views))
-        for exec_view, col in zip(exec_views, exec_cols, strict=False):
-            with col:
-                st.markdown(f"**{exec_view}**")
-                _render_view(
-                    exec_view,
-                    df_g,
-                    lib_sel=lib_sel,
-                    dec_sel=dec_sel,
-                    imdb_ref=imdb_ref,
-                    rt_ref=rt_ref,
-                    meta_ref=meta_ref,
-                    outlier_low=outlier_low,
-                    outlier_high=outlier_high,
-                    top_n_genres=top_n_genres,
-                    min_movies_directors=min_movies_directors,
-                    top_n_directors=top_n_directors,
-                    top_n_words=top_n_words,
-                    top_n_libs=top_n_libs,
-                    min_n_libs=min_n_libs,
-                    boxplot_horizontal=boxplot_horizontal,
-                    compare_libs=compare_libs,
-                    show_insights=True,
-                )
-        insights = _auto_insights(df_g)
-        if insights:
-            st.markdown("**Insights automaticos**")
-            for item in insights:
-                st.write(f"- {item}")
-        return
-
-    chart_export = _render_view(
-        view,
-        df_g,
+    render_kwargs: dict[str, Any] = dict(
         lib_sel=lib_sel,
         dec_sel=dec_sel,
         imdb_ref=imdb_ref,
@@ -486,31 +697,104 @@ def render(df_all: pd.DataFrame) -> None:
         compare_libs=compare_libs,
     )
 
-    if chart_export is not None:
-        st.markdown("**Descargas**")
-        if export_csv:
-            csv_data = df_g.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "Descargar CSV filtrado",
-                csv_data,
-                file_name="charts_filtered.csv",
-                mime="text/csv",
-            )
-        svg_bytes = _chart_svg_bytes(chart_export)
-        if svg_bytes:
-            st.download_button(
-                "Descargar SVG del grafico",
-                svg_bytes,
-                file_name="chart.svg",
-                mime="image/svg+xml",
-            )
-        png_bytes = _chart_png_bytes(chart_export)
-        if png_bytes:
-            st.download_button(
-                "Descargar PNG del grafico",
-                png_bytes,
-                file_name="chart.png",
-                mime="image/png",
-            )
-        if not svg_bytes and not png_bytes:
-            st.info("Export no disponible: requiere dependencias extra de Altair.")
+    if show_exec:
+        _apply_dashboard_card_styles()
+        available_exec = [v for v in VIEW_OPTIONS if v != "Dashboard"]
+        exec_views = get_dashboard_views(available_exec)
+        exec_views = exec_views[:3]
+        exec_cols = st.columns(len(exec_views))
+        for index, (exec_view, col) in enumerate(
+            zip(exec_views, exec_cols, strict=False), start=1
+        ):
+            with col:
+                with st.container():
+                    st.markdown(
+                        '<div class="mc-chart-card-anchor"></div>',
+                        unsafe_allow_html=True,
+                    )
+                    _render_dashboard_card_header(
+                        exec_view, badge=exec_view, index=index
+                    )
+                    _render_view(exec_view, df_g, show_insights=True, **render_kwargs)
+        insights = _auto_insights(df_g, imdb_ref=imdb_ref)
+        if insights:
+            with st.container():
+                st.markdown(
+                    '<div class="mc-chart-card-anchor"></div>',
+                    unsafe_allow_html=True,
+                )
+                _render_dashboard_card_header(
+                    "Insights automaticos", badge="Insights automaticos", index=None
+                )
+                st.markdown("\n".join(f"- {item}" for item in insights))
+        return
+
+    _apply_dashboard_card_styles()
+    with st.container():
+        st.markdown(
+            '<div class="mc-chart-card-anchor"></div>',
+            unsafe_allow_html=True,
+        )
+        _render_dashboard_card_header(view, badge=view, index=None)
+        chart_export = _render_view(
+            view,
+            df_g,
+            **render_kwargs,
+        )
+
+        if chart_export is not None:
+            download_items: list[tuple[str, bytes, str, str]] = []
+            if export_csv:
+                download_items.append(
+                    (
+                        "Descargar CSV filtrado",
+                        df_g.to_csv(index=False).encode("utf-8"),
+                        "charts_filtered.csv",
+                        "text/csv",
+                    )
+                )
+            svg_bytes = _chart_svg_bytes(chart_export)
+            if svg_bytes:
+                download_items.append(
+                    (
+                        "Descargar SVG del grafico",
+                        svg_bytes,
+                        "chart.svg",
+                        "image/svg+xml",
+                    )
+                )
+            png_bytes = _chart_png_bytes(chart_export)
+            if png_bytes:
+                download_items.append(
+                    (
+                        "Descargar PNG del grafico",
+                        png_bytes,
+                        "chart.png",
+                        "image/png",
+                    )
+                )
+            if download_items:
+                with st.container():
+                    st.markdown(
+                        '<div class="mc-chart-downloads-anchor"></div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        '<p class="mc-chart-downloads-title">Descargas</p>',
+                        unsafe_allow_html=True,
+                    )
+                    download_cols = st.columns(len(download_items))
+                    for (label, data, filename, mime), col in zip(
+                        download_items, download_cols, strict=False
+                    ):
+                        with col:
+                            st.download_button(
+                                label,
+                                data,
+                                file_name=filename,
+                                mime=mime,
+                            )
+                    if not svg_bytes and not png_bytes:
+                        st.caption(
+                            "Export PNG/SVG no disponible: requiere dependencias extra de Altair."
+                        )
