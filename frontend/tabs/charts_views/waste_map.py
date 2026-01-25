@@ -9,7 +9,7 @@ import streamlit as st
 from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
-    FONT_BODY,
+    _all_movies_link,
     _caption_bullets,
     _chart,
     _decision_color,
@@ -28,8 +28,12 @@ def _waste_insights(
     if data.empty:
         return lines
 
+    link_zone = _all_movies_link(
+        "Ver en Todas", size_min=size_threshold, imdb_max=imdb_ref
+    )
     lines.append(
         f"Zona roja = tamano >= {size_threshold:.1f} GB y IMDb < {imdb_ref:.1f}."
+        + (f" {link_zone}" if link_zone else "")
     )
     red_mask = (data["file_size_gb"] >= size_threshold) & (
         data["imdb_rating"] < imdb_ref
@@ -49,8 +53,10 @@ def _waste_insights(
         title = str(top.get("title", ""))
         size_gb = float(top.get("file_size_gb", 0.0))
         imdb = float(top.get("imdb_rating", 0.0))
+        link_title = _all_movies_link("Ver en Todas", title=title)
         lines.append(
             f"Mayor desperdicio: {title} ({size_gb:.1f} GB, IMDb {imdb:.1f})."
+            + (f" {link_title}" if link_title else "")
         )
 
     return lines
@@ -108,8 +114,8 @@ def render(
     size_threshold = max(size_threshold, float(size_values.min()))
     size_max = float(size_values.max())
 
-    data["waste_score"] = (
-        data["file_size_gb"] * (imdb_ref - data["imdb_rating"]).clip(lower=0)
+    data["waste_score"] = data["file_size_gb"] * (imdb_ref - data["imdb_rating"]).clip(
+        lower=0
     )
 
     if show_insights:

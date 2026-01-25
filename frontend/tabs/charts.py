@@ -39,6 +39,7 @@ from frontend.tabs.charts_shared import (
     IMDB_REFERENCE,
     METACRITIC_REFERENCE,
     RT_REFERENCE,
+    _all_movies_link,
     _chart_png_bytes,
     _chart_svg_bytes,
     _movie_tooltips,
@@ -108,9 +109,7 @@ def _render_view(
             df_g, dec_sel=dec_sel, imdb_ref=imdb_ref, show_insights=show_insights
         )
     if view == "Valor por GB":
-        return value_per_gb.render(
-            df_g, dec_sel=dec_sel, show_insights=show_insights
-        )
+        return value_per_gb.render(df_g, dec_sel=dec_sel, show_insights=show_insights)
     if view == "Rating IMDb por decisión":
         return imdb_by_decision.render(
             df_g, dec_sel=dec_sel, imdb_ref=imdb_ref, show_insights=show_insights
@@ -191,36 +190,47 @@ def _auto_insights(df: pd.DataFrame, *, imdb_ref: float) -> list[str]:
     sizes: pd.Series | None = None
     total_size = None
     if "file_size_gb" in df.columns:
-        sizes = pd.to_numeric(df["file_size_gb"], errors="coerce")
-        total_size = float(sizes.fillna(0).sum())
+        sizes_local = pd.to_numeric(df["file_size_gb"], errors="coerce")
+        sizes = sizes_local
+        total_size = float(sizes_local.fillna(0).sum())
+
+    size_threshold = None
+    if sizes is not None:
+        sizes_valid = sizes.dropna()
+        if not sizes_valid.empty:
+            size_threshold = float(sizes_valid.quantile(0.75))
 
     if total_size is not None:
         insights.append(
-            f"🔎 Escaneo inteligente: {total_count} titulos | {total_size:.1f} GB."
+            f"🧠 Lectura inteligente: {total_count} titulos | {total_size:.1f} GB."
         )
     else:
-        insights.append(f"🔎 Escaneo inteligente: {total_count} titulos.")
+        insights.append(f"🧠 Lectura inteligente: {total_count} titulos.")
 
     if "decision" in df.columns:
         counts = df["decision"].value_counts(dropna=False)
         if not counts.empty:
-            top_dec = counts.index[0]
             prune = int(counts.get("DELETE", 0) + counts.get("MAYBE", 0))
             keep = int(counts.get("KEEP", 0))
             prune_share = (prune / total_count) if total_count else 0.0
-            insights.append(
-                f"✅ Estado actual: KEEP {keep} | En revision {prune} ({prune_share:.1%})."
-            )
-            insights.append(
-                f"👁️ Decision dominante: {top_dec} ({counts.iloc[0]} titulos)."
-            )
+            ratio = max(1, int(round(total_count / prune))) if prune else None
+            if prune:
+                insights.append(
+                    f"📌 En revision: {prune} titulos ({prune_share:.1%}) → 1 de cada {ratio} pide decision."
+                )
 
             if sizes is not None and total_size is not None and total_size > 0:
                 mask_prune = df["decision"].isin(["DELETE", "MAYBE"])
                 prune_size = float(sizes[mask_prune].fillna(0).sum())
                 prune_size_share = prune_size / total_size
+                link = _all_movies_link("Ver en Todas", decisions=["DELETE", "MAYBE"])
                 insights.append(
-                    f"⚡ Alerta espacio: {prune_size:.1f} GB en revision ({prune_size_share:.1%})."
+                    f"🔥 Podrias ganar {prune_size:.1f} GB hoy limpiando revision "
+                    f"({prune_size_share:.1%} del espacio). {link}"
+                )
+            else:
+                insights.append(
+                    f"✅ Estado actual: KEEP {keep} | En revision {prune} ({prune_share:.1%})."
                 )
 
     if "library" in df.columns and "imdb_rating" in df.columns:
@@ -234,21 +244,31 @@ def _auto_insights(df: pd.DataFrame, *, imdb_ref: float) -> list[str]:
             top_lib = stats.index[0]
             bot_lib = stats.index[-1]
             if top_lib != bot_lib:
+                link = _all_movies_link("Ver en Todas", libraries=[str(bot_lib)])
                 insights.append(
-                    "🏆 Calidad por biblioteca: "
-                    f"{top_lib} ({stats.iloc[0]:.1f}) | ⚠️ {bot_lib} ({stats.iloc[-1]:.1f})."
+                    "🏆 Pulso de calidad: "
+                    f"{top_lib} lidera ({stats.iloc[0]:.1f}) | ⚠️ {bot_lib} es la mas debil ({stats.iloc[-1]:.1f}). {link}"
                 )
             else:
                 insights.append(
-                    f"🏆 Calidad por biblioteca: {top_lib} ({stats.iloc[0]:.1f})."
+                    f"🏆 Pulso de calidad: {top_lib} lidera ({stats.iloc[0]:.1f})."
                 )
 
         low_mask = pd.to_numeric(df["imdb_rating"], errors="coerce") < imdb_ref
         low_count = int(low_mask.fillna(False).sum())
         if total_count > 0:
-            insights.append(
-                f"🚨 Riesgo calidad: {low_count} titulos bajo IMDb {imdb_ref:.1f} ({low_count / total_count:.1%})."
-            )
+            link = _all_movies_link("Ver en Todas", imdb_max=imdb_ref)
+            if sizes is not None:
+                low_size = float(sizes[low_mask.fillna(False)].fillna(0).sum())
+                insights.append(
+                    f"🚨 Riesgo calidad: {low_count} titulos < IMDb {imdb_ref:.1f} "
+                    f"ocupan {low_size:.1f} GB. {link}"
+                )
+            else:
+                insights.append(
+                    f"🚨 Riesgo calidad: {low_count} titulos < IMDb {imdb_ref:.1f} "
+                    f"({low_count / total_count:.1%}). {link}"
+                )
 
         if sizes is not None:
             waste_df = df.copy()
@@ -257,10 +277,9 @@ def _auto_insights(df: pd.DataFrame, *, imdb_ref: float) -> list[str]:
                 waste_df["imdb_rating"], errors="coerce"
             )
             waste_df = waste_df.dropna(subset=["file_size_gb", "imdb_rating"])
-            waste_df["waste_score"] = (
-                waste_df["file_size_gb"]
-                * (imdb_ref - waste_df["imdb_rating"]).clip(lower=0)
-            )
+            waste_df["waste_score"] = waste_df["file_size_gb"] * (
+                imdb_ref - waste_df["imdb_rating"]
+            ).clip(lower=0)
             waste_df = waste_df[waste_df["waste_score"] > 0]
             if not waste_df.empty:
                 top = waste_df.sort_values("waste_score", ascending=False).head(3)
@@ -271,14 +290,22 @@ def _auto_insights(df: pd.DataFrame, *, imdb_ref: float) -> list[str]:
                     imdb_val = float(row.get("imdb_rating", 0.0))
                     parts.append(f"{title} ({size_gb:.1f} GB, IMDb {imdb_val:.1f})")
                 if parts:
+                    link = ""
+                    if size_threshold is not None:
+                        link = _all_movies_link(
+                            "Ver en Todas",
+                            imdb_max=imdb_ref,
+                            size_min=size_threshold,
+                        )
                     insights.append(
-                        "💡 Candidatos a aligerar (alto peso, baja nota): "
+                        "💡 Wow instantaneo: estos 3 pesan mucho y aportan poco → "
                         + " | ".join(parts)
+                        + (f" {link}" if link else "")
                     )
     if "imdb_rating" in df.columns and len(insights) < 6:
         mean_imdb = pd.to_numeric(df["imdb_rating"], errors="coerce").mean()
         if pd.notna(mean_imdb):
-            insights.append(f"📊 IMDb medio global: {mean_imdb:.2f}.")
+            insights.append(f"📊 Calidad media global: IMDb {mean_imdb:.2f}.")
     return insights[:6]
 
 
@@ -652,7 +679,7 @@ def render(df_all: pd.DataFrame) -> None:
         st.info("No hay datos tras aplicar filtros. Revisa filtros.")
         return
 
-    render_kwargs = dict(
+    render_kwargs: dict[str, Any] = dict(
         lib_sel=lib_sel,
         dec_sel=dec_sel,
         imdb_ref=imdb_ref,

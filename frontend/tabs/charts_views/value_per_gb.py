@@ -10,6 +10,7 @@ from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
     FONT_BODY,
+    _all_movies_link,
     _caption_bullets,
     _chart,
     _decision_color,
@@ -27,8 +28,10 @@ def _value_insights(
     value = float(top_row.get("value_per_gb", 0.0))
     size_gb = float(top_row.get("file_size_gb", 0.0))
     imdb = float(top_row.get("imdb_rating", 0.0))
+    link = _all_movies_link("Ver en Todas", title=title)
     lines.append(
         f"Peor valor: {title} ({value:.2f} IMDb/GB, {size_gb:.1f} GB, IMDb {imdb:.1f})."
+        + (f" {link}" if link else "")
     )
     low_count = int((data["value_per_gb"] <= threshold).sum())
     total = int(len(data))

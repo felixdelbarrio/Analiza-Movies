@@ -10,6 +10,7 @@ from frontend.tabs.charts_data import _word_counts
 from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
+    _all_movies_link,
     _caption_bullets,
     _chart,
     _decision_color,
@@ -73,18 +74,36 @@ def _word_ranking_insights(stats: pd.DataFrame) -> list[str]:
     )
 
     lines: list[str] = []
+    link_score = _all_movies_link(
+        "Ver en Todas",
+        title=str(top_score.word),
+        decisions=["DELETE", "MAYBE"],
+    )
+    link_delete = _all_movies_link(
+        "Ver en Todas",
+        title=str(top_delete_ratio.word),
+        decisions=["DELETE"],
+    )
     lines.append(
         "Palabra mas critica: "
         f"{top_score.word} (DELETE {int(top_score.delete_count)}, "
         f"MAYBE {int(top_score.maybe_count)})"
-        " | "
-        "Revision mas decisiva: "
+        + (f" {link_score}" if link_score else "")
+        + " | "
+        + "Revision mas decisiva: "
         f"{top_delete_ratio.word} ({_format_pct(top_delete_ratio.delete_share)} DELETE)"
+        + (f" {link_delete}" if link_delete else "")
+    )
+    link_maybe = _all_movies_link(
+        "Ver en Todas",
+        title=str(top_maybe_ratio.word),
+        decisions=["MAYBE"],
     )
     lines.append(
         "Mayor indecision: "
         f"{top_maybe_ratio.word} ({_format_pct(top_maybe_ratio.maybe_share)} MAYBE)"
-        " | "
+        + (f" {link_maybe}" if link_maybe else "")
+        + " | "
         f"Concentracion: top 3 = {_format_pct(top3_score / total_score)} del peso"
     )
 

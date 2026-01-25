@@ -33,7 +33,7 @@ import json
 import re
 from urllib.parse import quote
 from collections.abc import Hashable, Iterable, Mapping, MutableMapping, Sequence
-from typing import Any, Callable, Literal, Optional, Protocol, TypeVar, cast
+from typing import Any, Callable, Literal, Optional, Protocol, TypeVar, cast, overload
 
 import pandas as pd
 import streamlit as st
@@ -874,6 +874,40 @@ def _apply_text_search(df: pd.DataFrame, query: str) -> pd.DataFrame:
     return cast(pd.DataFrame, df.loc[mask_any])
 
 
+@overload
+def render_grid_toolbar(
+    df: pd.DataFrame,
+    *,
+    key_suffix: str,
+    download_filename: str,
+    search_label: str = "Busqueda avanzada",
+    search_placeholder: str = "Busqueda avanzada",
+    search_help: str = (
+        "Simple: Actor | Doble: Actor 2006 | Multiple: Actor 2006 Director Genero"
+    ),
+    show_search: bool = True,
+    caption_builder: GridCaptionBuilder | None = None,
+    return_download_slot: Literal[False] = False,
+) -> tuple[pd.DataFrame, str, int]: ...
+
+
+@overload
+def render_grid_toolbar(
+    df: pd.DataFrame,
+    *,
+    key_suffix: str,
+    download_filename: str,
+    search_label: str = "Busqueda avanzada",
+    search_placeholder: str = "Busqueda avanzada",
+    search_help: str = (
+        "Simple: Actor | Doble: Actor 2006 | Multiple: Actor 2006 Director Genero"
+    ),
+    show_search: bool = True,
+    caption_builder: GridCaptionBuilder | None = None,
+    return_download_slot: Literal[True],
+) -> tuple[pd.DataFrame, str, int, Any | None]: ...
+
+
 def render_grid_toolbar(
     df: pd.DataFrame,
     *,
@@ -887,10 +921,7 @@ def render_grid_toolbar(
     show_search: bool = True,
     caption_builder: GridCaptionBuilder | None = None,
     return_download_slot: bool = False,
-) -> (
-    tuple[pd.DataFrame, str, int]
-    | tuple[pd.DataFrame, str, int, Any | None]
-):
+) -> tuple[pd.DataFrame, str, int] | tuple[pd.DataFrame, str, int, Any | None]:
     def _default_caption(count: int, total: int, has_search: bool) -> str:
         if has_search:
             return f"Filas: {count} / {total}"
@@ -1075,7 +1106,7 @@ def aggrid_with_row_click(
                 "alignItems": "center",
                 "justifyContent": "center",
                 "textAlign": "center",
-            }
+            },
         },
     )
     if initial_sort_model:

@@ -10,6 +10,7 @@ from frontend.tabs.charts_data import _mark_imdb_outliers
 from frontend.tabs.charts_shared import (
     AltChart,
     AltSelection,
+    _all_movies_link,
     _caption_bullets,
     _chart,
     _corr_strength,
@@ -69,11 +70,16 @@ def _imdb_rt_insights(
 
     consensus_high = int(((imdb_raw >= imdb_ref) & (rt_raw >= rt_ref) & mask).sum())
     consensus_low = int(((imdb_raw < imdb_ref) & (rt_raw < rt_ref) & mask).sum())
+    link_high = _all_movies_link("Ver altos", imdb_min=imdb_ref, rt_min=rt_ref)
+    link_low = _all_movies_link("Ver bajos", imdb_max=imdb_ref, rt_max=rt_ref)
     lines.append(
         "Consenso en umbrales: "
         f"{_format_pct(consensus_high / total)} ({consensus_high}) por encima de ambos "
-        f"(IMDb >= {imdb_ref:.1f}, RT >= {rt_ref:.0f}) | "
+        f"(IMDb >= {imdb_ref:.1f}, RT >= {rt_ref:.0f})"
+        + (f" {link_high}" if link_high else "")
+        + " | "
         f"{_format_pct(consensus_low / total)} ({consensus_low}) por debajo de ambos"
+        + (f" {link_low}" if link_low else "")
     )
 
     return lines

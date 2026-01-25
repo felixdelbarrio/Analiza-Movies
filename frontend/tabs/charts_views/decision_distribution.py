@@ -11,6 +11,7 @@ from frontend.tabs.charts_shared import (
     AltSelection,
     DECISION_ORDER,
     FONT_BODY,
+    _all_movies_link,
     _caption_bullets,
     _chart,
     _decision_color,
@@ -47,8 +48,10 @@ def _decision_distribution_insights(
 
     primary_parts: list[str] = []
     if prune_total:
+        link = _all_movies_link("Ver en Todas", decisions=["DELETE", "MAYBE"])
         primary_parts.append(
             f"En revisión: {prune_total} títulos ({_format_pct(prune_total / total)})"
+            + (f" {link}" if link else "")
         )
     else:
         primary_parts.append("En revisión: 0")
@@ -215,9 +218,11 @@ def render(
         + "%"
     )
     label_points = label_data.copy()
-    label_points["label_radius"] = label_points["decision"].map(
-        {"KEEP": 170, "DELETE": 182, "MAYBE": 182, "UNKNOWN": 182}
-    ).fillna(182)
+    label_points["label_radius"] = (
+        label_points["decision"]
+        .map({"KEEP": 170, "DELETE": 182, "MAYBE": 182, "UNKNOWN": 182})
+        .fillna(182)
+    )
     labels = (
         alt.Chart(label_points)
         .mark_text(fontWeight="bold", font=FONT_BODY, fontSize=11)

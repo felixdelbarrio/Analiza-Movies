@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
+import re
 import sys
 import warnings
 from pathlib import Path
@@ -27,6 +29,7 @@ from typing import Any, Callable, Final, TypeVar, cast
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 # =============================================================================
 # 1) Fix de import path (solo para Streamlit)
@@ -1118,6 +1121,8 @@ _hide_streamlit_chrome()
 _init_modal_state()
 
 PENDING_DETAIL_KEY = "pending_open_detail_params"
+PENDING_ALL_MOVIES_FILTERS_KEY = "pending_all_movies_filters"
+FORCE_TAB_ALL_MOVIES_KEY = "force_tab_all_movies"
 
 
 def _get_query_params() -> dict[str, list[str]]:
@@ -1155,6 +1160,111 @@ def _first_param(params: dict[str, list[str]], key: str) -> str | None:
     except Exception:
         pass
     return value or None
+
+
+def _split_param_list(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    parts = re.split(r"[|,]", raw)
+    out = [p.strip() for p in parts if p and p.strip()]
+    return out
+
+
+def _parse_float(raw: str | None) -> float | None:
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _extract_all_movies_filters(
+    params: dict[str, list[str]],
+) -> dict[str, object] | None:
+    payload: dict[str, object] = {}
+    title = _first_param(params, "am_title")
+    if title:
+        payload["title"] = title
+
+    decisions_raw = _first_param(params, "am_dec")
+    decisions = _split_param_list(decisions_raw)
+    if decisions:
+        payload["decisions"] = decisions
+
+    libs_raw = _first_param(params, "am_lib")
+    libraries = _split_param_list(libs_raw)
+    if libraries:
+        payload["libraries"] = libraries
+
+    genres_raw = _first_param(params, "am_genre")
+    genres = _split_param_list(genres_raw)
+    if genres:
+        payload["genres"] = genres
+
+    directors_raw = _first_param(params, "am_director")
+    directors = _split_param_list(directors_raw)
+    if directors:
+        payload["directors"] = directors
+
+    numeric_map = {
+        "imdb_min": "am_imdb_min",
+        "imdb_max": "am_imdb_max",
+        "size_min": "am_size_min",
+        "size_max": "am_size_max",
+        "year_min": "am_year_min",
+        "year_max": "am_year_max",
+        "votes_min": "am_votes_min",
+        "votes_max": "am_votes_max",
+        "meta_min": "am_meta_min",
+        "meta_max": "am_meta_max",
+        "rt_min": "am_rt_min",
+        "rt_max": "am_rt_max",
+    }
+    for key, param in numeric_map.items():
+        value = _parse_float(_first_param(params, param))
+        if value is not None:
+            payload[key] = value
+
+    return payload or None
+
+
+def _force_tab_click(label: str) -> None:
+    payload = json.dumps(label)
+    components.html(
+        f"""
+<script>
+(() => {{
+  const win = window.parent;
+  if (!win || !win.document) return;
+  const doc = win.document;
+  const label = {payload};
+  const fallback = label.split(" ").slice(-1)[0];
+  let attempts = 0;
+  const tryClick = () => {{
+    const tabs = Array.from(
+      doc.querySelectorAll('button[role="tab"], [data-testid="stTab"]')
+    );
+    if (!tabs.length) return false;
+    const match = tabs.find(el => {{
+      const text = (el.innerText || "").trim();
+      return text === label || text.includes(label) || text.includes(fallback);
+    }});
+    if (!match) return false;
+    match.click();
+    return true;
+  }};
+  const tick = () => {{
+    if (tryClick() || attempts > 12) return;
+    attempts += 1;
+    setTimeout(tick, 180);
+  }};
+  tick();
+}})();
+</script>
+""",
+        height=0,
+    )
 
 
 def _find_row_for_modal(
@@ -1197,8 +1307,18 @@ def _find_row_for_modal(
 
 
 params = _get_query_params()
+clear_params = False
 if params.get("open_detail"):
     st.session_state[PENDING_DETAIL_KEY] = params
+    clear_params = True
+
+pending_filters = _extract_all_movies_filters(params)
+if pending_filters is not None:
+    st.session_state[PENDING_ALL_MOVIES_FILTERS_KEY] = pending_filters
+    st.session_state[FORCE_TAB_ALL_MOVIES_KEY] = True
+    clear_params = True
+
+if clear_params:
     _clear_query_params()
 
 # =============================================================================
@@ -1662,6 +1782,9 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
         "🧠 Metadata",
     ]
 )
+
+if st.session_state.pop(FORCE_TAB_ALL_MOVIES_KEY, False):
+    _force_tab_click("📚 Todas")
 
 with tab1:
     all_movies_mod = _import_tabs_module("all_movies")
