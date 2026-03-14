@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query
@@ -15,9 +16,13 @@ from server.api.services.plex_sources import (
     discover_plex_servers,
     get_plex_auth_session,
     poll_plex_auth_session,
-    remember_profile_token,
     sanitize_plex_servers,
     start_plex_auth_session,
+)
+from server.api.services.runtime_secrets import (
+    has_omdb_api_keys,
+    remember_omdb_api_keys,
+    remember_profile_token,
 )
 from shared.runtime_profiles import (
     RuntimeConfig,
@@ -28,12 +33,13 @@ from shared.runtime_profiles import (
 )
 
 router = APIRouter(prefix="/config", tags=["config"])
+logger = logging.getLogger(__name__)
 
 
 def _state_payload(config: RuntimeConfig | None = None) -> dict[str, Any]:
     cfg = config or load_runtime_config()
     payload = cfg.to_dict(mask_secrets=False, include_secrets=False)
-    payload["has_omdb_api_keys"] = bool((cfg.omdb_api_keys or "").strip())
+    payload["has_omdb_api_keys"] = has_omdb_api_keys(cfg)
     return payload
 
 
@@ -62,7 +68,9 @@ def config_state() -> dict[str, Any]:
 def update_config_state(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     config = load_runtime_config()
     if "omdb_api_keys" in payload:
-        config = config.with_omdb_api_keys(str(payload.get("omdb_api_keys") or ""))
+        omdb_api_keys = str(payload.get("omdb_api_keys") or "")
+        remember_omdb_api_keys(omdb_api_keys)
+        config = config.with_omdb_api_keys(omdb_api_keys)
     if "active_profile_id" in payload:
         config = config.with_active_profile(payload.get("active_profile_id"))
     config = save_runtime_config(config)
@@ -161,9 +169,10 @@ def plex_auth_start(
         return start_plex_auth_session(
             open_browser=bool(body.get("open_browser", True))
         )
-    except Exception as exc:
+    except Exception:
+        logger.exception("Error iniciando auth Plex")
         raise HTTPException(
-            status_code=502, detail=f"Error iniciando auth Plex: {exc!r}"
+            status_code=502, detail="No se pudo iniciar la autenticación Plex."
         )
 
 
@@ -179,9 +188,10 @@ def plex_auth_status(session_id: str) -> dict[str, Any]:
         return payload
     except KeyError:
         raise HTTPException(status_code=404, detail="Sesión Plex no encontrada")
-    except Exception as exc:
+    except Exception:
+        logger.exception("Error consultando auth Plex")
         raise HTTPException(
-            status_code=502, detail=f"Error consultando auth Plex: {exc!r}"
+            status_code=502, detail="No se pudo consultar la autenticación Plex."
         )
 
 
@@ -214,10 +224,9 @@ def run_profile(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"No se pudo iniciar el análisis: {exc!r}"
-        )
+    except Exception:
+        logger.exception("No se pudo iniciar el análisis del perfil %s", profile.id)
+        raise HTTPException(status_code=500, detail="No se pudo iniciar el análisis.")
 
 
 @router.delete("/run")

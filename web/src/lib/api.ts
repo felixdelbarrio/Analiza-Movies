@@ -212,9 +212,13 @@ export async function fetchMetadata(profileId?: string | null) {
   }
 }
 
-export async function runDeleteAction(rows: ReportRow[], dryRun: boolean) {
+export async function runDeleteAction(
+  rows: ReportRow[],
+  dryRun: boolean,
+  profileId?: string | null
+) {
   return requestJson<DeleteActionResponse>("/actions/delete", {
     method: "POST",
-    body: JSON.stringify({ rows, dry_run: dryRun })
+    body: JSON.stringify({ rows, dry_run: dryRun, profile_id: profileId })
   });
 }

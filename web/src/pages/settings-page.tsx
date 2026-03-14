@@ -51,8 +51,14 @@ export function SettingsPage() {
       : null;
 
   useEffect(() => {
-    setOmdbValue(config?.omdb_api_keys ?? "");
-  }, [config?.omdb_api_keys]);
+    if (config?.omdb_api_keys) {
+      setOmdbValue(config.omdb_api_keys);
+      return;
+    }
+    if (!config?.has_omdb_api_keys) {
+      setOmdbValue("");
+    }
+  }, [config?.has_omdb_api_keys, config?.omdb_api_keys]);
 
   const omdbMutation = useMutation({
     mutationFn: async () => updateConfigState({ omdb_api_keys: omdbValue }),

@@ -215,9 +215,10 @@ class RuntimeConfig:
     def to_dict(
         self, *, mask_secrets: bool = False, include_secrets: bool = True
     ) -> dict[str, Any]:
+        omdb_api_keys = self.omdb_api_keys if include_secrets else ""
         return {
             "version": int(self.version),
-            "omdb_api_keys": self.omdb_api_keys,
+            "omdb_api_keys": omdb_api_keys,
             "active_profile_id": self.active_profile_id,
             "profiles": [
                 p.to_dict(mask_secrets=mask_secrets, include_secrets=include_secrets)

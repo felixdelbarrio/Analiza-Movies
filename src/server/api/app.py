@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -162,6 +162,26 @@ def _is_reserved_spa_path(path: str) -> bool:
     )
 
 
+def _safe_spa_asset_path(full_path: str) -> Path | None:
+    dist_root = _WEB_DIST_DIR.resolve()
+    try:
+        relative = PurePosixPath(full_path.strip("/"))
+    except Exception:
+        return None
+
+    if relative.is_absolute():
+        return None
+    if any(part in {"", ".", ".."} for part in relative.parts):
+        return None
+
+    candidate = dist_root.joinpath(*relative.parts).resolve()
+    try:
+        candidate.relative_to(dist_root)
+    except ValueError:
+        return None
+    return candidate
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Analiza Movies Public API", version="1.0.0")
 
@@ -203,12 +223,8 @@ def create_app() -> FastAPI:
         if _is_reserved_spa_path(path):
             raise HTTPException(status_code=404, detail="Not Found")
 
-        candidate = (_WEB_DIST_DIR / full_path).resolve()
-        if (
-            _WEB_DIST_DIR.exists()
-            and candidate.is_file()
-            and _WEB_DIST_DIR in candidate.parents
-        ):
+        candidate = _safe_spa_asset_path(full_path)
+        if _WEB_DIST_DIR.exists() and candidate is not None and candidate.is_file():
             return FileResponse(candidate)
 
         if _WEB_INDEX_PATH.exists():

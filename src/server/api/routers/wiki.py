@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -11,13 +12,15 @@ from server.api.paths import get_wiki_cache_path
 from server.api.services.wiki import load_payload
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _payload(cache: FileCache, profile_id: str | None) -> dict[str, Any]:
     try:
         return load_payload(cache, profile_id=profile_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    except ValueError:
+        logger.exception("No se pudo cargar la cache Wiki")
+        raise HTTPException(status_code=500, detail="No se pudo cargar la cache Wiki.")
 
 
 @router.get("/cache/wiki/records")

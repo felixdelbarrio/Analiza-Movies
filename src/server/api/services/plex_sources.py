@@ -15,9 +15,9 @@ from xml.etree import ElementTree
 
 import requests
 
+from server.api.services.runtime_secrets import remember_profile_token
 from shared.runtime_profiles import (
     PROJECT_DIR,
-    SourceProfile,
     build_profile_from_discovery,
 )
 
@@ -315,26 +315,6 @@ class PlexAuthSession:
 
 _AUTH_LOCK = Lock()
 _AUTH_SESSIONS: dict[str, PlexAuthSession] = {}
-_PROFILE_TOKEN_LOCK = Lock()
-_PROFILE_TOKENS: dict[str, str] = {}
-
-
-def remember_profile_token(profile_id: str | None, token: str | None) -> None:
-    clean_profile_id = str(profile_id or "").strip()
-    clean_token = str(token or "").strip()
-    if not clean_profile_id or not clean_token:
-        return
-    with _PROFILE_TOKEN_LOCK:
-        _PROFILE_TOKENS[clean_profile_id] = clean_token
-
-
-def resolve_profile_token(profile: SourceProfile) -> str | None:
-    direct_token = str(profile.plex_token or "").strip()
-    if direct_token:
-        return direct_token
-    with _PROFILE_TOKEN_LOCK:
-        stored_token = _PROFILE_TOKENS.get(profile.id)
-    return None if stored_token is None else stored_token.strip() or None
 
 
 def _register_server_token(server: dict[str, Any]) -> None:

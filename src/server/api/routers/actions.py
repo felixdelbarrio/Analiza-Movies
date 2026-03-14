@@ -21,7 +21,12 @@ def delete_action(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
             rows.append({str(k): v for k, v in item.items()})
 
     dry_run = bool(payload.get("dry_run", True))
-    ok, err, logs = delete_files_from_rows(rows, dry_run=dry_run)
+    profile_id = str(payload.get("profile_id") or "").strip() or None
+    ok, err, logs = delete_files_from_rows(
+        rows,
+        dry_run=dry_run,
+        profile_id=profile_id,
+    )
     return {
         "ok": ok,
         "err": err,

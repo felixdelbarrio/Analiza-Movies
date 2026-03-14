@@ -101,3 +101,26 @@ def test_root_returns_placeholder_when_frontend_bundle_is_missing(
 
     assert response.status_code == 503
     assert "Frontend React no compilado" in response.text
+
+
+def test_spa_routes_do_not_escape_dist_directory(monkeypatch, tmp_path):
+    dist_dir = tmp_path / "web-dist"
+    dist_dir.mkdir()
+    index_path = dist_dir / "index.html"
+    index_path.write_text("<html>index</html>", encoding="utf-8")
+    (dist_dir / "app.js").write_text("console.log('ok')", encoding="utf-8")
+    outside_path = tmp_path / "secret.txt"
+    outside_path.write_text("secret", encoding="utf-8")
+
+    monkeypatch.setattr(api_app_module, "_WEB_DIST_DIR", dist_dir)
+    monkeypatch.setattr(api_app_module, "_WEB_INDEX_PATH", index_path)
+
+    client = TestClient(api_app_module.create_app())
+
+    asset = client.get("/app.js")
+    assert asset.status_code == 200
+    assert "console.log('ok')" in asset.text
+
+    traversal = client.get("/../secret.txt")
+    assert traversal.status_code == 200
+    assert traversal.text == "<html>index</html>"

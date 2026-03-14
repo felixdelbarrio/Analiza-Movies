@@ -23,7 +23,10 @@ from shared.runtime_profiles import (
     SourceProfile,
     ensure_profile_dirs,
 )
-from server.api.services.plex_sources import resolve_profile_token
+from server.api.services.runtime_secrets import (
+    resolve_omdb_api_keys,
+    resolve_profile_token,
+)
 
 
 def _now_iso() -> str:
@@ -73,7 +76,7 @@ def _base_env(config: RuntimeConfig, profile: SourceProfile) -> dict[str, str]:
     env["REPORTS_DIR"] = str(paths.reports_dir)
     env["ANALIZA_AUTO_DASHBOARD"] = "0"
     env["PYTHONUNBUFFERED"] = "1"
-    omdb_api_keys = (config.omdb_api_keys or "").strip()
+    omdb_api_keys = resolve_omdb_api_keys(config)
     if omdb_api_keys:
         env["OMDB_API_KEYS"] = omdb_api_keys
         env.pop("OMDB_API_KEY", None)

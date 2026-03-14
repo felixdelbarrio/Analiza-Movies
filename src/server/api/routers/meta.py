@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from server.api.paths import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _hash_file_quick(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
@@ -58,6 +60,11 @@ def meta_files(
                 ),
                 "sha256": _hash_file_quick(p) if (exists and include_sha256) else None,
             }
-        except Exception as exc:
-            out[k] = {"path": str(p), "exists": False, "error": repr(exc)}
+        except Exception:
+            logger.exception("No se pudo inspeccionar el fichero %s", p)
+            out[k] = {
+                "path": str(p),
+                "exists": False,
+                "error": "inspection_failed",
+            }
     return out

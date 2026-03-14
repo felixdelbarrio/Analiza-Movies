@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from server.api.services.analysis_runs import _plex_cmd_and_env
-from server.api.services.plex_sources import remember_profile_token
+from server.api.services.runtime_secrets import remember_profile_token
 from shared.runtime_profiles import RuntimeConfig, build_profile_from_discovery
 
 

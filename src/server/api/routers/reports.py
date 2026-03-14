@@ -42,7 +42,7 @@ def _build_report_page(
     try:
         df = cache.load_csv(path, text_columns=_TEXT_COLUMNS)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"No encontrado: {path}")
+        raise HTTPException(status_code=404, detail="Recurso no encontrado")
     except Exception:
         raise HTTPException(
             status_code=500,

@@ -29,7 +29,7 @@ def strip_internal_cols(df: pd.DataFrame) -> pd.DataFrame:
     internal_cols = [c for c in df.columns if isinstance(c, str) and c.startswith("__")]
     if not internal_cols:
         return df
-    return df.drop(columns=internal_cols, errors="ignore")
+    return cast(pd.DataFrame, df.drop(columns=internal_cols, errors="ignore"))
 
 
 def _json_safe_value(value: Any) -> Any:

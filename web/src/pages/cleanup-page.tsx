@@ -31,7 +31,7 @@ export function CleanupPage() {
   const deleteMutation = useMutation({
     mutationFn: async () => {
       const rows = selectedRow ? [selectedRow] : [];
-      return runDeleteAction(rows, dryRun);
+      return runDeleteAction(rows, dryRun, activeProfileId);
     }
   });
 

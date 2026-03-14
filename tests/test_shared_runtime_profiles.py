@@ -33,11 +33,12 @@ def test_runtime_profiles_roundtrip(tmp_path: Path) -> None:
     raw_payload = config_path.read_text(encoding="utf-8")
 
     assert loaded.active_profile_id == profile.id
-    assert loaded.omdb_api_keys == "abc123"
+    assert loaded.omdb_api_keys == ""
     assert len(loaded.profiles) == 1
     assert loaded.profiles[0].machine_identifier == "machine-a"
     assert loaded.profiles[0].plex_token is None
     assert "secret-token" not in raw_payload
+    assert "abc123" not in raw_payload
 
 
 def test_artifact_paths_for_profile_are_namespaced() -> None:
