@@ -106,8 +106,8 @@ def _preferred_locale(request: Request | None) -> dict[str, str]:
 def _frontend_placeholder(request: Request | None = None) -> HTMLResponse:
     copy = _preferred_locale(request)
     hint = copy["hint"].format(
-        build="<code>make frontend-build</code>",
-        dev="<code>make frontend</code>",
+        build="<code>npm --prefix web run build</code>",
+        dev="<code>make run</code>",
     )
     return HTMLResponse(
         f"""

@@ -30,14 +30,5 @@ jobs:
           cache: "npm"
           cache-dependency-path: web/package-lock.json
 
-      - name: Install dev deps
-        run: make dev
-
-      - name: Build frontend bundle
-        run: make frontend-build
-
-      - name: Lint
-        run: make lint
-
-      - name: Run tests with coverage
-        run: make test-cov
+      - name: Run local CI gate
+        run: make ci

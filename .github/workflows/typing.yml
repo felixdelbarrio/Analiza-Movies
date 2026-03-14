@@ -15,6 +15,10 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
 
+    env:
+      PACKAGE_BUILD_DIR: build/python-package
+      PACKAGE_DIST_DIR: build/python-package/dist
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,7 +40,7 @@ jobs:
 
       - name: Build sdist + wheel
         run: |
-          python -m build
+          python -m build --outdir "$PACKAGE_DIST_DIR"
 
       - name: Verify py.typed is present in wheel and sdist
         run: |
@@ -44,9 +48,10 @@ jobs:
           import sys
           import zipfile
           import tarfile
+          import os
           from pathlib import Path
 
-          dist = Path("dist")
+          dist = Path(os.environ["PACKAGE_DIST_DIR"])
           wheels = sorted(dist.glob("*.whl"))
           sdists = sorted(dist.glob("*.tar.gz"))
 

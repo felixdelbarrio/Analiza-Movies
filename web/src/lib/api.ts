@@ -34,21 +34,21 @@ function localizedNetworkMessage(languageTag: string) {
   const backendTarget = API_BASE_URL || "http://127.0.0.1:8000";
 
   if (language.startsWith("es")) {
-    return `No se pudo conectar con la API (${backendTarget}). Arranca el backend con \`make server\` o configura \`VITE_API_BASE_URL\`.`;
+    return `No se pudo conectar con la API (${backendTarget}). Usa \`make run\` para la app completa o configura \`VITE_API_BASE_URL\` hacia un backend FastAPI disponible.`;
   }
   if (language.startsWith("fr")) {
-    return `Connexion impossible a l'API (${backendTarget}). Lancez le backend avec \`make server\` ou configurez \`VITE_API_BASE_URL\`.`;
+    return `Connexion impossible a l'API (${backendTarget}). Utilisez \`make run\` pour l'application complete ou configurez \`VITE_API_BASE_URL\` vers un backend FastAPI disponible.`;
   }
   if (language.startsWith("de")) {
-    return `Die API (${backendTarget}) ist nicht erreichbar. Starte das Backend mit \`make server\` oder konfiguriere \`VITE_API_BASE_URL\`.`;
+    return `Die API (${backendTarget}) ist nicht erreichbar. Nutze \`make run\` fuer die komplette App oder konfiguriere \`VITE_API_BASE_URL\` auf ein verfuegbares FastAPI-Backend.`;
   }
   if (language.startsWith("it")) {
-    return `Impossibile raggiungere l'API (${backendTarget}). Avvia il backend con \`make server\` oppure configura \`VITE_API_BASE_URL\`.`;
+    return `Impossibile raggiungere l'API (${backendTarget}). Usa \`make run\` per l'app completa oppure configura \`VITE_API_BASE_URL\` verso un backend FastAPI disponibile.`;
   }
   if (language.startsWith("pt")) {
-    return `Nao foi possivel ligar a API (${backendTarget}). Inicia o backend com \`make server\` ou configura \`VITE_API_BASE_URL\`.`;
+    return `Nao foi possivel ligar a API (${backendTarget}). Usa \`make run\` para a aplicacao completa ou configura \`VITE_API_BASE_URL\` para um backend FastAPI disponivel.`;
   }
-  return `Could not reach the API (${backendTarget}). Start the backend with \`make server\` or configure \`VITE_API_BASE_URL\`.`;
+  return `Could not reach the API (${backendTarget}). Use \`make run\` for the full app or point \`VITE_API_BASE_URL\` to an available FastAPI backend.`;
 }
 
 function parseResponsePayload(bodyText: string) {
