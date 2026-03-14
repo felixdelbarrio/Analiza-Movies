@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from threading import Lock
 
-from shared.runtime_profiles import RuntimeConfig, SourceProfile
+from shared.runtime_profiles import SourceProfile
 
 _LOCK = Lock()
 _PROFILE_TOKENS: dict[str, str] = {}
@@ -35,7 +35,7 @@ def remember_omdb_api_keys(value: str | None) -> None:
         _OMDB_API_KEYS = clean_value or None
 
 
-def resolve_omdb_api_keys(config: RuntimeConfig | None = None) -> str:
+def resolve_omdb_api_keys() -> str:
     with _LOCK:
         runtime_keys = _OMDB_API_KEYS
     if runtime_keys:
@@ -48,11 +48,8 @@ def resolve_omdb_api_keys(config: RuntimeConfig | None = None) -> str:
     fallback_value = str(os.getenv("OMDB_API_KEY") or "").strip()
     if fallback_value:
         return fallback_value
-
-    if config is None:
-        return ""
-    return str(config.omdb_api_keys or "").strip()
+    return ""
 
 
-def has_omdb_api_keys(config: RuntimeConfig | None = None) -> bool:
-    return bool(resolve_omdb_api_keys(config))
+def has_omdb_api_keys() -> bool:
+    return bool(resolve_omdb_api_keys())

@@ -12,13 +12,54 @@ import type {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.toString().trim() || "";
 
-class ApiError extends Error {
+export class ApiError extends Error {
   status: number;
 
   constructor(status: number, message: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+  }
+}
+
+function preferredLanguageTag() {
+  if (typeof document !== "undefined") {
+    return document.documentElement.lang || window.navigator.language || "en";
+  }
+  return "en";
+}
+
+function localizedNetworkMessage(languageTag: string) {
+  const language = languageTag.toLowerCase();
+  const backendTarget = API_BASE_URL || "http://127.0.0.1:8000";
+
+  if (language.startsWith("es")) {
+    return `No se pudo conectar con la API (${backendTarget}). Arranca el backend con \`make server\` o configura \`VITE_API_BASE_URL\`.`;
+  }
+  if (language.startsWith("fr")) {
+    return `Connexion impossible a l'API (${backendTarget}). Lancez le backend avec \`make server\` ou configurez \`VITE_API_BASE_URL\`.`;
+  }
+  if (language.startsWith("de")) {
+    return `Die API (${backendTarget}) ist nicht erreichbar. Starte das Backend mit \`make server\` oder konfiguriere \`VITE_API_BASE_URL\`.`;
+  }
+  if (language.startsWith("it")) {
+    return `Impossibile raggiungere l'API (${backendTarget}). Avvia il backend con \`make server\` oppure configura \`VITE_API_BASE_URL\`.`;
+  }
+  if (language.startsWith("pt")) {
+    return `Nao foi possivel ligar a API (${backendTarget}). Inicia o backend com \`make server\` ou configura \`VITE_API_BASE_URL\`.`;
+  }
+  return `Could not reach the API (${backendTarget}). Start the backend with \`make server\` or configure \`VITE_API_BASE_URL\`.`;
+}
+
+function parseResponsePayload(bodyText: string) {
+  const text = bodyText.trim();
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
   }
 }
 
@@ -40,40 +81,50 @@ async function requestJson<T>(
   init?: RequestInit,
   params?: Record<string, string | number | undefined | null>
 ): Promise<T> {
-  const preferredLanguage =
-    typeof document !== "undefined"
-      ? document.documentElement.lang || window.navigator.language
-      : "en";
-  const response = await fetch(buildUrl(path, params), {
-    headers: {
-      "Content-Type": "application/json",
-      "Accept-Language": preferredLanguage,
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
+  const preferredLanguage = preferredLanguageTag();
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(path, params), {
+      headers: {
+        "Content-Type": "application/json",
+        "Accept-Language": preferredLanguage,
+        ...(init?.headers ?? {})
+      },
+      ...init
+    });
+  } catch {
+    throw new ApiError(0, localizedNetworkMessage(preferredLanguage));
+  }
 
   if (response.status === 204) {
     return null as T;
   }
 
+  const bodyText = await response.text();
+  const payload = parseResponsePayload(bodyText);
+
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
-    try {
-      const payload = (await response.json()) as { detail?: string };
-      if (typeof payload.detail === "string" && payload.detail.trim()) {
-        message = payload.detail;
+    if (payload && typeof payload === "object") {
+      const detail = (payload as { detail?: unknown }).detail;
+      if (typeof detail === "string" && detail.trim()) {
+        message = detail;
       }
-    } catch {
-      const text = await response.text();
-      if (text.trim()) {
-        message = text;
-      }
+    } else if (bodyText.trim()) {
+      message = bodyText.trim();
     }
     throw new ApiError(response.status, message);
   }
 
-  return (await response.json()) as T;
+  if (payload === null) {
+    return null as T;
+  }
+
+  if (typeof payload === "object") {
+    return payload as T;
+  }
+
+  return bodyText as T;
 }
 
 async function fetchAllPages<T>(path: string, profileId?: string | null): Promise<T[]> {

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import {
+  ApiError,
   fetchConfigState,
   fetchMetadata,
   fetchReportAll,
@@ -15,24 +16,32 @@ const CONFIG_STALE_TIME_MS = 30_000;
 const REPORT_STALE_TIME_MS = 60_000;
 const REPORT_GC_TIME_MS = 120_000;
 
+function shouldRetry(failureCount: number, error: unknown) {
+  if (error instanceof ApiError && error.status === 0) {
+    return false;
+  }
+  return failureCount < 1;
+}
+
 export function useConfigState() {
   return useQuery({
     queryKey: queryKeys.configState(),
     queryFn: fetchConfigState,
     staleTime: CONFIG_STALE_TIME_MS,
     gcTime: REPORT_GC_TIME_MS,
-    retry: 1,
+    retry: shouldRetry,
     refetchOnWindowFocus: false
   });
 }
 
-export function useRunState() {
+export function useRunState(enabled = true) {
   return useQuery({
     queryKey: queryKeys.runState(),
     queryFn: fetchRunStatus,
+    enabled,
     staleTime: 0,
     gcTime: REPORT_GC_TIME_MS,
-    retry: 1,
+    retry: shouldRetry,
     refetchOnWindowFocus: false,
     refetchInterval: (query) => {
       const status = query.state.data?.run?.status;
@@ -49,7 +58,7 @@ export function useRunLogs(enabled: boolean, limit = 80) {
     enabled,
     staleTime: 0,
     gcTime: REPORT_GC_TIME_MS,
-    retry: 1,
+    retry: shouldRetry,
     refetchOnWindowFocus: false,
     refetchInterval: (query) => {
       const status = query.state.data?.run?.status;
@@ -66,7 +75,7 @@ export function useReportAll(profileId?: string | null, enabled = true) {
     enabled,
     staleTime: REPORT_STALE_TIME_MS,
     gcTime: REPORT_GC_TIME_MS,
-    retry: 1,
+    retry: shouldRetry,
     refetchOnWindowFocus: false
   });
 }
@@ -78,7 +87,7 @@ export function useReportFiltered(profileId?: string | null, enabled = true) {
     enabled,
     staleTime: REPORT_STALE_TIME_MS,
     gcTime: REPORT_GC_TIME_MS,
-    retry: 1,
+    retry: shouldRetry,
     refetchOnWindowFocus: false
   });
 }
@@ -90,7 +99,7 @@ export function useMetadata(profileId?: string | null, enabled = true) {
     enabled,
     staleTime: REPORT_STALE_TIME_MS,
     gcTime: REPORT_GC_TIME_MS,
-    retry: 1,
+    retry: shouldRetry,
     refetchOnWindowFocus: false
   });
 }

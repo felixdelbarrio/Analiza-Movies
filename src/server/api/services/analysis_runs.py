@@ -76,7 +76,7 @@ def _base_env(config: RuntimeConfig, profile: SourceProfile) -> dict[str, str]:
     env["REPORTS_DIR"] = str(paths.reports_dir)
     env["ANALIZA_AUTO_DASHBOARD"] = "0"
     env["PYTHONUNBUFFERED"] = "1"
-    omdb_api_keys = resolve_omdb_api_keys(config)
+    omdb_api_keys = resolve_omdb_api_keys()
     if omdb_api_keys:
         env["OMDB_API_KEYS"] = omdb_api_keys
         env.pop("OMDB_API_KEY", None)

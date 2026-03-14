@@ -21,11 +21,7 @@ def test_runtime_profiles_roundtrip(tmp_path: Path) -> None:
         machine_identifier="machine-a",
         plex_token="secret-token",
     )
-    config = (
-        RuntimeConfig()
-        .upsert_profile(profile, set_active=True)
-        .with_omdb_api_keys("abc123")
-    )
+    config = RuntimeConfig().upsert_profile(profile, set_active=True)
 
     config_path = tmp_path / "source_profiles.json"
     save_runtime_config(config, config_path)
@@ -33,12 +29,26 @@ def test_runtime_profiles_roundtrip(tmp_path: Path) -> None:
     raw_payload = config_path.read_text(encoding="utf-8")
 
     assert loaded.active_profile_id == profile.id
-    assert loaded.omdb_api_keys == ""
     assert len(loaded.profiles) == 1
     assert loaded.profiles[0].machine_identifier == "machine-a"
     assert loaded.profiles[0].plex_token is None
     assert "secret-token" not in raw_payload
-    assert "abc123" not in raw_payload
+    assert '"omdb_api_keys": ""' in raw_payload
+
+
+def test_runtime_profiles_public_payload_never_reads_secrets() -> None:
+    profile = build_profile_from_discovery(
+        source_type="plex",
+        name="Plex Sala",
+        host="192.168.1.10",
+        port=32400,
+        machine_identifier="machine-a",
+        plex_token="secret-token",
+    )
+    payload = RuntimeConfig().upsert_profile(profile, set_active=True).to_public_dict()
+
+    assert payload["omdb_api_keys"] == ""
+    assert payload["profiles"][0]["plex_token"] is None
 
 
 def test_artifact_paths_for_profile_are_namespaced() -> None:

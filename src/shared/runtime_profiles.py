@@ -160,18 +160,30 @@ class SourceProfile:
             updated_at=_clean_str(payload.get("updated_at")) or _now_iso(),
         )
 
-    def to_dict(
-        self, *, mask_secrets: bool = False, include_secrets: bool = True
-    ) -> dict[str, Any]:
+    def to_internal_dict(self, *, mask_secrets: bool = False) -> dict[str, Any]:
         data = asdict(self)
-        if not include_secrets:
-            data["plex_token"] = None
-        elif mask_secrets:
+        if mask_secrets:
             data["plex_token"] = mask_secret(self.plex_token)
         return data
 
+    def to_public_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "source_type": self.source_type,
+            "host": self.host,
+            "port": self.port,
+            "base_url": self.base_url,
+            "location": self.location,
+            "device_id": self.device_id,
+            "machine_identifier": self.machine_identifier,
+            "plex_token": None,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
     def with_updates(self, **updates: Any) -> "SourceProfile":
-        merged = self.to_dict(mask_secrets=False, include_secrets=True)
+        merged = self.to_internal_dict(mask_secrets=False)
         merged.update(updates)
         merged["updated_at"] = _now_iso()
         return SourceProfile.from_dict(merged)
@@ -180,7 +192,6 @@ class SourceProfile:
 @dataclass(frozen=True, slots=True)
 class RuntimeConfig:
     version: int = _CONFIG_VERSION
-    omdb_api_keys: str = ""
     active_profile_id: str | None = None
     profiles: list[SourceProfile] = field(default_factory=list)
     updated_at: str = field(default_factory=_now_iso)
@@ -206,24 +217,17 @@ class RuntimeConfig:
 
         return RuntimeConfig(
             version=int(payload.get("version") or _CONFIG_VERSION),
-            omdb_api_keys=_clean_str(payload.get("omdb_api_keys")) or "",
             active_profile_id=active_profile_id,
             profiles=profiles,
             updated_at=_clean_str(payload.get("updated_at")) or _now_iso(),
         )
 
-    def to_dict(
-        self, *, mask_secrets: bool = False, include_secrets: bool = True
-    ) -> dict[str, Any]:
-        omdb_api_keys = self.omdb_api_keys if include_secrets else ""
+    def to_public_dict(self) -> dict[str, Any]:
         return {
             "version": int(self.version),
-            "omdb_api_keys": omdb_api_keys,
+            "omdb_api_keys": "",
             "active_profile_id": self.active_profile_id,
-            "profiles": [
-                p.to_dict(mask_secrets=mask_secrets, include_secrets=include_secrets)
-                for p in self.profiles
-            ],
+            "profiles": [p.to_public_dict() for p in self.profiles],
             "updated_at": self.updated_at,
         }
 
@@ -242,17 +246,7 @@ class RuntimeConfig:
             wanted = None
         return RuntimeConfig(
             version=self.version,
-            omdb_api_keys=self.omdb_api_keys,
             active_profile_id=wanted,
-            profiles=list(self.profiles),
-            updated_at=_now_iso(),
-        )
-
-    def with_omdb_api_keys(self, value: str) -> "RuntimeConfig":
-        return RuntimeConfig(
-            version=self.version,
-            omdb_api_keys=(value or "").strip(),
-            active_profile_id=self.active_profile_id,
             profiles=list(self.profiles),
             updated_at=_now_iso(),
         )
@@ -277,7 +271,6 @@ class RuntimeConfig:
 
         return RuntimeConfig(
             version=self.version,
-            omdb_api_keys=self.omdb_api_keys,
             active_profile_id=active_profile_id,
             profiles=out,
             updated_at=_now_iso(),
@@ -309,7 +302,8 @@ def save_runtime_config(
 ) -> RuntimeConfig:
     resolved_path = PROFILES_CONFIG_PATH if path is None else path
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = config.to_dict(mask_secrets=False, include_secrets=False)
+    # Runtime secrets stay outside the JSON config by design.
+    payload = config.to_public_dict()
     resolved_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

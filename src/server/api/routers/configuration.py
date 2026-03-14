@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 
 def _state_payload(config: RuntimeConfig | None = None) -> dict[str, Any]:
     cfg = config or load_runtime_config()
-    payload = cfg.to_dict(mask_secrets=False, include_secrets=False)
-    payload["has_omdb_api_keys"] = has_omdb_api_keys(cfg)
+    payload = cfg.to_public_dict()
+    payload["has_omdb_api_keys"] = has_omdb_api_keys()
     return payload
 
 
@@ -50,7 +50,7 @@ def _merge_profile(
         return incoming
 
     updates: dict[str, Any] = {}
-    incoming_data = incoming.to_dict(mask_secrets=False)
+    incoming_data = incoming.to_internal_dict(mask_secrets=False)
     for key, value in incoming_data.items():
         if key in {"id", "created_at", "updated_at"}:
             continue
@@ -70,7 +70,6 @@ def update_config_state(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if "omdb_api_keys" in payload:
         omdb_api_keys = str(payload.get("omdb_api_keys") or "")
         remember_omdb_api_keys(omdb_api_keys)
-        config = config.with_omdb_api_keys(omdb_api_keys)
     if "active_profile_id" in payload:
         config = config.with_active_profile(payload.get("active_profile_id"))
     config = save_runtime_config(config)

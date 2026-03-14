@@ -65,7 +65,7 @@ function withSuspense(element: ReactNode) {
 
 function AppRoot() {
   const configQuery = useConfigState();
-  const runQuery = useRunState();
+  const runQuery = useRunState(configQuery.isSuccess);
   const { locale, setLocale, t } = useI18n();
   const activeProfileId = configQuery.data?.active_profile_id ?? null;
   const run = runQuery.data?.run ?? null;
