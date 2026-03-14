@@ -9,11 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from server.api.paths import (
-    METADATA_FIX_PATH,
-    OMDB_CACHE_PATH,
-    REPORT_ALL_PATH,
-    REPORT_FILTERED_PATH,
-    WIKI_CACHE_PATH,
+    get_artifact_paths,
 )
 
 router = APIRouter()
@@ -35,13 +31,15 @@ def meta_files(
     include_sha256: bool = Query(
         False, description="Si true, calcula sha256 (costoso en ficheros grandes)"
     ),
+    profile_id: str | None = Query(None, description="Perfil de origen"),
 ) -> dict[str, Any]:
+    paths_bundle = get_artifact_paths(profile_id)
     paths = {
-        "omdb_cache": OMDB_CACHE_PATH,
-        "wiki_cache": WIKI_CACHE_PATH,
-        "report_all": REPORT_ALL_PATH,
-        "report_filtered": REPORT_FILTERED_PATH,
-        "metadata_fix": METADATA_FIX_PATH,
+        "omdb_cache": paths_bundle.omdb_cache_path,
+        "wiki_cache": paths_bundle.wiki_cache_path,
+        "report_all": paths_bundle.report_all_path,
+        "report_filtered": paths_bundle.report_filtered_path,
+        "metadata_fix": paths_bundle.metadata_fix_path,
     }
 
     out: dict[str, Any] = {}

@@ -3,17 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from server.api.caching.file_cache import FileCache
 from server.api.deps import get_file_cache
-from server.api.paths import (
-    METADATA_FIX_PATH,
-    OMDB_CACHE_PATH,
-    REPORT_ALL_PATH,
-    REPORT_FILTERED_PATH,
-    WIKI_CACHE_PATH,
-)
+from server.api.paths import get_artifact_paths
 from server.api.services import metrics
 from server.api.services.omdb import load_payload as load_omdb
 from server.api.services.wiki import load_payload as load_wiki
@@ -27,18 +21,22 @@ def health() -> dict[str, Any]:
 
 
 @router.get("/ready")
-def ready(cache: FileCache = Depends(get_file_cache)) -> dict[str, Any]:
+def ready(
+    profile_id: str | None = Query(None, description="Perfil de origen"),
+    cache: FileCache = Depends(get_file_cache),
+) -> dict[str, Any]:
     """
     Readiness:
     - comprueba existencia y lectura de ficheros críticos.
     - report_filtered es opcional (tu API puede devolver 204).
     """
+    paths_bundle = get_artifact_paths(profile_id)
     paths = {
-        "omdb_cache": OMDB_CACHE_PATH,
-        "wiki_cache": WIKI_CACHE_PATH,
-        "report_all": REPORT_ALL_PATH,
-        "report_filtered": REPORT_FILTERED_PATH,
-        "metadata_fix": METADATA_FIX_PATH,
+        "omdb_cache": paths_bundle.omdb_cache_path,
+        "wiki_cache": paths_bundle.wiki_cache_path,
+        "report_all": paths_bundle.report_all_path,
+        "report_filtered": paths_bundle.report_filtered_path,
+        "metadata_fix": paths_bundle.metadata_fix_path,
     }
 
     issues: dict[str, str] = {}
@@ -51,10 +49,10 @@ def ready(cache: FileCache = Depends(get_file_cache)) -> dict[str, Any]:
                 continue
 
             if p.suffix.lower() == ".json":
-                if p == OMDB_CACHE_PATH:
-                    _ = load_omdb(cache)
-                elif p == WIKI_CACHE_PATH:
-                    _ = load_wiki(cache)
+                if p == paths_bundle.omdb_cache_path:
+                    _ = load_omdb(cache, profile_id=profile_id)
+                elif p == paths_bundle.wiki_cache_path:
+                    _ = load_wiki(cache, profile_id=profile_id)
                 else:
                     _ = cache.load_json(p)
             elif p.suffix.lower() == ".csv":

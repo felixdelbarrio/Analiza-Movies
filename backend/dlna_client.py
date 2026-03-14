@@ -1011,6 +1011,36 @@ class DLNAClient:
 
         return chosen_root, selected
 
+    def select_all_video_containers(
+        self, device: DLNADevice
+    ) -> tuple[DlnaContainer, list[DlnaContainer]] | None:
+        roots = self.list_video_root_containers(device)
+        if not roots:
+            _logger.error(
+                "[DLNA] No se han encontrado contenedores raíz de vídeo.", always=True
+            )
+            return None
+
+        chosen_root = roots[0]
+        selected: list[DlnaContainer] = []
+        seen_ids: set[str] = set()
+
+        for root in roots:
+            base = self.auto_descend_folder_browse(device, root)
+            object_id = str(base.object_id)
+            if object_id in seen_ids:
+                continue
+            seen_ids.add(object_id)
+            selected.append(base)
+
+        if not selected:
+            return None
+
+        _logger.progress(
+            f"[DLNA] Contenedores seleccionados automáticamente: {len(selected)}"
+        )
+        return chosen_root, selected
+
     # -----------------------------
     # Contenedores
     # -----------------------------

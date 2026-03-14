@@ -7,15 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from server.api.caching.file_cache import FileCache
 from server.api.caching.http_cache import maybe_not_modified, stat_or_none
 from server.api.deps import get_file_cache
-from server.api.paths import WIKI_CACHE_PATH
+from server.api.paths import get_wiki_cache_path
 from server.api.services.wiki import load_payload
 
 router = APIRouter()
 
 
-def _payload(cache: FileCache) -> dict[str, Any]:
+def _payload(cache: FileCache, profile_id: str | None) -> dict[str, Any]:
     try:
-        return load_payload(cache)
+        return load_payload(cache, profile_id=profile_id)
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -27,13 +27,14 @@ def wiki_records(
     limit: int = Query(100, ge=1, le=5000),
     offset: int = Query(0, ge=0),
     status: str | None = Query(None),
+    profile_id: str | None = Query(None, description="Perfil de origen"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
-    st = stat_or_none(WIKI_CACHE_PATH)
+    st = stat_or_none(get_wiki_cache_path(profile_id))
     if maybe_not_modified(request=request, response=response, stat=st):
         return Response(status_code=304, headers=dict(response.headers))
 
-    payload = _payload(cache)
+    payload = _payload(cache, profile_id)
     records = payload.get("records")
     if not isinstance(records, dict):
         raise HTTPException(
@@ -60,13 +61,14 @@ def wiki_by_imdb(
     imdb_id: str,
     request: Request,
     response: Response,
+    profile_id: str | None = Query(None, description="Perfil de origen"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
-    st = stat_or_none(WIKI_CACHE_PATH)
+    st = stat_or_none(get_wiki_cache_path(profile_id))
     if maybe_not_modified(request=request, response=response, stat=st):
         return Response(status_code=304, headers=dict(response.headers))
 
-    payload = _payload(cache)
+    payload = _payload(cache, profile_id)
     records = payload.get("records") or {}
     index_imdb = payload.get("index_imdb") or payload.get("index") or {}
 
@@ -88,13 +90,14 @@ def wiki_by_rid(
     rid: str,
     request: Request,
     response: Response,
+    profile_id: str | None = Query(None, description="Perfil de origen"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
-    st = stat_or_none(WIKI_CACHE_PATH)
+    st = stat_or_none(get_wiki_cache_path(profile_id))
     if maybe_not_modified(request=request, response=response, stat=st):
         return Response(status_code=304, headers=dict(response.headers))
 
-    payload = _payload(cache)
+    payload = _payload(cache, profile_id)
     records = payload.get("records") or {}
     rec = records.get(str(rid))
     if not rec:

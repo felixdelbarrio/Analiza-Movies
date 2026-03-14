@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from server.api.caching.file_cache import FileCache
 from server.api.caching.http_cache import maybe_not_modified, stat_or_none
 from server.api.deps import get_file_cache
-from server.api.paths import OMDB_CACHE_PATH, WIKI_CACHE_PATH
+from server.api.paths import get_omdb_cache_path, get_wiki_cache_path
 from server.api.services.consolidated import consolidate
 
 # IMPORTANTE:
@@ -22,20 +22,27 @@ def consolidated_by_imdb(
     imdb_id: str,
     request: Request,
     response: Response,
+    profile_id: str | None = Query(None, description="Perfil de origen"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
     # Consolidated depende de dos ficheros: OMDb + Wiki.
     # Si el cliente manda If-None-Match/If-Modified-Since, devolvemos 304 cuando aplique.
     if maybe_not_modified(
-        request=request, response=response, stat=stat_or_none(OMDB_CACHE_PATH)
+        request=request,
+        response=response,
+        stat=stat_or_none(get_omdb_cache_path(profile_id)),
     ):
         return Response(status_code=304, headers=dict(response.headers))
     if maybe_not_modified(
-        request=request, response=response, stat=stat_or_none(WIKI_CACHE_PATH)
+        request=request,
+        response=response,
+        stat=stat_or_none(get_wiki_cache_path(profile_id)),
     ):
         return Response(status_code=304, headers=dict(response.headers))
 
-    data = consolidate(cache=cache, imdb_id=imdb_id, title=None, year=None)
+    data = consolidate(
+        cache=cache, profile_id=profile_id, imdb_id=imdb_id, title=None, year=None
+    )
 
     if not data["sources"]["omdb"]["rid"] and not data["sources"]["wiki"]["rid"]:
         raise HTTPException(
@@ -51,18 +58,25 @@ def consolidated_by_title_year(
     response: Response,
     title: str = Query(..., min_length=1),
     year: str | None = Query(None, description="Año (p.ej. 1999)"),
+    profile_id: str | None = Query(None, description="Perfil de origen"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
     if maybe_not_modified(
-        request=request, response=response, stat=stat_or_none(OMDB_CACHE_PATH)
+        request=request,
+        response=response,
+        stat=stat_or_none(get_omdb_cache_path(profile_id)),
     ):
         return Response(status_code=304, headers=dict(response.headers))
     if maybe_not_modified(
-        request=request, response=response, stat=stat_or_none(WIKI_CACHE_PATH)
+        request=request,
+        response=response,
+        stat=stat_or_none(get_wiki_cache_path(profile_id)),
     ):
         return Response(status_code=304, headers=dict(response.headers))
 
-    data = consolidate(cache=cache, imdb_id=None, title=title, year=year)
+    data = consolidate(
+        cache=cache, profile_id=profile_id, imdb_id=None, title=title, year=year
+    )
 
     if not data["sources"]["omdb"]["rid"] and not data["sources"]["wiki"]["rid"]:
         key = f"{title}|{year or ''}"
@@ -85,19 +99,24 @@ def consolidated_records(
     status_wiki: str | None = Query(
         None, description="Filtra por status en wiki_cache (ok/no_qid/not_film/...)"
     ),
+    profile_id: str | None = Query(None, description="Perfil de origen"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
     if maybe_not_modified(
-        request=request, response=response, stat=stat_or_none(OMDB_CACHE_PATH)
+        request=request,
+        response=response,
+        stat=stat_or_none(get_omdb_cache_path(profile_id)),
     ):
         return Response(status_code=304, headers=dict(response.headers))
     if maybe_not_modified(
-        request=request, response=response, stat=stat_or_none(WIKI_CACHE_PATH)
+        request=request,
+        response=response,
+        stat=stat_or_none(get_wiki_cache_path(profile_id)),
     ):
         return Response(status_code=304, headers=dict(response.headers))
 
-    omdb_payload = cache.load_json(OMDB_CACHE_PATH)
-    wiki_payload = cache.load_json(WIKI_CACHE_PATH)
+    omdb_payload = cache.load_json(get_omdb_cache_path(profile_id))
+    wiki_payload = cache.load_json(get_wiki_cache_path(profile_id))
 
     omdb_records = omdb_payload.get("records") if isinstance(omdb_payload, dict) else {}
     wiki_records = wiki_payload.get("records") if isinstance(wiki_payload, dict) else {}
@@ -133,7 +152,9 @@ def consolidated_records(
 
     page = imdb_list[offset : offset + limit]
     items = [
-        consolidate(cache=cache, imdb_id=imdb_id, title=None, year=None)
+        consolidate(
+            cache=cache, profile_id=profile_id, imdb_id=imdb_id, title=None, year=None
+        )
         for imdb_id in page
     ]
 

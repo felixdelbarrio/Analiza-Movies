@@ -103,7 +103,7 @@ Characteristics:
 
 ---
 
-### 4️⃣ Frontend Layer (Streamlit)
+### 4️⃣ Frontend Layer (React)
 
 The frontend is a **consumer of analysis outputs**, never a producer of raw data.
 
@@ -113,11 +113,12 @@ The frontend is a **consumer of analysis outputs**, never a producer of raw data
 - Visual analytics (charts, KPIs, summaries)  
 - Human validation of automated decisions  
 - Safe review of deletion candidates  
-- Consumption of CSV or REST API data  
+- Consumption of REST API data  
 
 **Design choices:**
 
-- Stateless UI logic  
+- Component-driven UI with route-level composition  
+- Virtualized lists and chunked chart loading for large catalogs  
 - Explicit user intent for destructive actions  
 - Clear separation between data, logic, and presentation  
 - No hidden side effects  

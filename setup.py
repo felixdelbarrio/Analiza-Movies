@@ -14,7 +14,7 @@ setup(
     author="Félix del Barrio",
     description=(
         "Toolset for analyzing Plex movie libraries, exposing reports "
-        "via Streamlit and a FastAPI backend."
+        "via a React frontend and a FastAPI backend."
     ),
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -33,12 +33,6 @@ setup(
         # FastAPI server
         "fastapi>=0.110",
         "uvicorn[standard]>=0.27",
-        # Streamlit UI
-        "streamlit>=1.32",
-        "altair>=5.2",
-        "streamlit-aggrid>=0.3.4",
-        # Recommended (hot reload / warning)
-        "watchdog>=3.0",
     ],
     extras_require={
         "dev": [
@@ -79,7 +73,6 @@ setup(
         "Environment :: Console",
         "Environment :: Web Environment",
         "Framework :: FastAPI",
-        "Framework :: Streamlit",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
         "Topic :: Multimedia :: Video",

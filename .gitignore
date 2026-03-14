@@ -11,6 +11,13 @@ venv/
 # Ignorar visual studio code
 .vscode/
 
+# Frontend React/Vite
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
+
 # Ignorar caches
 omdb_cache.json
 wiki_cache.json

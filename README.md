@@ -43,50 +43,41 @@ If you find this project useful, you can support its development here:
 1) Create environment files:
    - `cp .env.example .env`
    - `cp .env.front.example .env.front`
-2) Install dependencies: `make dev`
-3) Run:
+2) Install Python dependencies: `make dev`
+3) Install frontend dependencies: `make frontend-install`
+4) Run:
    - Backend CLI: `make backend`
    - API server: `make server`
-   - Frontend dashboard: `make frontend`
+   - React frontend (Vite dev): `make frontend`
+
+### Production-like local run
+
+1) Build the SPA: `make frontend-build`
+2) Serve API + React bundle together: `make server`
+3) Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
 
 ---
 
-## 🖥️ Interactive Frontend (Streamlit)
+## 🖥️ Interactive Frontend (React)
 
-The **frontend** is a first-class component of Analiza Movies, implemented using **Streamlit** and designed to sit directly on top of the generated reports and/or the REST API.
+The frontend is now implemented from scratch in **React + TypeScript + Vite**.
 
-It provides a **human-in-the-loop** decision layer, turning raw analysis results into actionable insights.
+It keeps the same analytical structure of the original dashboard, but moves to a component-based architecture that is significantly easier to evolve, optimize and brand at a higher visual level.
 
 ### Frontend Capabilities
 
-- 📑 **Tab-based navigation**, each tab focused on a specific analytical task  
-- 🔎 **Advanced filtering and search** across large movie catalogs  
-- 📊 **Charts, KPIs, and summary metrics**  
-- 🧠 **Decision-oriented views** (KEEP / DELETE / REVIEW)  
-- 🧾 **Metadata inspection and validation**  
-- 🗑️ **Deletion candidate review** with safety-first logic  
-- 🔌 **Dual data source support**:
-  - CSV reports (offline / batch mode)
-  - REST API (live / service mode)
+- Cinematic navigation across dashboard, library, analytics, duplicates, metadata, cleanup and settings
+- High-density exploration with virtualized tables and editorial detail panels
+- ECharts-based visual storytelling with theme-aware rendering
+- Profile-aware browsing across multiple Plex and DLNA origins
+- React Query data loading on top of the FastAPI backend
+- Safe delete execution through the API with dry-run support
 
-### Main Dashboard Sections
+### Development Model
 
-- **All Movies**  
-  Full catalog exploration with filters and sortable tables.
-
-- **Candidates**  
-  Automatically identified low-value or problematic titles.
-
-- **Metadata**  
-  Detection of mismatches, missing fields, and ambiguities.
-
-- **Charts & Statistics**  
-  Visual overview of quality distribution and trends.
-
-- **Delete / Review**  
-  Explicit human validation before any destructive action.
-
-The frontend is intentionally **read-only by default**, ensuring that all deletion or corrective actions remain explicit and controlled.
+- `make frontend` runs the Vite development server on port `5173`
+- `make frontend-build` generates `web/dist`
+- `make server` serves the FastAPI API and, if available, also serves `web/dist`
 
 ---
 
@@ -123,36 +114,35 @@ Si este proyecto te resulta útil, puedes apoyarlo aquí:
 1) Crea los archivos de entorno:
    - `cp .env.example .env`
    - `cp .env.front.example .env.front`
-2) Instala dependencias: `make dev`
-3) Ejecuta:
+2) Instala dependencias Python: `make dev`
+3) Instala dependencias del frontend: `make frontend-install`
+4) Ejecuta:
    - Backend CLI: `make backend`
    - API server: `make server`
-   - Frontend dashboard: `make frontend`
+   - Frontend React en desarrollo: `make frontend`
 
 ---
 
-## 🖥️ Frontend Interactivo (Streamlit)
+## 🖥️ Frontend Interactivo (React)
 
-El **frontend** es un componente clave de Analiza Movies y actúa como la capa de **exploración, validación y decisión humana** sobre los resultados del análisis.
+El frontend está ahora construido desde cero con **React + TypeScript + Vite**.
 
-Está diseñado para trabajar tanto con **informes CSV** como con la **API REST**, permitiendo distintos modos de operación.
+Mantiene la navegación, estructura analítica y riqueza visual del dashboard anterior, pero pasa a una arquitectura preparada para evolucionar con mucha más libertad en diseño, rendimiento y mantenibilidad.
 
 ### Funcionalidades del Frontend
 
-- Navegación clara por pestañas, orientada a tareas reales  
-- Filtros avanzados para bibliotecas grandes  
-- Métricas, gráficas y KPIs visuales  
-- Vistas orientadas a decisión (KEEP / DELETE / REVIEW)  
-- Revisión manual de candidatos antes de actuar  
-- Consumo directo de API o ficheros generados  
+- Navegación editorial entre dashboard, biblioteca, analítica, duplicados, metadata, limpieza y configuración
+- Tablas virtualizadas para catálogos grandes
+- Gráficos ECharts adaptados al tema visual activo
+- Cambio global del origen visible entre múltiples perfiles Plex y DLNA
+- Gestión de perfiles, descubrimiento en red y vinculación Plex desde la UI
+- Acciones destructivas controladas vía API con soporte de simulación
 
-### Casos de Uso Clave
+### Ejecución
 
-- Explorar el catálogo completo  
-- Identificar películas problemáticas  
-- Validar candidatos a eliminación  
-- Detectar errores de metadatos  
-- Compartir resultados mediante CSV o HTML  
+- `make frontend` arranca Vite para desarrollo
+- `make frontend-build` genera `web/dist`
+- `make server` sirve la API y, si existe el build, también sirve la SPA compilada
 
 ---
 
@@ -160,7 +150,7 @@ Está diseñado para trabajar tanto con **informes CSV** como con la **API REST*
 
 - Backend Analyzer (CLI / batch)
 - REST API Server (FastAPI)
-- Interactive Frontend (Streamlit)
+- Interactive Frontend (React)
 - Scoring & Decision Engine
 - Caching & Resilience Layer
 - Advanced Reporting
@@ -196,4 +186,5 @@ flowchart LR
     Backend[Backend Analyzer]
     Reports[Reports & Metrics]
     API[FastAPI REST API]
-    Frontend[Streamlit Dashboard]
+    Frontend[React SPA]
+```

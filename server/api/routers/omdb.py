@@ -7,15 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from server.api.caching.file_cache import FileCache
 from server.api.caching.http_cache import maybe_not_modified, stat_or_none
 from server.api.deps import get_file_cache
-from server.api.paths import OMDB_CACHE_PATH
+from server.api.paths import get_omdb_cache_path
 from server.api.services.omdb import load_payload
 
 router = APIRouter()
 
 
-def _payload(cache: FileCache) -> dict[str, Any]:
+def _payload(cache: FileCache, profile_id: str | None) -> dict[str, Any]:
     try:
-        return load_payload(cache)
+        return load_payload(cache, profile_id=profile_id)
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -29,13 +29,15 @@ def omdb_records(
     status: str | None = Query(
         None, description="Filtra por record.status (ok/not_found/error)"
     ),
+    profile_id: str | None = Query(None, description="Perfil de origen"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
-    st = stat_or_none(OMDB_CACHE_PATH)
+    omdb_cache_path = get_omdb_cache_path(profile_id)
+    st = stat_or_none(omdb_cache_path)
     if maybe_not_modified(request=request, response=response, stat=st):
         return Response(status_code=304, headers=dict(response.headers))
 
-    payload = _payload(cache)
+    payload = _payload(cache, profile_id)
     records = payload.get("records")
     if not isinstance(records, dict):
         raise HTTPException(
@@ -62,13 +64,14 @@ def omdb_by_imdb(
     imdb_id: str,
     request: Request,
     response: Response,
+    profile_id: str | None = Query(None, description="Perfil de origen"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
-    st = stat_or_none(OMDB_CACHE_PATH)
+    st = stat_or_none(get_omdb_cache_path(profile_id))
     if maybe_not_modified(request=request, response=response, stat=st):
         return Response(status_code=304, headers=dict(response.headers))
 
-    payload = _payload(cache)
+    payload = _payload(cache, profile_id)
     records = payload.get("records") or {}
     index_imdb = payload.get("index_imdb") or {}
 
@@ -93,13 +96,14 @@ def omdb_by_title_year(
     response: Response,
     title: str = Query(..., min_length=1),
     year: str | None = Query(None, description="Año (p.ej. 1999)"),
+    profile_id: str | None = Query(None, description="Perfil de origen"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
-    st = stat_or_none(OMDB_CACHE_PATH)
+    st = stat_or_none(get_omdb_cache_path(profile_id))
     if maybe_not_modified(request=request, response=response, stat=st):
         return Response(status_code=304, headers=dict(response.headers))
 
-    payload = _payload(cache)
+    payload = _payload(cache, profile_id)
     records = payload.get("records") or {}
     index_ty = payload.get("index_ty") or {}
 
@@ -129,13 +133,14 @@ def omdb_by_rid(
     rid: str,
     request: Request,
     response: Response,
+    profile_id: str | None = Query(None, description="Perfil de origen"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
-    st = stat_or_none(OMDB_CACHE_PATH)
+    st = stat_or_none(get_omdb_cache_path(profile_id))
     if maybe_not_modified(request=request, response=response, stat=st):
         return Response(status_code=304, headers=dict(response.headers))
 
-    payload = _payload(cache)
+    payload = _payload(cache, profile_id)
     records = payload.get("records") or {}
     rec = records.get(str(rid))
     if not rec:

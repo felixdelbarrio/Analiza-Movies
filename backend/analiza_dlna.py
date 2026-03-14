@@ -598,7 +598,9 @@ def _safe_snapshot_counters() -> Mapping[str, object]:
 # ============================================================================
 
 
-def analyze_dlna_server(device: DLNADevice | None = None) -> None:
+def analyze_dlna_server(
+    device: DLNADevice | None = None, *, auto_select_all: bool = False
+) -> None:
     t0 = time.monotonic()
     reset_omdb_metrics()
 
@@ -626,7 +628,11 @@ def analyze_dlna_server(device: DLNADevice | None = None) -> None:
                 f"max_pages_per_container={limits.max_pages_per_container}",
             )
 
-        picked_containers = client.ask_user_to_select_video_containers(device)
+        picked_containers = (
+            client.select_all_video_containers(device)
+            if auto_select_all
+            else client.ask_user_to_select_video_containers(device)
+        )
         if picked_containers is None:
             return
 

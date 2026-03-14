@@ -19,12 +19,16 @@ recursive-include backend *.py
 recursive-include backend py.typed
 
 # ---------------------------------------------------------------------------
-# Frontend (Streamlit)
+# Frontend (React / Vite)
 # ---------------------------------------------------------------------------
-recursive-include frontend *.py
-recursive-include frontend py.typed
-recursive-include frontend/templates *.html
-recursive-include frontend/static *.css *.js *.png *.jpg *.svg
+include web/package.json
+include web/package-lock.json
+include web/index.html
+include web/tsconfig.json
+include web/tsconfig.app.json
+include web/tsconfig.node.json
+include web/vite.config.ts
+recursive-include web/src *.ts *.tsx *.css *.d.ts
 
 # ---------------------------------------------------------------------------
 # Server (FastAPI)

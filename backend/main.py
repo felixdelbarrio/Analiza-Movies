@@ -28,8 +28,11 @@ Reglas de consola (alineado con backend/logger.py)
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
+import time
+import webbrowser
 from pathlib import Path
 from typing import Literal
 
@@ -38,6 +41,7 @@ from backend.analiza_dlna import analyze_dlna_server
 from backend.analiza_plex import analyze_all_libraries
 from backend.config_base import ANALIZA_AUTO_DASHBOARD, DEBUG_MODE, SILENT_MODE
 from backend.config_reports import REPORT_ALL_PATH, REPORT_FILTERED_PATH
+from backend.dlna_discovery import DLNADevice
 
 Choice = Literal["0", "1", "2"]
 
@@ -52,7 +56,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="start",
         add_help=True,
-        description="Analiza Movies - CLI backend (Plex/DLNA/Streamlit)",
+        description="Analiza Movies - CLI backend (Plex/DLNA/React)",
     )
 
     mode = parser.add_mutually_exclusive_group()
@@ -74,6 +78,19 @@ def _parse_args() -> argparse.Namespace:
         help="No abrir el dashboard tras el análisis (aunque esté activado por config)",
     )
 
+    parser.add_argument("--dlna-host", help="Host del servidor DLNA a analizar")
+    parser.add_argument("--dlna-port", type=int, help="Puerto del servidor DLNA")
+    parser.add_argument("--dlna-location", help="LOCATION XML del servidor DLNA")
+    parser.add_argument(
+        "--dlna-friendly-name", help="Nombre legible del servidor DLNA seleccionado"
+    )
+    parser.add_argument("--dlna-device-id", help="Device ID del servidor DLNA")
+    parser.add_argument(
+        "--dlna-auto-select-all",
+        action="store_true",
+        help="Selecciona automáticamente todos los contenedores DLNA de vídeo",
+    )
+
     return parser.parse_args()
 
 
@@ -88,19 +105,21 @@ def _reports_available() -> bool:
     return Path(REPORT_ALL_PATH).exists() and Path(REPORT_FILTERED_PATH).exists()
 
 
-def _run_streamlit_dashboard() -> None:
+def _run_web_dashboard() -> None:
     """
-    Lanza el dashboard de Streamlit usando el intérprete actual.
+    Lanza la UI web React sobre FastAPI usando el intérprete actual.
 
-    - Usa: python -m streamlit run frontend/dashboard.py
-    - Ruta calculada relativa a la raíz del repo.
+    - Usa: python -m server
+    - Requiere que exista `web/dist/index.html`.
     """
     project_root = Path(__file__).resolve().parents[1]
-    dashboard_path = project_root / "frontend" / "dashboard.py"
+    web_index_path = project_root / "web" / "dist" / "index.html"
 
-    if not dashboard_path.exists():
+    if not web_index_path.exists():
         logger.info(
-            f"[AnalizaMovies] No se encuentra el dashboard: {str(dashboard_path)!r}",
+            "[AnalizaMovies] No se encuentra la SPA compilada en `web/dist`. "
+            "Ejecuta `make frontend-build` para servirla desde FastAPI o "
+            "`make frontend` para desarrollo con Vite.",
             always=True,
         )
         return
@@ -113,33 +132,45 @@ def _run_streamlit_dashboard() -> None:
         )
         return
 
-    logger.progress("[AnalizaMovies] Modo: Análisis visual (Streamlit)")
+    logger.progress("[AnalizaMovies] Modo: UI web (React + FastAPI)")
 
-    cmd = [sys.executable, "-m", "streamlit", "run", str(dashboard_path)]
+    host = os.getenv("API_HOST", "127.0.0.1")
+    port = os.getenv("API_PORT", "8000")
+    url = f"http://{host}:{port}"
+    cmd = [sys.executable, "-m", "server"]
 
     if DEBUG_MODE and not SILENT_MODE:
         logger.debug_ctx("DASH", f"cmd={cmd!r}")
+        logger.debug_ctx("DASH", f"url={url!r}")
         logger.debug_ctx("DASH", f"REPORT_ALL_PATH={REPORT_ALL_PATH!r}")
         logger.debug_ctx("DASH", f"REPORT_FILTERED_PATH={REPORT_FILTERED_PATH!r}")
 
+    process: subprocess.Popen[bytes] | None = None
     try:
-        result = subprocess.run(cmd, check=False)
+        process = subprocess.Popen(cmd)
+        time.sleep(1.2)
+        webbrowser.open(url)
+        result_code = process.wait()
     except KeyboardInterrupt:
+        if process is not None and process.poll() is None:
+            process.terminate()
         logger.info(
             "\n[AnalizaMovies] Interrumpido por el usuario (Ctrl+C).", always=True
         )
         return
     except Exception as exc:  # noqa: BLE001
-        logger.info(f"[AnalizaMovies] Error lanzando Streamlit: {exc!r}", always=True)
+        if process is not None and process.poll() is None:
+            process.terminate()
+        logger.info(f"[AnalizaMovies] Error lanzando la UI web: {exc!r}", always=True)
         return
 
-    if result.returncode != 0:
+    if result_code != 0:
         logger.info(
-            f"[AnalizaMovies] Streamlit terminó con código {result.returncode}.",
+            f"[AnalizaMovies] La UI web terminó con código {result_code}.",
             always=True,
         )
     else:
-        logger.progress("[AnalizaMovies] Fin (Análisis visual)")
+        logger.progress("[AnalizaMovies] Fin (UI web)")
 
 
 def _maybe_run_dashboard_after_analysis() -> None:
@@ -149,7 +180,7 @@ def _maybe_run_dashboard_after_analysis() -> None:
     """
     if not ANALIZA_AUTO_DASHBOARD:
         return
-    _run_streamlit_dashboard()
+    _run_web_dashboard()
 
 
 def _ask_source() -> Choice | None:
@@ -166,7 +197,7 @@ def _ask_source() -> Choice | None:
 
     if SILENT_MODE:
         if has_reports:
-            menu = "0) Análisis visual\n1) Plex\n2) DLNA\n(Enter cancela)"
+            menu = "0) Interfaz web\n1) Plex\n2) DLNA\n(Enter cancela)"
             prompt = "> "
         else:
             menu = "1) Plex\n2) DLNA\n(Enter cancela)"
@@ -175,7 +206,7 @@ def _ask_source() -> Choice | None:
         if has_reports:
             menu = (
                 "¿Qué quieres ejecutar?\n"
-                "  0) Análisis visual (Streamlit)\n"
+                "  0) Interfaz web (React)\n"
                 "  1) Plex (analizar)\n"
                 "  2) DLNA (analizar)\n"
                 "(Pulsa Enter para cancelar)"
@@ -215,6 +246,27 @@ def _ask_source() -> Choice | None:
             )
 
 
+def _build_dlna_device_from_args(args: argparse.Namespace) -> DLNADevice | None:
+    host = str(getattr(args, "dlna_host", "") or "").strip()
+    location = str(getattr(args, "dlna_location", "") or "").strip()
+    port = getattr(args, "dlna_port", None)
+    if not host or not location or not isinstance(port, int) or port <= 0:
+        return None
+
+    friendly_name = (
+        str(getattr(args, "dlna_friendly_name", "") or "").strip()
+        or f"DLNA {host}:{port}"
+    )
+    device_id = str(getattr(args, "dlna_device_id", "") or "").strip() or None
+    return DLNADevice(
+        friendly_name=friendly_name,
+        location=location,
+        host=host,
+        port=port,
+        device_id=device_id,
+    )
+
+
 def start() -> None:
     """
     Entry-point principal (console_scripts).
@@ -235,11 +287,13 @@ def start() -> None:
         logger.debug_ctx("ANALYZE", "SILENT_MODE=False DEBUG_MODE=True")
 
     try:
+        dlna_device = _build_dlna_device_from_args(args)
+
         # =========================
         # MODO FLAGS (sin menú)
         # =========================
         if args.dashboard:
-            _run_streamlit_dashboard()
+            _run_web_dashboard()
             return
 
         if args.plex:
@@ -256,7 +310,10 @@ def start() -> None:
         if args.dlna:
             logger.progress("[AnalizaMovies] Modo: DLNA")
             try:
-                analyze_dlna_server()
+                analyze_dlna_server(
+                    device=dlna_device,
+                    auto_select_all=bool(args.dlna_auto_select_all),
+                )
             finally:
                 logger.progress("[AnalizaMovies] Fin (DLNA)")
 
@@ -272,7 +329,7 @@ def start() -> None:
             return
 
         if choice == "0":
-            _run_streamlit_dashboard()
+            _run_web_dashboard()
             return
 
         if choice == "1":
@@ -286,7 +343,10 @@ def start() -> None:
 
         logger.progress("[AnalizaMovies] Modo: DLNA")
         try:
-            analyze_dlna_server()
+            analyze_dlna_server(
+                device=dlna_device,
+                auto_select_all=bool(args.dlna_auto_select_all),
+            )
         finally:
             logger.progress("[AnalizaMovies] Fin (DLNA)")
         _maybe_run_dashboard_after_analysis()

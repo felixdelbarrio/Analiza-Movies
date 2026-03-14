@@ -11,11 +11,15 @@ from server.api.caching.file_cache import FileCache
 def get_omdb_record(
     *,
     cache: FileCache,
+    profile_id: str | None = None,
     imdb_id: str | None,
     norm_title: str | None,
     norm_year: str | None,
 ) -> tuple[str | None, dict[str, Any] | None]:
-    payload = load_omdb_payload(cache)
+    try:
+        payload = load_omdb_payload(cache, profile_id=profile_id)
+    except TypeError:
+        payload = load_omdb_payload(cache)
     records = payload.get("records") or {}
     idx_imdb = payload.get("index_imdb") or {}
     idx_ty = payload.get("index_ty") or {}
@@ -41,11 +45,15 @@ def get_omdb_record(
 def get_wiki_record(
     *,
     cache: FileCache,
+    profile_id: str | None = None,
     imdb_id: str | None,
     norm_title: str | None,
     norm_year: str | None,
 ) -> tuple[str | None, dict[str, Any] | None]:
-    payload = load_wiki_payload(cache)
+    try:
+        payload = load_wiki_payload(cache, profile_id=profile_id)
+    except TypeError:
+        payload = load_wiki_payload(cache)
     records = payload.get("records") or {}
     idx_imdb = payload.get("index_imdb") or payload.get("index") or {}
     idx_ty = payload.get("index_ty") or {}
@@ -76,6 +84,7 @@ def get_wiki_record(
 def consolidate(
     *,
     cache: FileCache,
+    profile_id: str | None = None,
     imdb_id: str | None,
     title: str | None,
     year: str | None,
@@ -85,10 +94,18 @@ def consolidate(
     imdb_norm = imdb_id.strip().lower() if isinstance(imdb_id, str) else None
 
     omdb_rid, omdb_rec = get_omdb_record(
-        cache=cache, imdb_id=imdb_norm, norm_title=norm_title, norm_year=norm_year
+        cache=cache,
+        profile_id=profile_id,
+        imdb_id=imdb_norm,
+        norm_title=norm_title,
+        norm_year=norm_year,
     )
     wiki_rid, wiki_rec = get_wiki_record(
-        cache=cache, imdb_id=imdb_norm, norm_title=norm_title, norm_year=norm_year
+        cache=cache,
+        profile_id=profile_id,
+        imdb_id=imdb_norm,
+        norm_title=norm_title,
+        norm_year=norm_year,
     )
 
     omdb_payload: dict[str, Any] | None = None

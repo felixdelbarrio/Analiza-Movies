@@ -2,6 +2,7 @@
 # Targets:
 #   make backend
 #   make frontend
+#   make frontend-build
 #   make server
 #   make doctor
 #   make dev
@@ -19,24 +20,26 @@ API_PORT   ?= 8000
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv install dev reinstall backend frontend server server-uvicorn doctor \
-        typecheck lint format test test-cov clean clean-venv reset
+.PHONY: help venv install dev reinstall backend frontend frontend-install frontend-build frontend-preview \
+        server server-uvicorn doctor typecheck lint format test test-cov clean clean-venv reset
 
 help:
 	@echo ""
 	@echo "Analiza-Movies"
 	@echo "--------------"
 	@echo "make backend         Ejecuta el CLI backend (menú Plex/DLNA)"
-	@echo "make frontend        Ejecuta el dashboard Streamlit"
-	@echo "make server          Ejecuta la API FastAPI (via start-server)"
+	@echo "make frontend        Ejecuta el frontend React con Vite"
+	@echo "make frontend-build  Genera el bundle de producción en web/dist"
+	@echo "make frontend-preview Sirve localmente el build de React"
+	@echo "make server          Ejecuta la API FastAPI (sirve web/dist si existe)"
 	@echo "make server-uvicorn  Ejecuta la API FastAPI (via uvicorn: $(API_MODULE))"
 	@echo ""
 	@echo "make install         Crea venv e instala runtime (editable)"
 	@echo "make dev             Instala runtime + tooling/dev deps"
 	@echo "make reinstall       Reinstala el proyecto editable (runtime)"
+	@echo "make frontend-install Instala dependencias Node del frontend"
 	@echo "make typecheck       Ejecuta mypy y pyright (requiere make dev)"
 	@echo "make mypy            Ejecuta solo mypy (requiere make dev)"
-	@echo "make clean-streamlit Limpia caches de componentes de Streamlit"
 	@echo "make lint            Ejecuta ruff (requiere make dev)"
 	@echo "make format          Ejecuta black + ruff format (requiere make dev)"
 	@echo "make test            Ejecuta pytest (requiere make dev)"
@@ -75,10 +78,19 @@ reinstall: venv
 backend: install
 	@$(VENV)/bin/start
 
-frontend: install
-	@$(VENV)/bin/start --dashboard
+frontend-install:
+	@npm --prefix web install
 
-# Mantiene el comportamiento actual: usa el entrypoint instalado.
+frontend: frontend-install
+	@npm --prefix web run dev -- --host 0.0.0.0
+
+frontend-build: frontend-install
+	@npm --prefix web run build
+
+frontend-preview: frontend-build
+	@npm --prefix web run preview -- --host 0.0.0.0
+
+# Sirve la API y, si existe, también la SPA compilada en web/dist.
 server: install
 	@$(VENV)/bin/start-server
 
@@ -132,9 +144,6 @@ clean:
 	@rm -rf *.egg-info
 	@find . -type d -name "__pycache__" -prune -exec rm -rf {} +
 	@find . -type f -name ".DS_Store" -delete
-
-clean-streamlit:
-	@rm -rf ~/.streamlit/components
 
 clean-venv:
 	@rm -rf $(VENV)
