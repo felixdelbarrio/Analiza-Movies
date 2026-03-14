@@ -12,12 +12,6 @@ omit =
     */dlna_discovery.py
     */collection_analysis.py
     */main.py
-    */frontend/tabs/*
-    */frontend/components.py
-    */frontend/dashboard.py
-    */frontend/front_api_client.py
-    */frontend/front_logger.py
-    */frontend/templates/*
     */server/api/routers/*
     */server/__main__.py
     */server/am_api.py

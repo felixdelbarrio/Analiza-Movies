@@ -39,9 +39,17 @@ def test_reports_endpoints_with_files(monkeypatch, tmp_path):
     _write_csv(report_filtered, [{"title": "Movie B"}])
     _write_csv(metadata_fix, [{"title": "Fix"}])
 
-    monkeypatch.setattr(reports_router, "REPORT_ALL_PATH", report_all)
-    monkeypatch.setattr(reports_router, "REPORT_FILTERED_PATH", report_filtered)
-    monkeypatch.setattr(reports_router, "METADATA_FIX_PATH", metadata_fix)
+    monkeypatch.setattr(
+        reports_router, "get_report_all_path", lambda profile_id=None: report_all
+    )
+    monkeypatch.setattr(
+        reports_router,
+        "get_report_filtered_path",
+        lambda profile_id=None: report_filtered,
+    )
+    monkeypatch.setattr(
+        reports_router, "get_metadata_fix_path", lambda profile_id=None: metadata_fix
+    )
 
     app = create_app()
     cache = FileCache(_settings())
@@ -66,12 +74,18 @@ def test_reports_filtered_204_when_missing(monkeypatch, tmp_path):
     report_all = tmp_path / "report_all.csv"
     _write_csv(report_all, [{"title": "Movie A"}])
 
-    monkeypatch.setattr(reports_router, "REPORT_ALL_PATH", report_all)
     monkeypatch.setattr(
-        reports_router, "REPORT_FILTERED_PATH", tmp_path / "missing.csv"
+        reports_router, "get_report_all_path", lambda profile_id=None: report_all
     )
     monkeypatch.setattr(
-        reports_router, "METADATA_FIX_PATH", tmp_path / "missing_meta.csv"
+        reports_router,
+        "get_report_filtered_path",
+        lambda profile_id=None: tmp_path / "missing.csv",
+    )
+    monkeypatch.setattr(
+        reports_router,
+        "get_metadata_fix_path",
+        lambda profile_id=None: tmp_path / "missing_meta.csv",
     )
 
     app = create_app()

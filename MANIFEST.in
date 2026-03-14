@@ -8,30 +8,39 @@
 # ---------------------------------------------------------------------------
 include README.md
 include LICENSE
-include ARCHITECTURE.md
+include docs/ARCHITECTURE.md
 include requirements.txt
 include setup.py
 
 # ---------------------------------------------------------------------------
 # Backend (paquete principal)
 # ---------------------------------------------------------------------------
-recursive-include backend *.py
-recursive-include backend py.typed
+recursive-include src/backend *.py
+recursive-include src/backend py.typed
+recursive-include src/desktop *.py
+recursive-include src/desktop py.typed
+recursive-include src/shared *.py
+recursive-include src/shared py.typed
 
 # ---------------------------------------------------------------------------
-# Frontend (Streamlit)
+# Frontend (React / Vite)
 # ---------------------------------------------------------------------------
-recursive-include frontend *.py
-recursive-include frontend py.typed
-recursive-include frontend/templates *.html
-recursive-include frontend/static *.css *.js *.png *.jpg *.svg
+include web/package.json
+include web/package-lock.json
+include web/index.html
+include web/tsconfig.json
+include web/tsconfig.app.json
+include web/tsconfig.node.json
+include web/vite.config.ts
+recursive-include web/src *.ts *.tsx *.css *.d.ts
+recursive-include web/dist *
 
 # ---------------------------------------------------------------------------
 # Server (FastAPI)
 # ---------------------------------------------------------------------------
-recursive-include server *.py
-recursive-include server py.typed
-recursive-include server/api py.typed
+recursive-include src/server *.py
+recursive-include src/server py.typed
+recursive-include src/server/api py.typed
 
 
 # ---------------------------------------------------------------------------

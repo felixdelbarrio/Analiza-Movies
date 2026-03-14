@@ -23,8 +23,18 @@ jobs:
             requirements-dev.txt
             setup.py
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
       - name: Install dev deps
         run: make dev
+
+      - name: Build frontend bundle
+        run: make frontend-build
 
       - name: Lint
         run: make lint
