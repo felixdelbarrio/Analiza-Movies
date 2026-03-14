@@ -3,6 +3,8 @@ SHELL := /bin/bash
 VENV := .venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
+BLACK_VERSION := 25.12.0
+NPM_CI := npm --prefix web ci --no-audit --fund=false
 
 PY_DEPS_STAMP := $(VENV)/.deps-ready
 NODE_DEPS_STAMP := web/node_modules/.deps-ready
@@ -36,14 +38,14 @@ help:
 
 $(PY):
 	@test -d "$(VENV)" || python3 -m venv "$(VENV)"
-	@$(PY) -m pip install -q --upgrade pip setuptools wheel
+	@PIP_DISABLE_PIP_VERSION_CHECK=1 $(PY) -m pip install -q --upgrade pip setuptools wheel
 
 $(PY_DEPS_STAMP): $(PY) requirements.txt requirements-dev.txt setup.py
-	@$(PIP) install -q -r requirements-dev.txt
+	@PIP_DISABLE_PIP_VERSION_CHECK=1 $(PIP) install -q -r requirements-dev.txt
 	@touch "$(PY_DEPS_STAMP)"
 
 $(NODE_DEPS_STAMP): web/package-lock.json web/package.json
-	@npm --prefix web ci
+	@$(NPM_CI)
 	@touch "$(NODE_DEPS_STAMP)"
 
 $(WEB_BUILD_TARGET): $(WEB_SOURCES) $(NODE_DEPS_STAMP)
@@ -66,10 +68,10 @@ build: $(PY_DEPS_STAMP) $(WEB_BUILD_TARGET)
 
 ci: $(PY_DEPS_STAMP) $(WEB_BUILD_TARGET)
 	@$(PY) -m ruff check .
-	@$(PY) -m black --check .
+	@$(PY) -m black --required-version $(BLACK_VERSION) --check .
 	@$(PY) -m mypy src/backend src/desktop src/server src/shared
 	@$(PY) -m pyright -p pyrightconfig.json
-	@$(PY) -m pytest --cov=. --cov-branch
+	@$(PY) -m pytest --cov=src --cov-branch
 
 test: $(PY_DEPS_STAMP)
 	@$(PY) -m pytest
@@ -88,10 +90,14 @@ reset: clean clean-venv
 clean:
 	@rm -rf build dist dist-desktop
 	@rm -rf web/dist web/node_modules
+	@rm -f web/*.tsbuildinfo
 	@rm -rf *.egg-info src/*.egg-info
+	@rm -rf src/backend/logs
 	@find . -type d -name "__pycache__" -prune -exec rm -rf {} +
 	@find . -type f -name ".DS_Store" -delete
+	@find . -type f \( -name ".coverage" -o -name ".coverage.*" \) -delete
 	@find . -type d \( -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".ruff_cache" \) -prune -exec rm -rf {} +
+	@rm -rf htmlcov
 
 clean-venv:
 	@rm -rf "$(VENV)"

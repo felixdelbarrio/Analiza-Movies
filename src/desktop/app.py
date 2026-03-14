@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from urllib.request import urlopen
 
 import uvicorn
+from shared.runtime_profiles import bootstrap_runtime_config
 
 APP_TITLE = "Analiza Movies"
 DEFAULT_HOST = "127.0.0.1"
@@ -47,6 +48,7 @@ class _EmbeddedServer:
     thread: threading.Thread | None = None
 
     def start(self) -> str:
+        bootstrap_runtime_config()
         from server.api.app import create_app
 
         config = uvicorn.Config(

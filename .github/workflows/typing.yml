@@ -5,6 +5,13 @@ on:
   push:
     branches: [main, master, develop]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: typing-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   typing-and-packaging:
     name: typing-and-packaging (${{ matrix.python-version }})
@@ -16,6 +23,7 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
 
     env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PACKAGE_BUILD_DIR: build/python-package
       PACKAGE_DIST_DIR: build/python-package/dist
 

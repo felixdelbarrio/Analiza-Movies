@@ -16,10 +16,7 @@ def get_omdb_record(
     norm_title: str | None,
     norm_year: str | None,
 ) -> tuple[str | None, dict[str, Any] | None]:
-    try:
-        payload = load_omdb_payload(cache, profile_id=profile_id)
-    except TypeError:
-        payload = load_omdb_payload(cache)
+    payload = load_omdb_payload(cache, profile_id=profile_id)
     records = payload.get("records") or {}
     idx_imdb = payload.get("index_imdb") or {}
     idx_ty = payload.get("index_ty") or {}
@@ -50,10 +47,7 @@ def get_wiki_record(
     norm_title: str | None,
     norm_year: str | None,
 ) -> tuple[str | None, dict[str, Any] | None]:
-    try:
-        payload = load_wiki_payload(cache, profile_id=profile_id)
-    except TypeError:
-        payload = load_wiki_payload(cache)
+    payload = load_wiki_payload(cache, profile_id=profile_id)
     records = payload.get("records") or {}
     idx_imdb = payload.get("index_imdb") or payload.get("index") or {}
     idx_ty = payload.get("index_ty") or {}

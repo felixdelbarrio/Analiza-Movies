@@ -56,37 +56,37 @@ _PLACEHOLDER_LOCALES = {
         "lang": "en",
         "title": "React frontend not built",
         "body": "The API is running, but the SPA is not available yet.",
-        "hint": "Build the bundle with {build} or use development mode with {dev}.",
+        "hint": "Build the web bundle with {build} or launch the full desktop app with {run}.",
     },
     "es": {
         "lang": "es",
         "title": "Frontend React no compilado",
         "body": "La API está activa, pero la SPA no está disponible todavía.",
-        "hint": "Genera el bundle con {build} o usa desarrollo con {dev}.",
+        "hint": "Genera el bundle web con {build} o arranca la aplicación completa con {run}.",
     },
     "fr": {
         "lang": "fr",
         "title": "Frontend React non compilé",
         "body": "L'API est active, mais la SPA n'est pas encore disponible.",
-        "hint": "Générez le bundle avec {build} ou utilisez le mode développement avec {dev}.",
+        "hint": "Générez le bundle web avec {build} ou lancez l'application complète avec {run}.",
     },
     "de": {
         "lang": "de",
         "title": "React-Frontend nicht gebaut",
         "body": "Die API ist aktiv, aber die SPA ist noch nicht verfügbar.",
-        "hint": "Erstelle das Bundle mit {build} oder nutze den Entwicklungsmodus mit {dev}.",
+        "hint": "Erstelle das Web-Bundle mit {build} oder starte die komplette Desktop-App mit {run}.",
     },
     "it": {
         "lang": "it",
         "title": "Frontend React non compilato",
         "body": "L'API è attiva, ma la SPA non è ancora disponibile.",
-        "hint": "Genera il bundle con {build} oppure usa la modalità sviluppo con {dev}.",
+        "hint": "Genera il bundle web con {build} oppure avvia l'app completa con {run}.",
     },
     "pt": {
         "lang": "pt",
         "title": "Frontend React não compilado",
         "body": "A API está ativa, mas a SPA ainda não está disponível.",
-        "hint": "Gera o bundle com {build} ou usa o modo de desenvolvimento com {dev}.",
+        "hint": "Gera o bundle web com {build} ou inicia a aplicação completa com {run}.",
     },
 }
 
@@ -107,7 +107,7 @@ def _frontend_placeholder(request: Request | None = None) -> HTMLResponse:
     copy = _preferred_locale(request)
     hint = copy["hint"].format(
         build="<code>npm --prefix web run build</code>",
-        dev="<code>make run</code>",
+        run="<code>make run</code>",
     )
     return HTMLResponse(
         f"""
