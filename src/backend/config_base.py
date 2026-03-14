@@ -251,10 +251,6 @@ SILENT_MODE: bool = _get_env_bool("SILENT_MODE", False)
 HTTP_DEBUG: bool = _get_env_bool("HTTP_DEBUG", False)
 LOG_LEVEL: str | None = _get_env_str("LOG_LEVEL", None)
 
-# Ejecutar automáticamente el dashboard tras Plex/DLNA (por defecto: activado)
-ANALIZA_AUTO_DASHBOARD: bool = _get_env_bool("ANALIZA_AUTO_DASHBOARD", True)
-
-
 # ============================================================
 # Reports (paths) -> en la raíz del proyecto
 # ============================================================

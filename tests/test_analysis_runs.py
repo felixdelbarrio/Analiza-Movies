@@ -17,6 +17,8 @@ def test_plex_cmd_uses_runtime_token_registry() -> None:
     )
     remember_profile_token(profile.id, "session-token")
 
-    _cmd, env = _plex_cmd_and_env(RuntimeConfig(), profile)
+    cmd, env = _plex_cmd_and_env(RuntimeConfig(), profile)
 
     assert env["PLEX_TOKEN"] == "session-token"
+    assert "ANALIZA_AUTO_DASHBOARD" not in env
+    assert "--no-dashboard" not in cmd

@@ -4,27 +4,16 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from dotenv import dotenv_values
-from shared.runtime_profiles import PROJECT_DIR
+from dotenv import load_dotenv
 
-_ENV_SERVER_PATH = PROJECT_DIR / ".env.server"
-
-_ENV: dict[str, str] = {
-    k: v
-    for k, v in (
-        dotenv_values(_ENV_SERVER_PATH).items() if _ENV_SERVER_PATH.exists() else []
-    )
-    if v is not None
-}
+load_dotenv(override=False)
 
 _TRUE_SET = {"1", "true", "t", "yes", "y", "on"}
 _FALSE_SET = {"0", "false", "f", "no", "n", "off"}
 
 
 def _env_str(name: str, default: str) -> str:
-    raw = _ENV.get(name)
-    if raw is None:
-        raw = os.getenv(name)
+    raw = os.getenv(name)
     if raw is None:
         return default
     val = raw.strip()

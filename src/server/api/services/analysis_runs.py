@@ -72,9 +72,9 @@ _LAST_RUN: _RunState | None = None
 def _base_env(config: RuntimeConfig, profile: SourceProfile) -> dict[str, str]:
     paths = ensure_profile_dirs(profile.id)
     env = os.environ.copy()
+    env.pop("ANALIZA_AUTO_DASHBOARD", None)
     env["DATA_DIR"] = str(paths.data_dir)
     env["REPORTS_DIR"] = str(paths.reports_dir)
-    env["ANALIZA_AUTO_DASHBOARD"] = "0"
     env["PYTHONUNBUFFERED"] = "1"
     omdb_api_keys = resolve_omdb_api_keys()
     if omdb_api_keys:
@@ -108,7 +108,6 @@ def _plex_cmd_and_env(
         "-m",
         "backend.main",
         "--plex",
-        "--no-dashboard",
     ], env
 
 
@@ -127,7 +126,6 @@ def _dlna_cmd_and_env(
         "-m",
         "backend.main",
         "--dlna",
-        "--no-dashboard",
         "--dlna-auto-select-all",
         "--dlna-host",
         host,

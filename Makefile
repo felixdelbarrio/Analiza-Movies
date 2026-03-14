@@ -1,6 +1,7 @@
 # Makefile for Analiza-Movies
 # Targets:
 #   make backend
+#   make run
 #   make desktop
 #   make frontend
 #   make frontend-build
@@ -15,25 +16,26 @@ PY    := $(VENV)/bin/python
 PIP   := $(VENV)/bin/pip
 
 # ASGI module path
-# You can override it like: make server-uvicorn API_MODULE=server.am_api:app
-API_MODULE ?= server.am_api:app
+# You can override it like: make server-uvicorn API_MODULE=server.api.app:app
+API_MODULE ?= server.api.app:app
 API_HOST   ?= 0.0.0.0
 API_PORT   ?= 8000
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv install dev reinstall backend desktop build-local frontend frontend-install frontend-build frontend-preview \
+.PHONY: help venv install dev reinstall run backend desktop build-local frontend frontend-install frontend-build frontend-preview \
         server server-uvicorn doctor typecheck mypy pyright lint format test test-cov clean clean-venv reset
 
 help:
 	@echo ""
 	@echo "Analiza-Movies"
 	@echo "--------------"
+	@echo "make run             Ejecuta la app completa en contenedor nativo"
 	@echo "make backend         Ejecuta el CLI backend (menú Plex/DLNA)"
 	@echo "make desktop         Ejecuta la app de escritorio nativa"
-	@echo "make frontend        Ejecuta el frontend React con Vite"
+	@echo "make frontend        Ejecuta el frontend React con Vite (solo desarrollo web)"
 	@echo "make frontend-build  Genera el bundle de producción en web/dist"
-	@echo "make frontend-preview Sirve localmente el build de React"
+	@echo "make frontend-preview Sirve localmente el build de React (solo QA web)"
 	@echo "make build-local     Genera la distribución nativa para tu SO actual"
 	@echo "make server          Ejecuta la API FastAPI (sirve web/dist si existe)"
 	@echo "make server-uvicorn  Ejecuta la API FastAPI (via uvicorn: $(API_MODULE))"
@@ -76,6 +78,8 @@ reinstall: venv
 # -------------------------------------------------
 # Targets principales
 # -------------------------------------------------
+
+run: desktop
 
 backend: install
 	@$(VENV)/bin/start

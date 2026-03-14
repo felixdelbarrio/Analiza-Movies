@@ -43,20 +43,18 @@ If you find this project useful, you can support its development here:
 
 1) Create environment files:
    - `cp .env.example .env`
-   - `cp .env.front.example .env.front`
 2) Use Python `3.10+` and install dependencies: `make dev`
 3) Install frontend dependencies: `make frontend-install`
 4) Run:
    - Backend CLI: `make backend`
    - API server: `make server`
-   - React frontend (Vite dev): `make frontend`
-   - Native desktop shell: `make desktop`
+   - Native desktop app: `make run`
+   - React frontend (Vite dev, browser only): `make frontend`
 
 ### Production-like local run
 
-1) Build the SPA: `make frontend-build`
-2) Serve API + React bundle together: `make server`
-3) Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
+1) Build the SPA and launch the native shell: `make run`
+2) Close the native window to stop both UI and embedded backend
 
 ### Native desktop build
 
@@ -85,10 +83,11 @@ It keeps the same analytical structure of the original dashboard, but moves to a
 
 ### Development Model
 
-- `make frontend` runs the Vite development server on port `5173`
+- `make run` launches the native desktop container with FastAPI embedded
+- `make frontend` runs the Vite development server on port `5173` for browser-only development
 - `make frontend-build` generates `web/dist`
 - `make server` serves the FastAPI API and, if available, also serves `web/dist`
-- `make desktop` launches the native desktop shell
+- `make desktop` is equivalent to `make run`
 - `make build-local` creates a native bundle for macOS, Linux or Windows
 
 ### Repository layout
@@ -135,14 +134,13 @@ Si este proyecto te resulta útil, puedes apoyarlo aquí:
 
 1) Crea los archivos de entorno:
    - `cp .env.example .env`
-   - `cp .env.front.example .env.front`
 2) Usa Python `3.10+` e instala dependencias: `make dev`
 3) Instala dependencias del frontend: `make frontend-install`
 4) Ejecuta:
    - Backend CLI: `make backend`
    - API server: `make server`
-   - Frontend React en desarrollo: `make frontend`
-   - Shell nativo de escritorio: `make desktop`
+   - Aplicación nativa completa: `make run`
+   - Frontend React en desarrollo web: `make frontend`
 
 ---
 
@@ -163,10 +161,11 @@ Mantiene la navegación, estructura analítica y riqueza visual del dashboard an
 
 ### Ejecución
 
-- `make frontend` arranca Vite para desarrollo
+- `make run` arranca la aplicación en contenedor nativo con FastAPI embebido
+- `make frontend` arranca Vite para desarrollo web
 - `make frontend-build` genera `web/dist`
 - `make server` sirve la API y, si existe el build, también sirve la SPA compilada
-- `make desktop` arranca la app en una ventana nativa
+- `make desktop` es equivalente a `make run`
 - `make build-local` genera la distribución nativa para tu sistema actual
 
 ### Estructura del repositorio

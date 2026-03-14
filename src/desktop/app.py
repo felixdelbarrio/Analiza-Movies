@@ -114,7 +114,6 @@ class DesktopApi:
 
 def main() -> None:
     os.environ.setdefault("API_RELOAD", "0")
-    os.environ.setdefault("ANALIZA_AUTO_DASHBOARD", "0")
 
     host = DEFAULT_HOST
     port = _find_free_port(host)
