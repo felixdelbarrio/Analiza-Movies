@@ -4,7 +4,6 @@ backend/reporting.py
 Responsabilidades:
 - Escritura de CSVs de forma ATÓMICA.
 - Soporte STREAMING (fila a fila) para grandes catálogos.
-- Mantener compatibilidad con APIs legacy (write_all_csv, etc.).
 - Evitar explosiones de memoria en SILENT_MODE.
 
 Filosofía:
@@ -27,7 +26,7 @@ from __future__ import annotations
 import csv
 import os
 import tempfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final, Optional, TextIO
 
@@ -345,26 +344,3 @@ def open_suggestions_csv_writer(path: str) -> CSVAtomicWriter:
         commit_if_empty=True,
         warn_on_extras=True,
     )
-
-
-# ============================================================================
-# API LEGACY (compatibilidad)
-# ============================================================================
-
-
-def write_all_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
-    with open_all_csv_writer(path) as w:
-        for r in rows:
-            w.write_row(r)
-
-
-def write_filtered_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
-    with open_filtered_csv_writer_only_if_rows(path) as w:
-        for r in rows:
-            w.write_row(r)
-
-
-def write_suggestions_csv(path: str, rows: Iterable[Mapping[str, object]]) -> None:
-    with open_suggestions_csv_writer(path) as w:
-        for r in rows:
-            w.write_row(r)

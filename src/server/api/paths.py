@@ -42,7 +42,6 @@ DEFAULT_OMDB_CACHE_PATH = resolve_path(
     "OMDB_CACHE_PATH",
     [
         BASE_DIR / "data" / "omdb_cache.json",
-        BASE_DIR / "omdb_cache.json",
     ],
 )
 
@@ -50,7 +49,6 @@ DEFAULT_WIKI_CACHE_PATH = resolve_path(
     "WIKI_CACHE_PATH",
     [
         BASE_DIR / "data" / "wiki_cache.json",
-        BASE_DIR / "wiki_cache.json",
     ],
 )
 
@@ -58,7 +56,6 @@ DEFAULT_REPORT_ALL_PATH = resolve_path(
     "REPORT_ALL_PATH",
     [
         BASE_DIR / "reports" / "report_all.csv",
-        BASE_DIR / "report_all.csv",
     ],
 )
 
@@ -66,7 +63,6 @@ DEFAULT_REPORT_FILTERED_PATH = resolve_path(
     "REPORT_FILTERED_PATH",
     [
         BASE_DIR / "reports" / "report_filtered.csv",
-        BASE_DIR / "report_filtered.csv",
     ],
 )
 
@@ -74,7 +70,6 @@ DEFAULT_METADATA_FIX_PATH = resolve_path(
     "METADATA_FIX_PATH",
     [
         BASE_DIR / "reports" / "metadata_fix.csv",
-        BASE_DIR / "metadata_fix.csv",
     ],
 )
 
@@ -120,11 +115,3 @@ def get_report_filtered_path(profile_id: str | None = None) -> Path:
 
 def get_metadata_fix_path(profile_id: str | None = None) -> Path:
     return get_artifact_paths(profile_id).metadata_fix_path
-
-
-# Compat legacy constants.
-OMDB_CACHE_PATH = DEFAULT_OMDB_CACHE_PATH
-WIKI_CACHE_PATH = DEFAULT_WIKI_CACHE_PATH
-REPORT_ALL_PATH = DEFAULT_REPORT_ALL_PATH
-REPORT_FILTERED_PATH = DEFAULT_REPORT_FILTERED_PATH
-METADATA_FIX_PATH = DEFAULT_METADATA_FIX_PATH

@@ -24,11 +24,13 @@ web/vite.config.d.ts
 frontend/
 
 # Build / packaging
-build/
-dist/
-dist-desktop/
+/build/
+/dist/
+/dist-desktop/
+/pip-wheel-metadata/
+/analiza_movies.egg-info/
+/src/analiza_movies.egg-info/
 *.spec
-pip-wheel-metadata/
 *.egg-info/
 *.egg
 *.whl

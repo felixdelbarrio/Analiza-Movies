@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -362,6 +363,82 @@ def ensure_profile_dirs(profile_id: str | None) -> ArtifactPaths:
     paths.data_dir.mkdir(parents=True, exist_ok=True)
     paths.reports_dir.mkdir(parents=True, exist_ok=True)
     return paths
+
+
+def _artifact_file_pairs(target: ArtifactPaths) -> list[tuple[Path, Path]]:
+    global_paths = artifact_paths_for_profile(None)
+    return [
+        (global_paths.omdb_cache_path, target.omdb_cache_path),
+        (global_paths.wiki_cache_path, target.wiki_cache_path),
+        (global_paths.report_all_path, target.report_all_path),
+        (global_paths.report_filtered_path, target.report_filtered_path),
+        (global_paths.metadata_fix_path, target.metadata_fix_path),
+    ]
+
+
+def _has_legacy_global_artifacts() -> bool:
+    global_paths = artifact_paths_for_profile(None)
+    legacy_files = (
+        global_paths.omdb_cache_path,
+        global_paths.wiki_cache_path,
+        global_paths.report_all_path,
+        global_paths.report_filtered_path,
+        global_paths.metadata_fix_path,
+    )
+    return any(path.exists() for path in legacy_files)
+
+
+def _has_namespaced_artifacts() -> bool:
+    scoped_roots = (
+        (PROFILE_DATA_ROOT, ("omdb_cache.json", "wiki_cache.json")),
+        (
+            PROFILE_REPORTS_ROOT,
+            ("report_all.csv", "report_filtered.csv", "metadata_fix.csv"),
+        ),
+    )
+    for root, names in scoped_roots:
+        if not root.exists():
+            continue
+        for name in names:
+            if any(root.rglob(name)):
+                return True
+    return False
+
+
+def migrate_legacy_artifacts_to_profile(profile_id: str | None) -> ArtifactPaths:
+    target = artifact_paths_for_profile(profile_id)
+    if target.profile_id is None or _has_namespaced_artifacts():
+        return target
+
+    pairs = _artifact_file_pairs(target)
+    if not any(source.exists() for source, _ in pairs):
+        return target
+
+    target.data_dir.mkdir(parents=True, exist_ok=True)
+    target.reports_dir.mkdir(parents=True, exist_ok=True)
+
+    for source, destination in pairs:
+        if not source.exists() or destination.exists():
+            continue
+        shutil.move(str(source), str(destination))
+
+    return target
+
+
+def bootstrap_runtime_config(path: Path | None = None) -> RuntimeConfig:
+    resolved_path = PROFILES_CONFIG_PATH if path is None else path
+    config = load_runtime_config(resolved_path)
+    updated = config
+
+    if updated.active_profile_id is None and len(updated.profiles) == 1:
+        updated = updated.with_active_profile(updated.profiles[0].id)
+
+    if updated.active_profile_id and _has_legacy_global_artifacts():
+        migrate_legacy_artifacts_to_profile(updated.active_profile_id)
+
+    if updated != config:
+        return save_runtime_config(updated, resolved_path)
+    return updated
 
 
 def build_profile_from_discovery(

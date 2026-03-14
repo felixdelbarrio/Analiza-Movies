@@ -6,9 +6,20 @@ on:
     branches: [main, master, develop]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     runs-on: ubuntu-latest
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      NPM_CONFIG_AUDIT: "false"
+      NPM_CONFIG_FUND: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,14 +41,5 @@ jobs:
           cache: "npm"
           cache-dependency-path: web/package-lock.json
 
-      - name: Install dev deps
-        run: make dev
-
-      - name: Build frontend bundle
-        run: make frontend-build
-
-      - name: Lint
-        run: make lint
-
-      - name: Run tests with coverage
-        run: make test-cov
+      - name: Run local CI gate
+        run: make ci

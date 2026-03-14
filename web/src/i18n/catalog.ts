@@ -321,9 +321,6 @@ const en = {
   "run.message.dlna_items_processed": "{container}: {current}/{total} items processed.",
   "run.message.dlna_streaming_ready": "Streaming DLNA analysis ready with {count} candidates.",
   "run.message.dlna_ready": "DLNA completed. Reports are ready to explore.",
-  "placeholder.frontend_missing.title": "React frontend not built",
-  "placeholder.frontend_missing.body": "The API is running, but the SPA is not available yet.",
-  "placeholder.frontend_missing.hint": "Build the bundle with {build} or use development mode with {dev}."
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -586,9 +583,6 @@ const es: TranslationCatalog = {
   "run.message.dlna_items_processed": "{container}: {current}/{total} items procesados.",
   "run.message.dlna_streaming_ready": "Análisis DLNA en streaming listo con {count} candidatos.",
   "run.message.dlna_ready": "DLNA completado. Reports listos para consulta.",
-  "placeholder.frontend_missing.title": "Frontend React no compilado",
-  "placeholder.frontend_missing.body": "La API está activa, pero la SPA no está disponible todavía.",
-  "placeholder.frontend_missing.hint": "Genera el bundle con {build} o usa desarrollo con {dev}."
 };
 
 const fr: TranslationCatalog = {
@@ -843,9 +837,6 @@ const fr: TranslationCatalog = {
   "run.message.dlna_items_processed": "{container} : {current}/{total} elements traites.",
   "run.message.dlna_streaming_ready": "Analyse DLNA en streaming prete avec {count} candidats.",
   "run.message.dlna_ready": "DLNA termine. Les rapports sont prets.",
-  "placeholder.frontend_missing.title": "Frontend React non compile",
-  "placeholder.frontend_missing.body": "L'API est active, mais la SPA n'est pas encore disponible.",
-  "placeholder.frontend_missing.hint": "Generez le bundle avec {build} ou utilisez le mode developpement avec {dev}."
 };
 
 const de: TranslationCatalog = {
@@ -1099,9 +1090,6 @@ const de: TranslationCatalog = {
   "run.message.dlna_items_processed": "{container}: {current}/{total} Elemente verarbeitet.",
   "run.message.dlna_streaming_ready": "Streaming-DLNA-Analyse mit {count} Kandidaten bereit.",
   "run.message.dlna_ready": "DLNA abgeschlossen. Reports sind bereit.",
-  "placeholder.frontend_missing.title": "React-Frontend nicht gebaut",
-  "placeholder.frontend_missing.body": "Die API ist aktiv, aber die SPA ist noch nicht verfuegbar.",
-  "placeholder.frontend_missing.hint": "Erstellen Sie das Bundle mit {build} oder nutzen Sie den Entwicklungsmodus mit {dev}."
 };
 
 const it: TranslationCatalog = {
@@ -1355,9 +1343,6 @@ const it: TranslationCatalog = {
   "run.message.dlna_items_processed": "{container}: {current}/{total} elementi elaborati.",
   "run.message.dlna_streaming_ready": "Analisi DLNA in streaming pronta con {count} candidati.",
   "run.message.dlna_ready": "DLNA completato. Report pronti per la consultazione.",
-  "placeholder.frontend_missing.title": "Frontend React non compilato",
-  "placeholder.frontend_missing.body": "L'API e attiva, ma la SPA non e ancora disponibile.",
-  "placeholder.frontend_missing.hint": "Genera il bundle con {build} oppure usa la modalita sviluppo con {dev}."
 };
 
 const pt: TranslationCatalog = {
@@ -1611,9 +1596,6 @@ const pt: TranslationCatalog = {
   "run.message.dlna_items_processed": "{container}: {current}/{total} itens processados.",
   "run.message.dlna_streaming_ready": "Analise DLNA em streaming pronta com {count} candidatos.",
   "run.message.dlna_ready": "DLNA concluido. Relatorios prontos para consulta.",
-  "placeholder.frontend_missing.title": "Frontend React nao compilado",
-  "placeholder.frontend_missing.body": "A API esta ativa, mas a SPA ainda nao esta disponivel.",
-  "placeholder.frontend_missing.hint": "Gera o bundle com {build} ou usa o modo de desenvolvimento com {dev}."
 };
 
 export const CATALOGS: Record<SupportedLocale, TranslationCatalog> = {

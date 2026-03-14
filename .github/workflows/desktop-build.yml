@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-desktop:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
@@ -19,6 +23,9 @@ jobs:
         python-version: ["3.12"]
 
     env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      NPM_CONFIG_AUDIT: "false"
+      NPM_CONFIG_FUND: "false"
       APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
       APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
@@ -64,7 +71,7 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
 
       - name: Install frontend dependencies
-        run: npm --prefix web ci
+        run: npm --prefix web ci --no-audit --fund=false
 
       - name: Build React bundle
         run: npm --prefix web run build

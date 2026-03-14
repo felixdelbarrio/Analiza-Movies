@@ -43,23 +43,18 @@ If you find this project useful, you can support its development here:
 
 1) Create environment files:
    - `cp .env.example .env`
-2) Use Python `3.10+` and install dependencies: `make dev`
-3) Install frontend dependencies: `make frontend-install`
-4) Run:
-   - Backend CLI: `make backend`
-   - API server: `make server`
-   - Native desktop app: `make run`
-   - React frontend (Vite dev, browser only): `make frontend`
+2) Use Python `3.10+` and install dependencies: `make install`
+3) Run the application: `make run`
 
 ### Production-like local run
 
-1) Build the SPA and launch the native shell: `make run`
+1) Launch the native shell: `make run`
 2) Close the native window to stop both UI and embedded backend
 
 ### Native desktop build
 
-1) Install dev/build dependencies: `make dev`
-2) Generate the native bundle for your current OS: `make build-local`
+1) Install dependencies: `make install`
+2) Generate the native bundle for your current OS: `make build`
 3) Find the artifact in `dist-desktop/`
 
 The desktop app embeds FastAPI + React in a native window and keeps external flows such as Plex login, IMDb and OMDb inside the application container instead of opening browser tabs.
@@ -83,12 +78,11 @@ It keeps the same analytical structure of the original dashboard, but moves to a
 
 ### Development Model
 
+- `make install` resets and provisions the full local environment
 - `make run` launches the native desktop container with FastAPI embedded
-- `make frontend` runs the Vite development server on port `5173` for browser-only development
-- `make frontend-build` generates `web/dist`
-- `make server` serves the FastAPI API and, if available, also serves `web/dist`
-- `make desktop` is equivalent to `make run`
-- `make build-local` creates a native bundle for macOS, Linux or Windows
+- `make build` creates a native bundle for macOS, Linux or Windows
+- `make ci` runs the local CI gate
+- `make test` runs pytest only
 
 ### Repository layout
 
@@ -134,13 +128,8 @@ Si este proyecto te resulta útil, puedes apoyarlo aquí:
 
 1) Crea los archivos de entorno:
    - `cp .env.example .env`
-2) Usa Python `3.10+` e instala dependencias: `make dev`
-3) Instala dependencias del frontend: `make frontend-install`
-4) Ejecuta:
-   - Backend CLI: `make backend`
-   - API server: `make server`
-   - Aplicación nativa completa: `make run`
-   - Frontend React en desarrollo web: `make frontend`
+2) Usa Python `3.10+` e instala dependencias: `make install`
+3) Ejecuta la aplicación: `make run`
 
 ---
 
@@ -161,12 +150,11 @@ Mantiene la navegación, estructura analítica y riqueza visual del dashboard an
 
 ### Ejecución
 
+- `make install` reinicia y prepara todo el entorno local
 - `make run` arranca la aplicación en contenedor nativo con FastAPI embebido
-- `make frontend` arranca Vite para desarrollo web
-- `make frontend-build` genera `web/dist`
-- `make server` sirve la API y, si existe el build, también sirve la SPA compilada
-- `make desktop` es equivalente a `make run`
-- `make build-local` genera la distribución nativa para tu sistema actual
+- `make build` genera la distribución nativa para tu sistema actual
+- `make ci` ejecuta la pasarela local de calidad
+- `make test` ejecuta solo pytest
 
 ### Estructura del repositorio
 

@@ -6,7 +6,7 @@ class DummyCache:
 
 
 def test_consolidate_merges_omdb_and_wiki(monkeypatch):
-    def _omdb_payload(_cache):
+    def _omdb_payload(_cache, profile_id=None):
         return {
             "records": {
                 "1": {
@@ -22,7 +22,7 @@ def test_consolidate_merges_omdb_and_wiki(monkeypatch):
             "index_imdb": {"tt123": "1"},
         }
 
-    def _wiki_payload(_cache):
+    def _wiki_payload(_cache, profile_id=None):
         return {
             "records": {
                 "2": {
