@@ -1,9 +1,12 @@
+import type { TranslationKey, TranslationParams } from "../i18n/catalog";
+
 export interface ReportRow {
   title?: string | null;
   year?: number | string | null;
   library?: string | null;
   decision?: string | null;
   reason?: string | null;
+  reason_code?: string | null;
   file?: string | null;
   file_size?: number | string | null;
   file_size_gb?: number | null;
@@ -50,6 +53,40 @@ export interface Profile {
   updated_at?: string;
 }
 
+export interface RunEvent {
+  at: string;
+  level: string;
+  stage?: string | null;
+  scope?: string | null;
+  message?: string | null;
+  message_key?: TranslationKey | null;
+  message_params?: TranslationParams | null;
+}
+
+export interface RunProgress {
+  run_id: string;
+  profile_id: string;
+  profile_name: string;
+  source_type: string;
+  status: string;
+  stage?: string | null;
+  message?: string | null;
+  message_key?: TranslationKey | null;
+  message_params?: TranslationParams | null;
+  scope?: string | null;
+  current?: number | null;
+  total?: number | null;
+  unit?: string | null;
+  percent?: number | null;
+  errors?: number | null;
+  started_at: string;
+  updated_at?: string | null;
+  finished_at?: string | null;
+  exit_code?: number | null;
+  counters?: Record<string, number>;
+  recent?: RunEvent[];
+}
+
 export interface RunState {
   run_id: string;
   profile_id: string;
@@ -61,6 +98,16 @@ export interface RunState {
   exit_code?: number | null;
   log_path: string;
   pid?: number | null;
+  progress?: RunProgress | null;
+}
+
+export interface RunStatusResponse {
+  run: RunState | null;
+}
+
+export interface RunLogsResponse {
+  run: RunState | null;
+  lines: string[];
 }
 
 export interface ConfigState {
@@ -70,7 +117,6 @@ export interface ConfigState {
   profiles: Profile[];
   updated_at?: string;
   has_omdb_api_keys?: boolean;
-  run?: RunState | null;
 }
 
 export interface ServerDiscovery {

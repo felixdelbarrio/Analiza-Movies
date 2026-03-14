@@ -1,5 +1,7 @@
 import type { EChartsOption } from "echarts";
 
+import type { Translator } from "../i18n/catalog";
+import { translateDecision } from "../i18n/helpers";
 import { collectDirectors, collectGenres, collectTitleWords, parseMaybeNumber } from "./data";
 import type { DashboardViewKey, ReportRow } from "./types";
 
@@ -17,6 +19,11 @@ interface ChartTheme {
 
 type ScatterValue = [number, number, string, string];
 type WasteValue = [number, number, number, string];
+
+interface ChartIntl {
+  locale: string;
+  t: Translator;
+}
 
 function readCssVar(name: string, fallback: string) {
   if (typeof window === "undefined") {
@@ -47,6 +54,13 @@ function decisionColors(theme: ChartTheme): Record<string, string> {
     DELETE: theme.danger,
     UNKNOWN: theme.muted
   };
+}
+
+function formatValue(value: number, locale: string, digits = 1) {
+  return new Intl.NumberFormat(locale, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits
+  }).format(value);
 }
 
 function quantile(values: number[], ratio: number) {
@@ -94,12 +108,13 @@ function scatterOption(
   xKey: keyof ReportRow,
   yKey: keyof ReportRow,
   xName: string,
-  yName: string
+  yName: string,
+  intl: ChartIntl
 ): EChartsOption {
   const theme = chartTheme();
   const colors = decisionColors(theme);
   const groups = ["KEEP", "MAYBE", "DELETE", "UNKNOWN"].map((decision) => ({
-    name: decision,
+    name: translateDecision(decision, intl.t),
     type: "scatter" as const,
     symbolSize: 12,
     itemStyle: { color: colors[decision] },
@@ -109,7 +124,7 @@ function scatterOption(
         const x = parseMaybeNumber(row[xKey]);
         const y = parseMaybeNumber(row[yKey]);
         if (x === null || y === null) return null;
-        return [x, y, String(row.title || "Sin título"), String(row.library || "Sin biblioteca")];
+        return [x, y, String(row.title || intl.t("column.title")), String(row.library || intl.t("column.library"))];
       })
       .filter((value): value is ScatterValue => Array.isArray(value))
   }));
@@ -126,16 +141,16 @@ function scatterOption(
           ? (current.value as ScatterValue)
           : undefined;
         if (!Array.isArray(value)) {
-          return "Dato no disponible";
+          return intl.t("chart.no_data");
         }
-        return `${value[2]}<br/>${value[3]}<br/>${xName}: ${value[0]}<br/>${yName}: ${value[1]}`;
+        return `${value[2]}<br/>${value[3]}<br/>${xName}: ${formatValue(value[0], intl.locale, 1)}<br/>${yName}: ${formatValue(value[1], intl.locale, 1)}`;
       }
     },
     series: groups
   };
 }
 
-function decisionDistribution(rows: ReportRow[]): EChartsOption {
+function decisionDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const colors = decisionColors(theme);
   const counters = new Map<string, number>();
@@ -144,7 +159,7 @@ function decisionDistribution(rows: ReportRow[]): EChartsOption {
     counters.set(key, (counters.get(key) ?? 0) + 1);
   });
   const data = Array.from(counters.entries()).map(([name, value]) => ({
-    name,
+    name: translateDecision(name, intl.t),
     value,
     itemStyle: { color: colors[name] ?? colors.UNKNOWN }
   }));
@@ -164,7 +179,7 @@ function decisionDistribution(rows: ReportRow[]): EChartsOption {
   };
 }
 
-function boxplotByLibrary(rows: ReportRow[]): EChartsOption {
+function boxplotByLibrary(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const grouped = new Map<string, number[]>();
   rows.forEach((row) => {
@@ -202,7 +217,7 @@ function boxplotByLibrary(rows: ReportRow[]): EChartsOption {
       data: libraries.map((item) => item.library),
       axisLabel: { color: theme.muted, rotate: 24 }
     },
-    yAxis: { type: "value", name: "IMDb", nameTextStyle: { color: theme.muted } },
+    yAxis: { type: "value", name: intl.t("chart.metric.imdb"), nameTextStyle: { color: theme.muted } },
     series: [
       {
         type: "boxplot" as const,
@@ -213,16 +228,16 @@ function boxplotByLibrary(rows: ReportRow[]): EChartsOption {
   };
 }
 
-function wasteMap(rows: ReportRow[]): EChartsOption {
+function wasteMap(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const colors = decisionColors(theme);
   return {
     ...baseChart(),
     legend: { top: 0, textStyle: { color: theme.muted } },
-    xAxis: { type: "value", name: "IMDb" },
-    yAxis: { type: "value", name: "GB" },
+    xAxis: { type: "value", name: intl.t("chart.metric.imdb") },
+    yAxis: { type: "value", name: intl.t("chart.metric.gb") },
     series: ["DELETE", "MAYBE", "KEEP"].map((decision) => ({
-      name: decision,
+      name: translateDecision(decision, intl.t),
       type: "scatter" as const,
       itemStyle: { color: colors[decision] },
       symbolSize: (value: Array<number | string>) => Math.max(10, Number(value[2] || 0) * 1.4),
@@ -232,14 +247,14 @@ function wasteMap(rows: ReportRow[]): EChartsOption {
           const imdb = parseMaybeNumber(row.imdb_rating);
           const size = parseMaybeNumber(row.file_size_gb);
           if (imdb === null || size === null) return null;
-          return [imdb, size, size, String(row.title || "Sin título")];
+          return [imdb, size, size, String(row.title || intl.t("column.title"))];
         })
         .filter((value): value is WasteValue => Array.isArray(value))
     }))
   };
 }
 
-function valuePerGb(rows: ReportRow[]): EChartsOption {
+function valuePerGb(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const grouped = new Map<string, { size: number; score: number; total: number }>();
   rows.forEach((row) => {
@@ -263,7 +278,7 @@ function valuePerGb(rows: ReportRow[]): EChartsOption {
 
   return {
     ...baseChart(),
-    xAxis: { type: "value", name: "IMDb medio / GB" },
+    xAxis: { type: "value", name: intl.t("chart.metric.average_imdb_per_gb") },
     yAxis: {
       type: "category",
       data: data.map((item) => item.library),
@@ -281,14 +296,14 @@ function valuePerGb(rows: ReportRow[]): EChartsOption {
   };
 }
 
-function spaceByLibrary(rows: ReportRow[]): EChartsOption {
+function spaceByLibrary(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const colors = decisionColors(theme);
   const libraries = Array.from(
     new Set(rows.map((row) => String(row.library || "").trim()).filter(Boolean))
   );
   const series = ["KEEP", "MAYBE", "DELETE"].map((decision) => ({
-    name: decision,
+    name: translateDecision(decision, intl.t),
     type: "bar" as const,
     stack: "size",
     itemStyle: { color: colors[decision] },
@@ -310,37 +325,41 @@ function spaceByLibrary(rows: ReportRow[]): EChartsOption {
       data: libraries,
       axisLabel: { color: theme.muted, rotate: 24 }
     },
-    yAxis: { type: "value", name: "GB" },
+    yAxis: { type: "value", name: intl.t("chart.metric.gb") },
     series
   };
 }
 
-function decadeDistribution(rows: ReportRow[]): EChartsOption {
+function decadeDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const colors = decisionColors(theme);
   const decades = Array.from(
-    new Set(rows.map((row) => row.decade_label).filter((value): value is string => typeof value === "string"))
-  ).sort();
+    new Set(rows.map((row) => row.decade).filter((value): value is number => typeof value === "number"))
+  ).sort((left, right) => left - right);
   const series = ["KEEP", "MAYBE", "DELETE"].map((decision) => ({
-    name: decision,
+    name: translateDecision(decision, intl.t),
     type: "bar" as const,
     stack: "count",
     itemStyle: { color: colors[decision] },
     data: decades.map(
       (decade) =>
-        rows.filter((row) => row.decade_label === decade && decisionKey(row) === decision).length
+        rows.filter((row) => row.decade === decade && decisionKey(row) === decision).length
     )
   }));
   return {
     ...baseChart(),
     legend: { top: 0, textStyle: { color: theme.muted } },
-    xAxis: { type: "category", data: decades, axisLabel: { color: theme.muted } },
-    yAxis: { type: "value", name: "Títulos" },
+    xAxis: {
+      type: "category",
+      data: decades.map((decade) => intl.t("data.decade_label", { decade })),
+      axisLabel: { color: theme.muted }
+    },
+    yAxis: { type: "value", name: intl.t("chart.metric.titles") },
     series
   };
 }
 
-function genreDistribution(rows: ReportRow[]): EChartsOption {
+function genreDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const colors = decisionColors(theme);
   const genres = collectGenres(rows);
@@ -352,21 +371,21 @@ function genreDistribution(rows: ReportRow[]): EChartsOption {
       data: genres.map((item) => item.genre),
       axisLabel: { rotate: 28, color: theme.muted }
     },
-    yAxis: { type: "value", name: "Títulos" },
+    yAxis: { type: "value", name: intl.t("chart.metric.titles") },
     series: [
-      { name: "KEEP", type: "bar" as const, stack: "genre", itemStyle: { color: colors.KEEP }, data: genres.map((item) => item.keep) },
-      { name: "MAYBE", type: "bar" as const, stack: "genre", itemStyle: { color: colors.MAYBE }, data: genres.map((item) => item.maybe) },
-      { name: "DELETE", type: "bar" as const, stack: "genre", itemStyle: { color: colors.DELETE }, data: genres.map((item) => item.delete) }
+      { name: translateDecision("KEEP", intl.t), type: "bar" as const, stack: "genre", itemStyle: { color: colors.KEEP }, data: genres.map((item) => item.keep) },
+      { name: translateDecision("MAYBE", intl.t), type: "bar" as const, stack: "genre", itemStyle: { color: colors.MAYBE }, data: genres.map((item) => item.maybe) },
+      { name: translateDecision("DELETE", intl.t), type: "bar" as const, stack: "genre", itemStyle: { color: colors.DELETE }, data: genres.map((item) => item.delete) }
     ]
   };
 }
 
-function directorRanking(rows: ReportRow[]): EChartsOption {
+function directorRanking(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const directors = collectDirectors(rows);
   return {
     ...baseChart(),
-    xAxis: { type: "value", name: "IMDb medio" },
+    xAxis: { type: "value", name: intl.t("chart.metric.average_imdb") },
     yAxis: {
       type: "category",
       data: directors.map((item) => item.director),
@@ -384,12 +403,12 @@ function directorRanking(rows: ReportRow[]): EChartsOption {
   };
 }
 
-function wordRanking(rows: ReportRow[]): EChartsOption {
+function wordRanking(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const words = collectTitleWords(rows);
   return {
     ...baseChart(),
-    xAxis: { type: "value", name: "Frecuencia" },
+    xAxis: { type: "value", name: intl.t("chart.metric.frequency") },
     yAxis: { type: "category", data: words.map((item) => item.word), axisLabel: { color: theme.muted } },
     series: [
       {
@@ -400,7 +419,7 @@ function wordRanking(rows: ReportRow[]): EChartsOption {
   };
 }
 
-function imdbByDecision(rows: ReportRow[]): EChartsOption {
+function imdbByDecision(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const colors = decisionColors(theme);
   const decisions = ["KEEP", "MAYBE", "DELETE"];
@@ -417,39 +436,47 @@ function imdbByDecision(rows: ReportRow[]): EChartsOption {
   });
   return {
     ...baseChart(),
-    xAxis: { type: "category", data: decisions, axisLabel: { color: theme.muted } },
-    yAxis: { type: "value", name: "IMDb medio" },
+    xAxis: {
+      type: "category",
+      data: decisions.map((decision) => translateDecision(decision, intl.t)),
+      axisLabel: { color: theme.muted }
+    },
+    yAxis: { type: "value", name: intl.t("chart.metric.average_imdb") },
     series: [{ type: "bar" as const, data }]
   };
 }
 
-export function buildChartOption(viewKey: DashboardViewKey, rows: ReportRow[]): EChartsOption {
+export function buildChartOption(
+  viewKey: DashboardViewKey,
+  rows: ReportRow[],
+  intl: ChartIntl
+): EChartsOption {
   switch (viewKey) {
     case "imdb-metacritic":
-      return scatterOption(rows, "imdb_rating", "metacritic_score", "IMDb", "Metacritic");
+      return scatterOption(rows, "imdb_rating", "metacritic_score", intl.t("chart.metric.imdb"), intl.t("chart.metric.metacritic"), intl);
     case "decision-distribution":
-      return decisionDistribution(rows);
+      return decisionDistribution(rows, intl);
     case "boxplot-library":
-      return boxplotByLibrary(rows);
+      return boxplotByLibrary(rows, intl);
     case "imdb-rt":
-      return scatterOption(rows, "imdb_rating", "rt_score", "IMDb", "RT");
+      return scatterOption(rows, "imdb_rating", "rt_score", intl.t("chart.metric.imdb"), intl.t("chart.metric.rt"), intl);
     case "waste-map":
-      return wasteMap(rows);
+      return wasteMap(rows, intl);
     case "value-per-gb":
-      return valuePerGb(rows);
+      return valuePerGb(rows, intl);
     case "space-library":
-      return spaceByLibrary(rows);
+      return spaceByLibrary(rows, intl);
     case "decade-distribution":
-      return decadeDistribution(rows);
+      return decadeDistribution(rows, intl);
     case "genre-distribution":
-      return genreDistribution(rows);
+      return genreDistribution(rows, intl);
     case "director-ranking":
-      return directorRanking(rows);
+      return directorRanking(rows, intl);
     case "word-ranking":
-      return wordRanking(rows);
+      return wordRanking(rows, intl);
     case "imdb-by-decision":
-      return imdbByDecision(rows);
+      return imdbByDecision(rows, intl);
     default:
-      return decisionDistribution(rows);
+      return decisionDistribution(rows, intl);
   }
 }

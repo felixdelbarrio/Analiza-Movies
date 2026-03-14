@@ -13,13 +13,14 @@ setup(
     version="0.2.1",
     author="Félix del Barrio",
     description=(
-        "Toolset for analyzing Plex movie libraries, exposing reports "
-        "via a React frontend and a FastAPI backend."
+        "Desktop-first platform for analyzing Plex and DLNA libraries "
+        "with a React frontend and a FastAPI backend."
     ),
     long_description=long_description,
     long_description_content_type="text/markdown",
-    license="GNU",
-    packages=find_packages(exclude=("tests",)),
+    license="GPL-3.0-only",
+    packages=find_packages(where="src", exclude=("tests",)),
+    package_dir={"": "src"},
     include_package_data=True,
     install_requires=[
         # Core runtime
@@ -30,6 +31,7 @@ setup(
         # App runtime
         "plexapi>=4.15",
         "pandas>=2.1",
+        "pywebview>=5.4",
         # FastAPI server
         "fastapi>=0.110",
         "uvicorn[standard]>=0.27",
@@ -53,6 +55,10 @@ setup(
             "xarray>=2024.1",
             "sqlalchemy>=2.0",
         ],
+        "build": [
+            "build>=1.2",
+            "pyinstaller>=6.11",
+        ],
         "viz": [
             "rich>=13.7",
             "plotly>=5.18",
@@ -65,15 +71,17 @@ setup(
         "console_scripts": [
             "start=backend.main:start",
             "start-server=server.__main__:main",
+            "start-desktop=desktop.app:main",
         ]
     },
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Environment :: Console",
+        "Environment :: MacOS X",
+        "Environment :: Win32 (MS Windows)",
         "Environment :: Web Environment",
         "Framework :: FastAPI",
-        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
         "Topic :: Multimedia :: Video",
     ],

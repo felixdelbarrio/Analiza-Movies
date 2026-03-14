@@ -1,6 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef } from "react";
 
+import { useI18n } from "../i18n/provider";
+
 interface Column<T> {
   key: string;
   label: string;
@@ -23,6 +25,7 @@ export function VirtualTable<T>({
   onSelect,
   maxHeight = 620
 }: VirtualTableProps<T>) {
+  const { t } = useI18n();
   const parentRef = useRef<HTMLDivElement | null>(null);
   const gridTemplateColumns = columns.map((column) => column.width ?? "1fr").join(" ");
   const rowVirtualizer = useVirtualizer({
@@ -33,7 +36,7 @@ export function VirtualTable<T>({
   });
 
   if (!rows.length) {
-    return <div className="virtual-table__empty">No hay filas para mostrar con los filtros actuales.</div>;
+    return <div className="virtual-table__empty">{t("table.empty")}</div>;
   }
 
   return (
@@ -67,7 +70,7 @@ export function VirtualTable<T>({
               >
                 {columns.map((column) => (
                   <span key={column.key}>
-                    {column.render(row) ?? "—"}
+                    {column.render(row) ?? t("app.empty_dash")}
                   </span>
                 ))}
               </button>

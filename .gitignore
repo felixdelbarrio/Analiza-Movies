@@ -1,46 +1,77 @@
-# Ignorar variables de entorno
+# Variables de entorno locales
 .env
 .env.front
+.env.server
+.env.local
 .env.*.local
 
-# Ignorar entorno virtual
+# Entornos locales
 venv/
 .venv/
-# python -m venv
 .python-version
-# Ignorar visual studio code
+
+# IDE / editor
 .vscode/
+.idea/
 
 # Frontend React/Vite
 web/node_modules/
 web/dist/
+web/.vite/
 web/*.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts
+frontend/
 
-# Ignorar caches
-omdb_cache.json
-wiki_cache.json
+# Build / packaging
+build/
+dist/
+dist-desktop/
+*.spec
+pip-wheel-metadata/
+*.egg-info/
+*.egg
+*.whl
+*.tar.gz
+
+# Cachés Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.pyre/
+.tox/
+.nox/
 .coverage
 .coverage.*
 coverage.xml
+htmlcov/
 .hypothesis/
 
-#Ignorar los reportes 
+# Logs y temporales
+logs/
+src/**/logs/
+*.log
+*.pid
+tmp*/
+tmp*
+
+# Datos runtime / artefactos de ejecución
+data/source_profiles.json
+data/profiles/
+reports/profiles/
+omdb_cache.json
+wiki_cache.json
 report_*.csv
 report_*.html
-tmp*
 metadata_*.csv
 run_*.log
-backend/logs/
-frontend/logs/
-server/logs/
+data/*.zip
+reports/*.zip
 
-# metadatos de empaquetado
-*.egg-info/
-*.egg
+# Sistema operativo
+.DS_Store
+Thumbs.db

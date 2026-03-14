@@ -4,30 +4,34 @@ import { NavLink, Outlet } from "react-router-dom";
 import { motion } from "framer-motion";
 
 import type { AppOutletContext } from "../app/app-context";
+import { translateRunMessage, translateStage, translateStatus, translateUnit } from "../i18n/helpers";
+import { useI18n } from "../i18n/provider";
 import { setActiveProfile } from "../lib/api";
-
-const NAV_ITEMS = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/library", label: "Biblioteca", icon: Film },
-  { to: "/analytics", label: "Analítica", icon: Gauge },
-  { to: "/duplicates", label: "Duplicados", icon: Sparkles },
-  { to: "/metadata", label: "Metadata", icon: Wrench },
-  { to: "/cleanup", label: "Limpieza", icon: Trash2 },
-  { to: "/settings", label: "Configuración", icon: Settings2 }
-];
 
 interface AppShellProps {
   context: AppOutletContext;
 }
 
 export function AppShell({ context }: AppShellProps) {
+  const { t } = useI18n();
   const profiles = context.config?.profiles ?? [];
   const activeProfile = profiles.find((profile) => profile.id === context.activeProfileId) ?? null;
-  const activeRun = context.config?.run ?? null;
+  const activeRun = context.run;
+  const progress = activeRun?.progress ?? null;
+  const runPercent = typeof progress?.percent === "number" ? Math.max(0, Math.min(100, progress.percent)) : null;
+  const navItems = [
+    { to: "/", label: t("nav.dashboard"), icon: LayoutDashboard },
+    { to: "/library", label: t("nav.library"), icon: Film },
+    { to: "/analytics", label: t("nav.analytics"), icon: Gauge },
+    { to: "/duplicates", label: t("nav.duplicates"), icon: Sparkles },
+    { to: "/metadata", label: t("nav.metadata"), icon: Wrench },
+    { to: "/cleanup", label: t("nav.cleanup"), icon: Trash2 },
+    { to: "/settings", label: t("nav.settings"), icon: Settings2 }
+  ];
   const switchProfileMutation = useMutation({
     mutationFn: async (profileId: string) => setActiveProfile(profileId),
-    onSuccess: () => {
-      context.refreshAll();
+    onSuccess: async () => {
+      await context.refreshConfig();
     }
   });
 
@@ -36,14 +40,14 @@ export function AppShell({ context }: AppShellProps) {
       <aside className="sidebar">
         <div className="brand-lockup">
           <span className="brand-kicker">Analiza Movies</span>
-          <h1>Cinematic Intelligence Control Room</h1>
-          <p>Plex, DLNA y criterio editorial de primer nivel en una sola superficie.</p>
+          <h1>{t("brand.heading")}</h1>
+          <p>{t("brand.tagline")}</p>
         </div>
 
         {profiles.length ? (
           <div className="sidebar-profile">
             <label className="form-field">
-              <span>Fuente visible</span>
+              <span>{t("sidebar.visible_source")}</span>
               <select
                 disabled={switchProfileMutation.isPending}
                 onChange={(event) => {
@@ -54,7 +58,7 @@ export function AppShell({ context }: AppShellProps) {
                 }}
                 value={context.activeProfileId ?? ""}
               >
-                <option value="">Selecciona un origen</option>
+                <option value="">{t("sidebar.select_source")}</option>
                 {profiles.map((profile) => (
                   <option key={profile.id} value={profile.id}>
                     {profile.name}
@@ -64,18 +68,47 @@ export function AppShell({ context }: AppShellProps) {
             </label>
 
             <div className="sidebar-meta">
-              <span>{activeProfile ? `${activeProfile.source_type.toUpperCase()} · ${activeProfile.host || "host pendiente"}` : "Sin origen activo"}</span>
+              <span>
+                {activeProfile
+                  ? `${activeProfile.source_type.toUpperCase()} · ${activeProfile.host || t("sidebar.host_pending")}`
+                  : t("sidebar.no_active_source")}
+              </span>
               {activeRun ? (
                 <strong className={`status-pill status-pill--${activeRun.status.toLowerCase()}`}>
-                  {activeRun.status}
+                  {translateStatus(activeRun.status, t)}
                 </strong>
               ) : null}
             </div>
+
+            {activeRun ? (
+              <div className="run-spotlight">
+                <div className="run-spotlight__header">
+                  <strong>{activeRun.profile_name}</strong>
+                  <span>{translateStage(progress?.stage || activeRun.status, t)}</span>
+                </div>
+                <p>{translateRunMessage(progress, t) || t("sidebar.run_active")}</p>
+                {runPercent !== null ? (
+                  <div className="progress-meter" aria-label={t("settings.run.progress_aria")}>
+                    <span style={{ width: `${runPercent}%` }} />
+                  </div>
+                ) : null}
+                <div className="run-spotlight__meta">
+                  <span>
+                    {typeof progress?.current === "number"
+                      ? `${progress.current}${progress?.total ? ` / ${progress.total}` : ""} ${translateUnit(progress?.unit, t)}`.trim()
+                      : translateStage(progress?.stage || activeRun.status, t)}
+                  </span>
+                  <NavLink className="inline-link inline-link--subtle" to="/settings">
+                    {t("sidebar.run_monitor")}
+                  </NavLink>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
-        <nav className="nav-list" aria-label="Secciones principales">
-          {NAV_ITEMS.map((item) => {
+        <nav className="nav-list" aria-label={t("sidebar.main_sections")}>
+          {navItems.map((item) => {
             const Icon = item.icon;
             return (
               <NavLink
@@ -91,7 +124,7 @@ export function AppShell({ context }: AppShellProps) {
         </nav>
 
         <div className="sidebar-footer">
-          <p>Diseñado para explorar grandes catálogos sin perder precisión, contexto ni ritmo.</p>
+          <p>{t("sidebar.footer")}</p>
         </div>
       </aside>
 

@@ -89,7 +89,9 @@ def test_health_ready_and_metrics(monkeypatch, tmp_path):
     assert "text/plain" in metrics.headers.get("content-type", "")
 
 
-def test_root_returns_placeholder_when_frontend_bundle_is_missing(monkeypatch, tmp_path):
+def test_root_returns_placeholder_when_frontend_bundle_is_missing(
+    monkeypatch, tmp_path
+):
     missing_dist = tmp_path / "web-dist-missing"
     monkeypatch.setattr(api_app_module, "_WEB_DIST_DIR", missing_dist)
     monkeypatch.setattr(api_app_module, "_WEB_INDEX_PATH", missing_dist / "index.html")

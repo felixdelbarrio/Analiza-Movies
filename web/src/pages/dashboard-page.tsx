@@ -1,12 +1,19 @@
-import { Suspense, lazy } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Suspense, lazy, useMemo } from "react";
 
+import { useAppContext } from "../app/use-app-context";
 import { KpiCard } from "../components/kpi-card";
 import { PageHero } from "../components/page-hero";
+import { PageState } from "../components/page-state";
 import { SectionCard } from "../components/section-card";
-import type { AppOutletContext } from "../app/app-context";
+import { useReportAll } from "../hooks/use-dashboard-data";
+import { translateDashboardView } from "../i18n/helpers";
+import { useI18n } from "../i18n/provider";
 import { buildChartOption } from "../lib/charts";
-import { computeSummary, DASHBOARD_VIEWS, formatCountSize, normalizeDashboardViews } from "../lib/data";
+import {
+  computeSummary,
+  formatCountSize,
+  normalizeDashboardViews
+} from "../lib/data";
 
 const ChartCard = lazy(async () => {
   const module = await import("../components/chart-card");
@@ -14,82 +21,148 @@ const ChartCard = lazy(async () => {
 });
 
 export function DashboardPage() {
-  const { reportAll, config, preferences, activeProfileId } = useOutletContext<AppOutletContext>();
-  const summary = computeSummary(reportAll);
-  const selectedViews = normalizeDashboardViews(preferences.dashboardViews);
-  const activeProfile = config?.profiles.find((profile) => profile.id === activeProfileId);
+  const { locale, t } = useI18n();
+  const { activeProfileId, config, preferences } = useAppContext();
+  const reportAllQuery = useReportAll(activeProfileId);
+  const reportAll = reportAllQuery.data ?? [];
+  const summary = useMemo(() => computeSummary(reportAll), [reportAll]);
+  const selectedViews = useMemo(
+    () => normalizeDashboardViews(preferences.dashboardViews),
+    [preferences.dashboardViews]
+  );
+  const activeProfile = useMemo(
+    () => config?.profiles.find((profile) => profile.id === activeProfileId) ?? null,
+    [activeProfileId, config?.profiles]
+  );
+  const chartViews = useMemo(
+    () =>
+      selectedViews.map((viewKey) => ({
+        key: viewKey,
+        label: translateDashboardView(viewKey, t),
+        option: buildChartOption(viewKey, reportAll, { locale, t })
+      })),
+    [locale, preferences.theme, reportAll, selectedViews, t]
+  );
 
   return (
     <div className="page-stack">
       <PageHero
-        eyebrow="Sala de mando"
-        title="La vista editorial de tu catálogo"
-        description="Un dashboard de alta dirección para decidir qué conservar, qué revisar y dónde está el verdadero desperdicio de espacio."
+        eyebrow={t("dashboard.hero.eyebrow")}
+        title={t("dashboard.hero.title")}
+        description={t("dashboard.hero.description")}
         actions={
           <div className="hero-badge">
-            <span>Origen activo</span>
-            <strong>{activeProfile ? activeProfile.name : "Default"}</strong>
+            <span>{t("dashboard.active_source")}</span>
+            <strong>{activeProfile ? activeProfile.name : t("app.default_profile")}</strong>
           </div>
         }
       />
 
-      <section className="kpi-grid">
-        <KpiCard label="Catálogo" value={formatCountSize(summary.totalCount, summary.totalSizeGb)} />
-        <KpiCard
-          label="KEEP"
-          tone="keep"
-          value={formatCountSize(summary.keepCount, summary.keepSizeGb)}
+      {reportAllQuery.isLoading ? (
+        <PageState
+          eyebrow={t("stage.connecting")}
+          title={t("dashboard.loading.title")}
+          message={t("dashboard.loading.message")}
         />
-        <KpiCard
-          label="DELETE"
-          tone="delete"
-          value={formatCountSize(summary.deleteCount, summary.deleteSizeGb)}
-        />
-        <KpiCard
-          label="MAYBE"
-          tone="maybe"
-          value={formatCountSize(summary.maybeCount, summary.maybeSizeGb)}
-        />
-        <KpiCard
-          label="IMDb medio"
-          value={summary.imdbMean ? summary.imdbMean.toFixed(2) : "N/A"}
-        />
-      </section>
+      ) : null}
 
-      <SectionCard title="Lectura ejecutiva" eyebrow="Narrativa">
-        <div className="insight-grid">
-          <article>
-            <span>Revisión pendiente</span>
-            <strong>{formatCountSize(summary.reviewCount, summary.reviewSizeGb)}</strong>
-            <p>DELETE y MAYBE concentran el área con mayor retorno potencial de limpieza.</p>
-          </article>
-          <article>
-            <span>Perfil dominante</span>
-            <strong>{summary.keepCount > summary.reviewCount ? "Catálogo sano" : "Catálogo presionando revisión"}</strong>
-            <p>La mezcla entre volumen y calidad deja ver si el catálogo sigue una lógica curatorial o solo acumula espacio.</p>
-          </article>
-          <article>
-            <span>Señal crítica</span>
-            <strong>{summary.deleteSizeGb > summary.keepSizeGb * 0.2 ? "Oportunidad alta" : "Riesgo contenido"}</strong>
-            <p>Si el espacio comprometido en DELETE supera un umbral relevante, conviene ejecutar limpieza guiada.</p>
-          </article>
-        </div>
-      </SectionCard>
+      {reportAllQuery.error ? (
+        <PageState
+          action={
+            <button
+              className="primary-button"
+              onClick={() => reportAllQuery.refetch()}
+              type="button"
+            >
+              {t("app.action.retry")}
+            </button>
+          }
+          eyebrow={t("stage.failed")}
+          title={t("dashboard.error.title")}
+          message={t("dashboard.error.message")}
+        />
+      ) : null}
 
-      <div className="chart-grid chart-grid--hero">
-        {selectedViews.map((viewKey) => {
-          const label = DASHBOARD_VIEWS.find((item) => item.key === viewKey)?.label ?? viewKey;
-          return (
-            <Suspense key={viewKey} fallback={<div className="chart-card-skeleton" />}>
-              <ChartCard
-                eyebrow="Dashboard"
-                title={label}
-                option={buildChartOption(viewKey, reportAll)}
-              />
-            </Suspense>
-          );
-        })}
-      </div>
+      {!reportAllQuery.isLoading && !reportAllQuery.error && !reportAll.length ? (
+        <PageState
+          eyebrow={t("dashboard.empty.eyebrow")}
+          title={t("dashboard.empty.title")}
+          message={t("dashboard.empty.message")}
+        />
+      ) : null}
+
+      {!reportAllQuery.isLoading && !reportAllQuery.error && reportAll.length ? (
+        <>
+          <section className="kpi-grid">
+            <KpiCard
+              label={t("dashboard.kpi.catalog")}
+              value={formatCountSize(summary.totalCount, summary.totalSizeGb, locale, t)}
+            />
+            <KpiCard
+              label={t("decision.keep")}
+              tone="keep"
+              value={formatCountSize(summary.keepCount, summary.keepSizeGb, locale, t)}
+            />
+            <KpiCard
+              label={t("decision.delete")}
+              tone="delete"
+              value={formatCountSize(summary.deleteCount, summary.deleteSizeGb, locale, t)}
+            />
+            <KpiCard
+              label={t("decision.maybe")}
+              tone="maybe"
+              value={formatCountSize(summary.maybeCount, summary.maybeSizeGb, locale, t)}
+            />
+            <KpiCard
+              label={t("dashboard.kpi.imdb_mean")}
+              value={
+                summary.imdbMean !== null
+                  ? summary.imdbMean.toLocaleString(locale, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2
+                    })
+                  : t("app.na")
+              }
+            />
+          </section>
+
+          <SectionCard title={t("dashboard.exec.title")} eyebrow={t("dashboard.exec.eyebrow")}>
+            <div className="insight-grid">
+              <article>
+                <span>{t("dashboard.exec.review_pending")}</span>
+                <strong>{formatCountSize(summary.reviewCount, summary.reviewSizeGb, locale, t)}</strong>
+                <p>{t("dashboard.exec.review_pending_copy")}</p>
+              </article>
+              <article>
+                <span>{t("dashboard.exec.dominant_profile")}</span>
+                <strong>
+                  {summary.keepCount > summary.reviewCount
+                    ? t("dashboard.exec.catalog_healthy")
+                    : t("dashboard.exec.catalog_pressured")}
+                </strong>
+                <p>{t("dashboard.exec.dominant_profile_copy")}</p>
+              </article>
+              <article>
+                <span>{t("dashboard.exec.critical_signal")}</span>
+                <strong>
+                  {summary.deleteSizeGb > summary.keepSizeGb * 0.2
+                    ? t("dashboard.exec.high_opportunity")
+                    : t("dashboard.exec.contained_risk")}
+                </strong>
+                <p>{t("dashboard.exec.critical_signal_copy")}</p>
+              </article>
+            </div>
+          </SectionCard>
+
+          <div className="chart-grid chart-grid--hero">
+            {chartViews.map((view) => (
+              <Suspense key={view.key} fallback={<div className="chart-card-skeleton" />}>
+                <ChartCard eyebrow={t("dashboard.chart.eyebrow")} title={view.label} option={view.option} />
+              </Suspense>
+            ))}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

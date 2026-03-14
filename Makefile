@@ -1,8 +1,10 @@
 # Makefile for Analiza-Movies
 # Targets:
 #   make backend
+#   make desktop
 #   make frontend
 #   make frontend-build
+#   make build-local
 #   make server
 #   make doctor
 #   make dev
@@ -12,25 +14,27 @@ VENV  := .venv
 PY    := $(VENV)/bin/python
 PIP   := $(VENV)/bin/pip
 
-# ASGI module path (updated after renaming api_fastapi.py -> am_api.py)
-# You can override it like: make server-uvicorn API_MODULE=am_api:app
-API_MODULE ?= am_api:app
+# ASGI module path
+# You can override it like: make server-uvicorn API_MODULE=server.am_api:app
+API_MODULE ?= server.am_api:app
 API_HOST   ?= 0.0.0.0
 API_PORT   ?= 8000
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv install dev reinstall backend frontend frontend-install frontend-build frontend-preview \
-        server server-uvicorn doctor typecheck lint format test test-cov clean clean-venv reset
+.PHONY: help venv install dev reinstall backend desktop build-local frontend frontend-install frontend-build frontend-preview \
+        server server-uvicorn doctor typecheck mypy pyright lint format test test-cov clean clean-venv reset
 
 help:
 	@echo ""
 	@echo "Analiza-Movies"
 	@echo "--------------"
 	@echo "make backend         Ejecuta el CLI backend (menú Plex/DLNA)"
+	@echo "make desktop         Ejecuta la app de escritorio nativa"
 	@echo "make frontend        Ejecuta el frontend React con Vite"
 	@echo "make frontend-build  Genera el bundle de producción en web/dist"
 	@echo "make frontend-preview Sirve localmente el build de React"
+	@echo "make build-local     Genera la distribución nativa para tu SO actual"
 	@echo "make server          Ejecuta la API FastAPI (sirve web/dist si existe)"
 	@echo "make server-uvicorn  Ejecuta la API FastAPI (via uvicorn: $(API_MODULE))"
 	@echo ""
@@ -40,6 +44,7 @@ help:
 	@echo "make frontend-install Instala dependencias Node del frontend"
 	@echo "make typecheck       Ejecuta mypy y pyright (requiere make dev)"
 	@echo "make mypy            Ejecuta solo mypy (requiere make dev)"
+	@echo "make pyright         Ejecuta solo pyright (requiere make dev)"
 	@echo "make lint            Ejecuta ruff (requiere make dev)"
 	@echo "make format          Ejecuta black + ruff format (requiere make dev)"
 	@echo "make test            Ejecuta pytest (requiere make dev)"
@@ -60,16 +65,13 @@ venv:
 # Runtime install: setup.py / install_requires es la fuente de verdad
 install: venv
 	@$(PIP) install -q -r requirements.txt
-	@test ! -f requirements-png.txt || $(PIP) install -q -r requirements-png.txt
 
 # Dev install: incluye extras dev (mypy/pyright/stubs/black/ruff/pytest)
 dev: venv
 	@$(PIP) install -q -r requirements-dev.txt
-	@test ! -f requirements-png.txt || $(PIP) install -q -r requirements-png.txt
 
 reinstall: venv
 	@$(PIP) install -q -r requirements-dev.txt
-	@test ! -f requirements-png.txt || $(PIP) install -q -r requirements-png.txt
 
 # -------------------------------------------------
 # Targets principales
@@ -79,7 +81,7 @@ backend: install
 	@$(VENV)/bin/start
 
 frontend-install:
-	@npm --prefix web install
+	@npm --prefix web ci
 
 frontend: frontend-install
 	@npm --prefix web run dev -- --host 0.0.0.0
@@ -89,6 +91,13 @@ frontend-build: frontend-install
 
 frontend-preview: frontend-build
 	@npm --prefix web run preview -- --host 0.0.0.0
+
+desktop: install frontend-build
+	@$(VENV)/bin/start-desktop
+
+build-local: dev frontend-build
+	@echo "Empaquetando distribución nativa para $$(uname -s)..."
+	@$(PY) -m desktop.build --skip-frontend
 
 # Sirve la API y, si existe, también la SPA compilada en web/dist.
 server: install
@@ -103,10 +112,13 @@ server-uvicorn: install
 # -------------------------------------------------
 
 typecheck: dev
-	@$(PY) -m mypy .
+	@$(PY) -m mypy src/backend src/desktop src/server src/shared
+	@$(PY) -m pyright .
 
 mypy: dev
-	@$(PY) -m mypy .
+	@$(PY) -m mypy src/backend src/desktop src/server src/shared
+
+pyright: dev
 	@$(PY) -m pyright .
 
 lint: dev
@@ -132,6 +144,7 @@ doctor: venv
 	@echo "Pip:           $$($(PIP) -V)"
 	@echo "Backend cmd:   $$(test -x $(VENV)/bin/start && echo OK || echo MISSING)"
 	@echo "Server cmd:    $$(test -x $(VENV)/bin/start-server && echo OK || echo MISSING)"
+	@echo "Desktop cmd:   $$(test -x $(VENV)/bin/start-desktop && echo OK || echo MISSING)"
 	@echo "ASGI module:   $(API_MODULE)"
 	@echo "Type tools:    $$(($(PY) -c 'import mypy, pyright' >/dev/null 2>&1 && echo OK) || echo "(install with: make dev)")"
 	@echo "Working dir:   $$(pwd)"
@@ -142,6 +155,7 @@ doctor: venv
 
 clean:
 	@rm -rf *.egg-info
+	@rm -rf build dist dist-desktop
 	@find . -type d -name "__pycache__" -prune -exec rm -rf {} +
 	@find . -type f -name ".DS_Store" -delete
 

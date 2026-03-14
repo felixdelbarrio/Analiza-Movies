@@ -57,7 +57,7 @@ def test_config_profile_roundtrip_and_run(monkeypatch, tmp_path):
     assert save_res.status_code == 200
     payload = save_res.json()
     assert payload["active_profile_id"] == "plex-machine-a"
-    assert payload["profiles"][0]["plex_token"] != "secret-token"
+    assert payload["profiles"][0]["plex_token"] is None
 
     omdb_res = client.put("/config/state", json={"omdb_api_keys": "key-a,key-b"})
     assert omdb_res.status_code == 200
@@ -150,8 +150,65 @@ def test_config_discovery_endpoints(monkeypatch, tmp_path):
     poll_res = client.get("/config/plex/auth/auth-1")
     assert poll_res.status_code == 200
     assert poll_res.json()["status"] == "complete"
+    assert poll_res.json()["servers"][0]["plex_token"] is None
 
     plex_res = client.post("/config/discover/plex", json={"session_id": "auth-1"})
     assert plex_res.status_code == 200
     assert plex_res.json()["auth_complete"] is True
-    assert plex_res.json()["servers"][0]["plex_token"] == "server-token"
+    assert plex_res.json()["servers"][0]["plex_token"] is None
+
+
+def test_run_monitor_endpoints(monkeypatch, tmp_path):
+    _patch_runtime_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        configuration_router,
+        "get_run_status",
+        lambda: {
+            "run": {
+                "run_id": "run-1",
+                "profile_id": "plex-machine-a",
+                "profile_name": "Plex Sala",
+                "source_type": "plex",
+                "status": "running",
+                "started_at": "2026-03-14T10:00:00+00:00",
+                "log_path": "/tmp/run.log",
+                "progress_path": "/tmp/run.progress.json",
+                "progress": {
+                    "stage": "analyzing",
+                    "message": "Procesando biblioteca Principal.",
+                    "current": 120,
+                    "total": 400,
+                    "percent": 30.0,
+                    "recent": [],
+                    "counters": {"processed": 120},
+                },
+            }
+        },
+    )
+    monkeypatch.setattr(
+        configuration_router,
+        "get_run_log_tail",
+        lambda limit=80: {
+            "run": {"run_id": "run-1", "status": "running"},
+            "lines": ["# started_at=...", "[PLEX] Biblioteca principal..."],
+        },
+    )
+    monkeypatch.setattr(
+        configuration_router,
+        "stop_current_run",
+        lambda: {"run": {"run_id": "run-1", "status": "cancelled"}},
+    )
+
+    client = TestClient(create_app())
+
+    status_res = client.get("/config/run")
+    assert status_res.status_code == 200
+    assert status_res.json()["run"]["progress"]["stage"] == "analyzing"
+
+    logs_res = client.get("/config/run/logs", params={"limit": 20})
+    assert logs_res.status_code == 200
+    assert len(logs_res.json()["lines"]) == 2
+
+    stop_res = client.delete("/config/run")
+    assert stop_res.status_code == 200
+    assert stop_res.json()["run"]["status"] == "cancelled"

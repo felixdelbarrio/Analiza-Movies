@@ -5,19 +5,22 @@ import type {
   SummaryMetrics
 } from "./types";
 
-export const DASHBOARD_VIEWS: Array<{ key: DashboardViewKey; label: string }> = [
-  { key: "imdb-metacritic", label: "IMDb vs Metacritic" },
-  { key: "decision-distribution", label: "Distribución por decisión" },
-  { key: "boxplot-library", label: "Boxplot IMDb por biblioteca" },
-  { key: "imdb-rt", label: "IMDb vs Rotten Tomatoes" },
-  { key: "waste-map", label: "Mapa de desperdicio" },
-  { key: "value-per-gb", label: "Valor por GB" },
-  { key: "space-library", label: "Espacio por biblioteca" },
-  { key: "decade-distribution", label: "Distribución por década" },
-  { key: "genre-distribution", label: "Distribución por género" },
-  { key: "director-ranking", label: "Ranking de directores" },
-  { key: "word-ranking", label: "Palabras frecuentes" },
-  { key: "imdb-by-decision", label: "IMDb por decisión" }
+import type { Translator } from "../i18n/catalog";
+import { translateDashboardView } from "../i18n/helpers";
+
+export const DASHBOARD_VIEWS: DashboardViewKey[] = [
+  "imdb-metacritic",
+  "decision-distribution",
+  "boxplot-library",
+  "imdb-rt",
+  "waste-map",
+  "value-per-gb",
+  "space-library",
+  "decade-distribution",
+  "genre-distribution",
+  "director-ranking",
+  "word-ranking",
+  "imdb-by-decision"
 ];
 
 const DEFAULT_DASHBOARD_VIEW_KEYS: DashboardViewKey[] = [
@@ -27,7 +30,7 @@ const DEFAULT_DASHBOARD_VIEW_KEYS: DashboardViewKey[] = [
 ];
 
 export function normalizeDashboardViews(values?: string[] | null): DashboardViewKey[] {
-  const valid = new Set(DASHBOARD_VIEWS.map((item) => item.key));
+  const valid = new Set(DASHBOARD_VIEWS);
   const out: DashboardViewKey[] = [];
   for (const value of values ?? []) {
     if (valid.has(value as DashboardViewKey) && !out.includes(value as DashboardViewKey)) {
@@ -83,7 +86,7 @@ export function enrichRows(rows: ReportRow[]): ReportRow[] {
       rt_score: rtScore,
       plex_rating: plexRating,
       decade,
-      decade_label: decade ? `${decade}s` : null
+      decade_label: decade ? String(decade) : null
     };
   });
 }
@@ -138,7 +141,7 @@ export function computeSummary(rows: ReportRow[]): SummaryMetrics {
   };
 }
 
-export function uniqueValues(rows: ReportRow[], key: keyof ReportRow) {
+export function uniqueValues(rows: ReportRow[], key: keyof ReportRow, locale = "en") {
   return Array.from(
     new Set(
       rows
@@ -146,7 +149,7 @@ export function uniqueValues(rows: ReportRow[], key: keyof ReportRow) {
         .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
         .map((value) => value.trim())
     )
-  ).sort((left, right) => left.localeCompare(right, "es"));
+  ).sort((left, right) => left.localeCompare(right, locale));
 }
 
 export function getPoster(row: ReportRow) {
@@ -302,6 +305,18 @@ export function collectTitleWords(rows: ReportRow[]) {
     .slice(0, 14);
 }
 
-export function formatCountSize(count: number, sizeGb: number) {
-  return `${count.toLocaleString("es-ES")} · ${sizeGb.toFixed(1)} GB`;
+export function getDashboardViews(t: Translator) {
+  return DASHBOARD_VIEWS.map((key) => ({ key, label: translateDashboardView(key, t) }));
+}
+
+export function formatCountSize(count: number, sizeGb: number, locale: string, t: Translator) {
+  const countLabel = count.toLocaleString(locale);
+  const sizeLabel = sizeGb.toLocaleString(locale, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1
+  });
+  return t("data.count_size", {
+    count: countLabel,
+    size: sizeLabel
+  });
 }

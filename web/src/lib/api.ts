@@ -5,6 +5,8 @@ import type {
   PagedResponse,
   Profile,
   ReportRow,
+  RunLogsResponse,
+  RunStatusResponse,
   ServerDiscovery
 } from "./types";
 
@@ -38,9 +40,14 @@ async function requestJson<T>(
   init?: RequestInit,
   params?: Record<string, string | number | undefined | null>
 ): Promise<T> {
+  const preferredLanguage =
+    typeof document !== "undefined"
+      ? document.documentElement.lang || window.navigator.language
+      : "en";
   const response = await fetch(buildUrl(path, params), {
     headers: {
       "Content-Type": "application/json",
+      "Accept-Language": preferredLanguage,
       ...(init?.headers ?? {})
     },
     ...init
@@ -71,24 +78,39 @@ async function requestJson<T>(
 
 async function fetchAllPages<T>(path: string, profileId?: string | null): Promise<T[]> {
   const pageSize = 2000;
-  let offset = 0;
-  let total = Number.POSITIVE_INFINITY;
-  const items: T[] = [];
+  const pageConcurrency = 4;
+  const firstPage = await requestJson<PagedResponse<T> | null>(path, undefined, {
+    limit: pageSize,
+    offset: 0,
+    profile_id: profileId ?? undefined
+  });
 
-  while (offset < total) {
-    const page = await requestJson<PagedResponse<T> | null>(path, undefined, {
-      limit: pageSize,
-      offset,
-      profile_id: profileId ?? undefined
-    });
-    if (!page) {
-      break;
-    }
-    items.push(...page.items);
-    total = page.total;
-    offset += page.limit;
-    if (page.limit <= 0) {
-      break;
+  if (!firstPage) {
+    return [];
+  }
+
+  const items = [...firstPage.items];
+  const effectiveLimit = firstPage.limit > 0 ? firstPage.limit : pageSize;
+  const offsets: number[] = [];
+  for (let offset = effectiveLimit; offset < firstPage.total; offset += effectiveLimit) {
+    offsets.push(offset);
+  }
+
+  for (let index = 0; index < offsets.length; index += pageConcurrency) {
+    const chunk = offsets.slice(index, index + pageConcurrency);
+    const pages = await Promise.all(
+      chunk.map((offset) =>
+        requestJson<PagedResponse<T> | null>(path, undefined, {
+          limit: effectiveLimit,
+          offset,
+          profile_id: profileId ?? undefined
+        })
+      )
+    );
+    for (const page of pages) {
+      if (page) {
+        items.push(...page.items);
+      }
     }
   }
 
@@ -121,18 +143,32 @@ export async function setActiveProfile(profileId: string) {
 }
 
 export async function startAnalysis(profileId: string) {
-  return requestJson<{ run: ConfigState["run"] }>("/config/run", {
+  return requestJson<RunStatusResponse>("/config/run", {
     method: "POST",
     body: JSON.stringify({ profile_id: profileId })
   });
 }
 
-export async function startPlexAuth() {
+export async function fetchRunStatus() {
+  return requestJson<RunStatusResponse>("/config/run");
+}
+
+export async function fetchRunLogs(limit = 80) {
+  return requestJson<RunLogsResponse>("/config/run/logs", undefined, { limit });
+}
+
+export async function stopAnalysis() {
+  return requestJson<RunStatusResponse>("/config/run", {
+    method: "DELETE"
+  });
+}
+
+export async function startPlexAuth(openBrowser = true) {
   return requestJson<{ session_id: string; auth_url: string; status: string }>(
     "/config/plex/auth/start",
     {
       method: "POST",
-      body: JSON.stringify({ open_browser: true })
+      body: JSON.stringify({ open_browser: openBrowser })
     }
   );
 }

@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/ci.yml/badge.svg)](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/ci.yml)
 [![Typing](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/typing.yml/badge.svg)](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/typing.yml)
+[![Desktop Build](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/desktop-build.yml/badge.svg)](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/desktop-build.yml)
 [![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-2ea44f.svg)](https://github.com/sponsors/felixdelbarrio)
 [![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://paypal.me/felixdelbarrio)
 
@@ -43,18 +44,27 @@ If you find this project useful, you can support its development here:
 1) Create environment files:
    - `cp .env.example .env`
    - `cp .env.front.example .env.front`
-2) Install Python dependencies: `make dev`
+2) Use Python `3.10+` and install dependencies: `make dev`
 3) Install frontend dependencies: `make frontend-install`
 4) Run:
    - Backend CLI: `make backend`
    - API server: `make server`
    - React frontend (Vite dev): `make frontend`
+   - Native desktop shell: `make desktop`
 
 ### Production-like local run
 
 1) Build the SPA: `make frontend-build`
 2) Serve API + React bundle together: `make server`
 3) Open [http://127.0.0.1:8000](http://127.0.0.1:8000)
+
+### Native desktop build
+
+1) Install dev/build dependencies: `make dev`
+2) Generate the native bundle for your current OS: `make build-local`
+3) Find the artifact in `dist-desktop/`
+
+The desktop app embeds FastAPI + React in a native window and keeps external flows such as Plex login, IMDb and OMDb inside the application container instead of opening browser tabs.
 
 ---
 
@@ -78,6 +88,18 @@ It keeps the same analytical structure of the original dashboard, but moves to a
 - `make frontend` runs the Vite development server on port `5173`
 - `make frontend-build` generates `web/dist`
 - `make server` serves the FastAPI API and, if available, also serves `web/dist`
+- `make desktop` launches the native desktop shell
+- `make build-local` creates a native bundle for macOS, Linux or Windows
+
+### Repository layout
+
+- `src/backend`: analysis engine, collectors, scoring and CLI orchestration
+- `src/server`: FastAPI API, routers, middleware and services
+- `src/desktop`: native desktop shell and packaging
+- `src/shared`: runtime profiles and cross-application utilities
+- `web/`: React frontend
+- `docs/`: architecture and project documentation
+- `tests/`: automated validation
 
 ---
 
@@ -114,12 +136,13 @@ Si este proyecto te resulta útil, puedes apoyarlo aquí:
 1) Crea los archivos de entorno:
    - `cp .env.example .env`
    - `cp .env.front.example .env.front`
-2) Instala dependencias Python: `make dev`
+2) Usa Python `3.10+` e instala dependencias: `make dev`
 3) Instala dependencias del frontend: `make frontend-install`
 4) Ejecuta:
    - Backend CLI: `make backend`
    - API server: `make server`
    - Frontend React en desarrollo: `make frontend`
+   - Shell nativo de escritorio: `make desktop`
 
 ---
 
@@ -143,6 +166,25 @@ Mantiene la navegación, estructura analítica y riqueza visual del dashboard an
 - `make frontend` arranca Vite para desarrollo
 - `make frontend-build` genera `web/dist`
 - `make server` sirve la API y, si existe el build, también sirve la SPA compilada
+- `make desktop` arranca la app en una ventana nativa
+- `make build-local` genera la distribución nativa para tu sistema actual
+
+### Estructura del repositorio
+
+- `src/backend`: motor de análisis, scoring, clientes y CLI
+- `src/server`: API FastAPI, routers, middleware y servicios
+- `src/desktop`: shell nativo y empaquetado multiplataforma
+- `src/shared`: perfiles de runtime y utilidades comunes
+- `web/`: frontend React
+- `docs/`: arquitectura y documentación de proyecto
+- `tests/`: validación automatizada
+
+### Distribuciones nativas
+
+- La app de escritorio empaqueta FastAPI + React dentro de una ventana nativa.
+- `dist-desktop/` contiene los artefactos locales generados con PyInstaller.
+- GitHub Actions publica builds de Windows, Linux y macOS en cada ejecución del workflow de desktop.
+- Si existen secretos de Apple Developer, la build de macOS firma y notariza; si no existen, la build sigue adelante sin bloquearse.
 
 ---
 
@@ -156,7 +198,7 @@ Mantiene la navegación, estructura analítica y riqueza visual del dashboard an
 - Advanced Reporting
 
 📐 **Architecture details / Detalle técnico:**  
-➡️ [ARCHITECTURE.md](ARCHITECTURE.md)
+➡️ [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## Typing support
 

@@ -1,11 +1,13 @@
-import type { ConfigState, MetadataRow, ReportRow } from "../lib/types";
+import type { ConfigState, RunState } from "../lib/types";
 
 export interface AppPreferences {
   theme: "aurora" | "cinema";
+  locale: "en" | "es" | "fr" | "de" | "it" | "pt";
   dashboardViews: string[];
   numericFilters: boolean;
   chartThresholds: boolean;
   setTheme: (value: "aurora" | "cinema") => void;
+  setLocale: (value: "en" | "es" | "fr" | "de" | "it" | "pt") => void;
   setDashboardViews: (value: string[]) => void;
   setNumericFilters: (value: boolean) => void;
   setChartThresholds: (value: boolean) => void;
@@ -13,11 +15,9 @@ export interface AppPreferences {
 
 export interface AppOutletContext {
   config: ConfigState | null;
+  run: RunState | null;
   activeProfileId: string | null;
-  reportAll: ReportRow[];
-  reportFiltered: ReportRow[];
-  metadataRows: MetadataRow[];
   preferences: AppPreferences;
-  isLoading: boolean;
-  refreshAll: () => void;
+  refreshConfig: () => Promise<void>;
+  refreshRun: () => Promise<void>;
 }
