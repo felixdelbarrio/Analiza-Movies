@@ -75,8 +75,8 @@ function tooltipCard(theme: ChartTheme, title: string, rows: Array<{ label: stri
   const body = rows
     .map(
       (row) =>
-        `<div style="display:flex;justify-content:space-between;gap:16px;align-items:center;">
-          <span style="display:inline-flex;align-items:center;gap:8px;color:${theme.tooltipMuted};">
+        `<div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;">
+          <span style="display:inline-flex;align-items:center;gap:8px;color:${theme.tooltipMuted};font-size:12.5px;line-height:1.4;min-width:0;">
             ${
               row.color
                 ? `<span style="width:10px;height:10px;border-radius:999px;background:${row.color};display:inline-block;"></span>`
@@ -84,19 +84,20 @@ function tooltipCard(theme: ChartTheme, title: string, rows: Array<{ label: stri
             }
             ${escapeHtml(row.label)}
           </span>
-          <strong style="color:${theme.tooltipText};font-weight:700;">${escapeHtml(row.value)}</strong>
+          <strong style="color:${theme.tooltipText};font-weight:700;font-size:12.5px;line-height:1.4;text-align:right;">${escapeHtml(row.value)}</strong>
         </div>`
     )
     .join("");
 
-  return `<div style="display:grid;gap:10px;min-width:220px;">
-    <div style="font-size:13px;font-weight:700;color:${theme.tooltipText};">${escapeHtml(title)}</div>
+  return `<div style="display:grid;gap:10px;min-width:220px;max-width:320px;">
+    <div style="font-size:14px;font-weight:700;color:${theme.tooltipText};line-height:1.35;word-break:break-word;">${escapeHtml(title)}</div>
     <div style="display:grid;gap:6px;">${body}</div>
   </div>`;
 }
 
 function buildTooltip(theme: ChartTheme, option: Record<string, unknown> = {}) {
   return {
+    confine: true,
     backgroundColor: theme.tooltipBg,
     borderColor: theme.tooltipBorder,
     borderWidth: 1,
@@ -105,7 +106,7 @@ function buildTooltip(theme: ChartTheme, option: Record<string, unknown> = {}) {
       color: theme.tooltipText,
       fontFamily: "Space Grotesk"
     },
-    extraCssText: `border-radius:18px;box-shadow:${theme.tooltipShadow};backdrop-filter:blur(18px);`,
+    extraCssText: `border-radius:18px;box-shadow:${theme.tooltipShadow};backdrop-filter:blur(18px);max-width:360px;`,
     ...option
   };
 }
@@ -238,7 +239,7 @@ function scatterOption(
       type: "value",
       nameTextStyle: { color: theme.muted, padding: [0, 0, 0, 8] }
     },
-    tooltip: {
+    tooltip: buildTooltip(theme, {
       formatter: (params: unknown) => {
         const current = Array.isArray(params) ? params[0] : params;
         const value = current && typeof current === "object" && "value" in current
@@ -253,7 +254,7 @@ function scatterOption(
           { label: yName, value: formatValue(value[1], intl.locale, 1) }
         ]);
       }
-    },
+    }),
     series: groups
   };
 }
@@ -277,7 +278,7 @@ function decisionDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption
   const total = data.reduce((sum, item) => sum + item.value, 0);
   return {
     ...baseChart(),
-    tooltip: {
+    tooltip: buildTooltip(theme, {
       trigger: "item",
       formatter: (params: unknown) => {
         const current = firstTooltipParam(params);
@@ -300,7 +301,7 @@ function decisionDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption
           }
         ]);
       }
-    },
+    }),
     legend: { bottom: 0, textStyle: { color: theme.muted, fontSize: 11 } },
     graphic: [
       {
@@ -386,7 +387,7 @@ function boxplotByLibrary(rows: ReportRow[], intl: ChartIntl): EChartsOption {
 
   return {
     ...baseChart(),
-    tooltip: {
+    tooltip: buildTooltip(theme, {
       trigger: "item",
       formatter: (params: unknown) => {
         const current = firstTooltipParam(params);
@@ -406,7 +407,7 @@ function boxplotByLibrary(rows: ReportRow[], intl: ChartIntl): EChartsOption {
           { label: "Max", value: formatValue(Number(values[4] ?? 0), intl.locale, 1) }
         ]);
       }
-    },
+    }),
     xAxis: {
       type: "category",
       data: libraries.map((item) => item.library),
@@ -463,7 +464,7 @@ function wasteMap(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   return {
     ...baseChart(),
     legend: { top: 0, textStyle: { color: theme.muted, fontSize: 11 } },
-    tooltip: {
+    tooltip: buildTooltip(theme, {
       formatter: (params: unknown) => {
         const current = firstTooltipParam(params);
         const seriesName =
@@ -486,7 +487,7 @@ function wasteMap(rows: ReportRow[], intl: ChartIntl): EChartsOption {
           }
         ]);
       }
-    },
+    }),
     xAxis: { type: "value", name: intl.t("chart.metric.imdb") },
     yAxis: { type: "value", name: intl.t("chart.metric.gb") },
     series
@@ -545,12 +546,9 @@ function valuePerGb(rows: ReportRow[], intl: ChartIntl): EChartsOption {
     ...baseChart(),
     grid: { top: 72, left: 44, right: 92, bottom: 48 },
     legend: { top: 0, textStyle: { color: theme.muted, fontSize: 11 } },
-    tooltip: {
+    tooltip: buildTooltip(theme, {
       trigger: "axis",
       axisPointer: { type: "shadow" },
-      backgroundColor: theme.panel,
-      borderColor: theme.line,
-      textStyle: { color: theme.text },
       formatter: (params: unknown) => {
         const items = Array.isArray(params) ? params : [params];
         const axisValue = items[0] && typeof items[0] === "object" && "axisValue" in items[0]
@@ -586,7 +584,7 @@ function valuePerGb(rows: ReportRow[], intl: ChartIntl): EChartsOption {
           }
         ]);
       }
-    },
+    }),
     xAxis: [
       {
         type: "value",
@@ -729,7 +727,7 @@ function spaceByLibrary(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   return {
     ...baseChart(),
     legend: { top: 0, textStyle: { color: theme.muted, fontSize: 11 } },
-    tooltip: {
+    tooltip: buildTooltip(theme, {
       trigger: "axis",
       axisPointer: { type: "shadow" },
       formatter: (params: unknown) => {
@@ -760,7 +758,7 @@ function spaceByLibrary(rows: ReportRow[], intl: ChartIntl): EChartsOption {
           { label: intl.t("chart.metric.gb"), value: formatValue(row.total, intl.locale, 1) }
         ]);
       }
-    },
+    }),
     xAxis: { type: "value", name: intl.t("chart.metric.gb") },
     yAxis: {
       type: "category",
@@ -816,7 +814,7 @@ function decadeDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   return {
     ...baseChart(),
     legend: { top: 0, textStyle: { color: theme.muted, fontSize: 11 } },
-    tooltip: {
+    tooltip: buildTooltip(theme, {
       trigger: "axis",
       axisPointer: { type: "shadow" },
       formatter: (params: unknown) => {
@@ -850,7 +848,7 @@ function decadeDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption {
           }
         ]);
       }
-    },
+    }),
     xAxis: {
       type: "category",
       data: decadeRows.map((item) => item.label),
@@ -875,7 +873,7 @@ function genreDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   return {
     ...baseChart(),
     legend: { top: 0, textStyle: { color: theme.muted, fontSize: 11 } },
-    tooltip: {
+    tooltip: buildTooltip(theme, {
       trigger: "axis",
       axisPointer: { type: "shadow" },
       formatter: (params: unknown) => {
@@ -909,7 +907,7 @@ function genreDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption {
           }
         ]);
       }
-    },
+    }),
     xAxis: {
       type: "value",
       name: intl.t("chart.metric.titles"),
@@ -961,7 +959,7 @@ function directorRanking(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   }
   return {
     ...baseChart(),
-    tooltip: {
+    tooltip: buildTooltip(theme, {
       trigger: "item",
       formatter: (params: unknown) => {
         const currentParam = firstTooltipParam(params);
@@ -990,7 +988,7 @@ function directorRanking(rows: ReportRow[], intl: ChartIntl): EChartsOption {
           }
         ]);
       }
-    },
+    }),
     xAxis: {
       type: "value",
       name: intl.t("chart.metric.average_imdb"),
@@ -1031,7 +1029,7 @@ function wordRanking(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   }
   return {
     ...baseChart(),
-    tooltip: {
+    tooltip: buildTooltip(theme, {
       trigger: "item",
       formatter: (params: unknown) => {
         const current = firstTooltipParam(params);
@@ -1047,7 +1045,7 @@ function wordRanking(rows: ReportRow[], intl: ChartIntl): EChartsOption {
           }
         ]);
       }
-    },
+    }),
     xAxis: {
       type: "value",
       name: intl.t("chart.metric.frequency"),
@@ -1099,7 +1097,7 @@ function imdbByDecision(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   }
   return {
     ...baseChart(),
-    tooltip: {
+    tooltip: buildTooltip(theme, {
       trigger: "item",
       formatter: (params: unknown) => {
         const currentParam = firstTooltipParam(params);
@@ -1131,7 +1129,7 @@ function imdbByDecision(rows: ReportRow[], intl: ChartIntl): EChartsOption {
           }
         ]);
       }
-    },
+    }),
     xAxis: {
       type: "category",
       data: data.map((item) => item.name),
