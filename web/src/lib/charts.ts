@@ -8,7 +8,7 @@ import type { DashboardViewKey, ReportRow } from "./types";
 
 type ChartTheme = ThemeTokens;
 
-type ScatterValue = [number, number, string, string];
+type ScatterValue = [number, number, string, string, number | null];
 type WasteValue = [number, number, number, string];
 type ValuePerGbRow = {
   deletePct: number;
@@ -218,7 +218,13 @@ function scatterOption(
         const x = parseMaybeNumber(row[xKey]);
         const y = parseMaybeNumber(row[yKey]);
         if (x === null || y === null) return null;
-        return [x, y, String(row.title || intl.t("column.title")), String(row.library || intl.t("column.library"))];
+        return [
+          x,
+          y,
+          String(row.title || intl.t("column.title")),
+          String(row.library || intl.t("column.library")),
+          parseMaybeNumber(row.file_size_gb)
+        ];
       })
       .filter((value): value is ScatterValue => Array.isArray(value))
   }));
@@ -248,11 +254,21 @@ function scatterOption(
         if (!Array.isArray(value)) {
           return intl.t("chart.no_data");
         }
-        return tooltipCard(theme, value[2], [
-          { label: intl.t("column.library"), value: value[3] },
-          { label: xName, value: formatValue(value[0], intl.locale, 1) },
-          { label: yName, value: formatValue(value[1], intl.locale, 1) }
-        ]);
+        return tooltipCard(
+          theme,
+          value[2],
+          [
+            { label: intl.t("column.library"), value: value[3] },
+            typeof value[4] === "number"
+              ? {
+                  label: intl.t("chart.metric.gb"),
+                  value: `${formatValue(value[4], intl.locale, 1)} ${intl.t("unit.gb")}`
+                }
+              : null,
+            { label: xName, value: formatValue(value[0], intl.locale, 1) },
+            { label: yName, value: formatValue(value[1], intl.locale, 1) }
+          ].filter((row): row is { label: string; value: string; color?: string } => row !== null)
+        );
       }
     }),
     series: groups

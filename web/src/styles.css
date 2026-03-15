@@ -6,7 +6,7 @@
   --bg-layer: radial-gradient(circle at top left, rgba(45, 104, 194, 0.28), transparent 32%),
     radial-gradient(circle at 100% 0%, rgba(13, 178, 128, 0.18), transparent 30%),
     linear-gradient(145deg, #07101a 0%, #0c1422 45%, #0e1624 100%);
-  --panel: rgba(11, 20, 34, 0.78);
+  --panel: rgba(11, 20, 34, 0.9);
   --panel-solid: #101a2a;
   --panel-border: rgba(151, 177, 214, 0.16);
   --panel-shadow: 0 30px 80px rgba(2, 10, 22, 0.5);
@@ -24,9 +24,11 @@
   --surface-soft-stronger: rgba(255, 255, 255, 0.05);
   --surface-elevated: rgba(255, 255, 255, 0.06);
   --surface-row: rgba(255, 255, 255, 0.015);
-  --surface-sidebar: linear-gradient(180deg, rgba(4, 8, 14, 0.28), rgba(5, 10, 18, 0.08));
-  --surface-hero: linear-gradient(145deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+  --surface-sidebar: linear-gradient(180deg, rgba(8, 18, 31, 0.96), rgba(10, 22, 38, 0.93));
+  --surface-hero: linear-gradient(145deg, rgba(20, 45, 68, 0.94), rgba(12, 29, 47, 0.96));
   --surface-skeleton: linear-gradient(120deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+  --nav-hover-bg: rgba(113, 213, 255, 0.1);
+  --nav-active-bg: linear-gradient(135deg, rgba(29, 69, 103, 0.92), rgba(21, 48, 73, 0.96));
   --app-glow: radial-gradient(circle, var(--accent) 0%, rgba(113, 213, 255, 0.08) 70%);
   --accent-emphasis: #5cb0ff;
   --accent-soft: rgba(113, 213, 255, 0.08);
@@ -78,7 +80,7 @@
   --bg-layer: radial-gradient(circle at top left, rgba(214, 177, 109, 0.34), transparent 32%),
     radial-gradient(circle at 90% 0%, rgba(166, 109, 73, 0.16), transparent 26%),
     linear-gradient(160deg, #f7f2ea 0%, #efe5d6 42%, #f6efe6 100%);
-  --panel: rgba(255, 252, 247, 0.84);
+  --panel: rgba(255, 252, 247, 0.93);
   --panel-solid: #fffbf6;
   --panel-border: rgba(111, 87, 54, 0.12);
   --panel-shadow: 0 24px 60px rgba(98, 73, 38, 0.14);
@@ -96,9 +98,11 @@
   --surface-soft-stronger: rgba(82, 58, 32, 0.08);
   --surface-elevated: rgba(82, 58, 32, 0.1);
   --surface-row: rgba(82, 58, 32, 0.045);
-  --surface-sidebar: linear-gradient(180deg, rgba(255, 250, 243, 0.58), rgba(235, 224, 207, 0.34));
-  --surface-hero: linear-gradient(145deg, rgba(255, 255, 255, 0.48), rgba(252, 244, 233, 0.82));
+  --surface-sidebar: linear-gradient(180deg, rgba(255, 250, 243, 0.96), rgba(239, 228, 211, 0.92));
+  --surface-hero: linear-gradient(145deg, rgba(255, 255, 251, 0.96), rgba(245, 235, 220, 0.94));
   --surface-skeleton: linear-gradient(120deg, rgba(255, 255, 255, 0.42), rgba(214, 177, 109, 0.18), rgba(255, 255, 255, 0.42));
+  --nav-hover-bg: rgba(61, 117, 159, 0.1);
+  --nav-active-bg: linear-gradient(135deg, rgba(61, 117, 159, 0.18), rgba(67, 139, 116, 0.14));
   --app-glow: radial-gradient(circle, rgba(61, 117, 159, 0.9) 0%, rgba(61, 117, 159, 0.12) 70%);
   --accent-emphasis: #5e95be;
   --accent-soft: rgba(61, 117, 159, 0.12);
@@ -151,7 +155,7 @@ body,
 body {
   margin: 0;
   font-family: var(--font-body);
-  background: var(--bg-layer), var(--bg);
+  background: var(--bg);
   color: var(--text);
 }
 
@@ -224,9 +228,20 @@ textarea {
 }
 
 .app-shell {
+  position: relative;
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
   min-height: 100vh;
+  isolation: isolate;
+}
+
+.app-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--bg-layer), var(--bg);
 }
 
 .sidebar {
@@ -240,7 +255,7 @@ textarea {
   padding: 2rem 1.6rem;
   border-right: 1px solid var(--line);
   background: var(--surface-sidebar);
-  backdrop-filter: blur(28px);
+  backdrop-filter: blur(18px);
 }
 
 .brand-lockup {
@@ -308,11 +323,17 @@ textarea {
   transition: 0.22s ease;
 }
 
-.nav-link:hover,
-.nav-link.active {
+.nav-link:hover {
   color: var(--text);
   border-color: var(--panel-border);
-  background: var(--accent-soft);
+  background: var(--nav-hover-bg);
+}
+
+.nav-link.active {
+  color: var(--text);
+  border-color: var(--accent-border);
+  background: var(--nav-active-bg);
+  box-shadow: var(--accent-ring);
 }
 
 .sidebar-footer {
