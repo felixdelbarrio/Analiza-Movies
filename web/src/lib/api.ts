@@ -231,7 +231,11 @@ export async function pollPlexAuth(sessionId: string) {
 }
 
 export async function discoverPlex(sessionId?: string | null) {
-  return requestJson<{ servers: ServerDiscovery[] }>("/config/discover/plex", {
+  return requestJson<{
+    servers: ServerDiscovery[];
+    session_id?: string | null;
+    auth_complete?: boolean;
+  }>("/config/discover/plex", {
     method: "POST",
     body: JSON.stringify(sessionId ? { session_id: sessionId } : {})
   });

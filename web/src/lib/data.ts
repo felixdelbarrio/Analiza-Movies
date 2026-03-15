@@ -1,5 +1,6 @@
 import type {
   DashboardViewKey,
+  DuplicateGroup,
   MetadataRow,
   ReportRow,
   SummaryMetrics
@@ -22,6 +23,16 @@ export const DASHBOARD_VIEWS: DashboardViewKey[] = [
   "word-ranking",
   "imdb-by-decision"
 ];
+
+export const REPORT_DECISION_OPTIONS = ["KEEP", "MAYBE", "DELETE", "UNKNOWN"] as const;
+export type ReportSearchScope = "all" | "title";
+
+interface ReportFilterOptions {
+  search: string;
+  searchScope?: ReportSearchScope;
+  library?: string | null;
+  decision?: string | null;
+}
 
 const DEFAULT_DASHBOARD_VIEW_KEYS: DashboardViewKey[] = [
   "imdb-metacritic",
@@ -63,6 +74,85 @@ export function parseOmdbJson(row: ReportRow) {
   }
 }
 
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim() && value !== "N/A") {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function normalizeSearchValue(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function collectSearchTerms(
+  value: unknown,
+  searchParts: string[],
+  seenObjects: WeakSet<object>
+) {
+  if (value === null || value === undefined) {
+    return;
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    const normalized = String(value).trim();
+    if (normalized && normalized !== "N/A") {
+      searchParts.push(normalized);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectSearchTerms(item, searchParts, seenObjects));
+    return;
+  }
+  if (typeof value === "object") {
+    if (seenObjects.has(value)) {
+      return;
+    }
+    seenObjects.add(value);
+    Object.values(value).forEach((item) => collectSearchTerms(item, searchParts, seenObjects));
+  }
+}
+
+function buildSearchText(
+  row: ReportRow,
+  omdb: Record<string, unknown> | null,
+  metadata: Array<string | null>
+) {
+  const searchParts: string[] = [];
+  const seenObjects = new WeakSet<object>();
+
+  Object.entries(row).forEach(([key, value]) => {
+    if (key === "omdb_json" || key === "search_all" || key === "search_title") {
+      return;
+    }
+    collectSearchTerms(value, searchParts, seenObjects);
+  });
+  collectSearchTerms(omdb, searchParts, seenObjects);
+  collectSearchTerms(metadata, searchParts, seenObjects);
+
+  return normalizeSearchValue(Array.from(new Set(searchParts)).join(" "));
+}
+
+function buildTitleSearchText(row: ReportRow, omdb: Record<string, unknown> | null) {
+  const searchParts = [
+    row.title,
+    typeof omdb?.Title === "string" ? omdb.Title : null,
+    row.wikipedia_title
+    ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+
+  return normalizeSearchValue(Array.from(new Set(searchParts)).join(" "));
+}
+
 export function enrichRows(rows: ReportRow[]): ReportRow[] {
   return rows.map((row) => {
     const year = parseMaybeNumber(row.year);
@@ -75,6 +165,10 @@ export function enrichRows(rows: ReportRow[]): ReportRow[] {
     const imdbRating = parseMaybeNumber(row.imdb_rating);
     const rtScore = parseMaybeNumber(row.rt_score);
     const plexRating = parseMaybeNumber(row.plex_rating);
+    const genre = firstString(row.genre, omdb?.Genre);
+    const director = firstString(row.director, omdb?.Director);
+    const actors = firstString(row.actors, omdb?.Actors);
+    const plot = firstString(row.plot, omdb?.Plot);
     const decade = year ? Math.floor(year / 10) * 10 : null;
     return {
       ...row,
@@ -85,8 +179,14 @@ export function enrichRows(rows: ReportRow[]): ReportRow[] {
       imdb_rating: imdbRating,
       rt_score: rtScore,
       plex_rating: plexRating,
+      genre,
+      director,
+      actors,
+      plot,
       decade,
-      decade_label: decade ? String(decade) : null
+      decade_label: decade ? String(decade) : null,
+      search_title: buildTitleSearchText(row, omdb),
+      search_all: buildSearchText(row, omdb, [genre, director, actors, plot])
     };
   });
 }
@@ -177,24 +277,146 @@ export function getDecisionTone(decision?: string | null) {
   return "neutral";
 }
 
-export function findDuplicates(rows: ReportRow[]) {
-  const counts = new Map<string, number>();
+export function buildReportRowKey(row: ReportRow) {
+  return String(
+    row.guid ??
+      row.file ??
+      row.imdb_id ??
+      [row.title, row.year, row.library].filter(Boolean).join("::")
+  );
+}
+
+export function filterReportRows(rows: ReportRow[], filters: ReportFilterOptions) {
+  const searchValue = normalizeSearchValue(filters.search);
+  const searchScope = filters.searchScope ?? "title";
+  const libraryFilter = String(filters.library || "").trim();
+  const decisionFilter = String(filters.decision || "").trim().toUpperCase();
+
+  return rows.filter((row) => {
+    const matchesLibrary =
+      !libraryFilter || (typeof row.library === "string" && row.library === libraryFilter);
+    const decision = String(row.decision || "").toUpperCase();
+    const matchesDecision = !decisionFilter || decision === decisionFilter;
+    const haystack =
+      searchScope === "title"
+        ? String(row.search_title ?? row.title ?? "")
+        : String(row.search_all ?? "");
+    const matchesSearch = !searchValue || haystack.includes(searchValue);
+    return matchesLibrary && matchesDecision && matchesSearch;
+  });
+}
+
+export function sumReportSizeGb(rows: ReportRow[]) {
+  return rows.reduce((total, row) => total + (parseMaybeNumber(row.file_size_gb) ?? 0), 0);
+}
+
+function duplicateRowOrder(left: ReportRow, right: ReportRow) {
+  const severity = (row: ReportRow) => {
+    const decision = String(row.decision || "").toUpperCase();
+    if (decision === "DELETE") return 0;
+    if (decision === "MAYBE") return 1;
+    if (decision === "KEEP") return 2;
+    return 3;
+  };
+  const severityDelta = severity(left) - severity(right);
+  if (severityDelta !== 0) {
+    return severityDelta;
+  }
+
+  const sizeDelta = (parseMaybeNumber(right.file_size_gb) ?? 0) - (parseMaybeNumber(left.file_size_gb) ?? 0);
+  if (sizeDelta !== 0) {
+    return sizeDelta;
+  }
+
+  return String(left.file || left.title || "").localeCompare(String(right.file || right.title || ""));
+}
+
+export function buildDuplicateGroups(rows: ReportRow[]): DuplicateGroup[] {
+  const grouped = new Map<string, ReportRow[]>();
   rows.forEach((row) => {
     const imdbId = typeof row.imdb_id === "string" ? row.imdb_id.trim().toLowerCase() : "";
     if (!imdbId) {
       return;
     }
-    counts.set(imdbId, (counts.get(imdbId) ?? 0) + 1);
+    const bucket = grouped.get(imdbId) ?? [];
+    bucket.push(row);
+    grouped.set(imdbId, bucket);
   });
-  return rows
-    .filter((row) => {
-      const imdbId = typeof row.imdb_id === "string" ? row.imdb_id.trim().toLowerCase() : "";
-      return imdbId && (counts.get(imdbId) ?? 0) > 1;
+
+  return Array.from(grouped.entries())
+    .filter(([, copies]) => copies.length > 1)
+    .map(([normalizedImdbId, copies]) => {
+      const orderedCopies = [...copies].sort(duplicateRowOrder);
+      const primaryRow = orderedCopies[0];
+      const omdb = parseOmdbJson(primaryRow);
+      const initialDecisionCounts: DuplicateGroup["decisionCounts"] = {
+        KEEP: 0,
+        MAYBE: 0,
+        DELETE: 0,
+        UNKNOWN: 0
+      };
+      const decisionCounts = orderedCopies.reduce(
+        (accumulator: DuplicateGroup["decisionCounts"], copy) => {
+          const decision = String(copy.decision || "UNKNOWN").toUpperCase();
+          if (decision === "KEEP" || decision === "MAYBE" || decision === "DELETE") {
+            accumulator[decision] += 1;
+          } else {
+            accumulator.UNKNOWN += 1;
+          }
+          return accumulator;
+        },
+        initialDecisionCounts
+      );
+      const pickMetric = (selector: (row: ReportRow) => unknown) => {
+        const found = orderedCopies
+          .map((copy) => parseMaybeNumber(selector(copy)))
+          .find((value): value is number => value !== null);
+        return found ?? null;
+      };
+      const libraries = new Set(
+        orderedCopies
+          .map((copy) => String(copy.library || "").trim())
+          .filter(Boolean)
+      );
+
+      return {
+        imdbId: String(primaryRow.imdb_id || normalizedImdbId),
+        imdbTitle:
+          firstString(
+            typeof omdb?.Title === "string" ? omdb.Title : null,
+            primaryRow.title,
+            orderedCopies.find((copy) => typeof copy.title === "string" && copy.title.trim())?.title
+          ) ?? String(primaryRow.imdb_id || normalizedImdbId),
+        year: primaryRow.year ?? null,
+        duplicateCount: orderedCopies.length,
+        libraryCount: libraries.size,
+        tone: decisionCounts.DELETE > 0 ? "delete" : "maybe",
+        decisionCounts,
+        imdbRating: pickMetric((row) => row.imdb_rating),
+        rtScore: pickMetric((row) => row.rt_score),
+        metacriticScore: pickMetric((row) => row.metacritic_score),
+        primaryRow,
+        copies: orderedCopies
+      } satisfies DuplicateGroup;
     })
-    .map((row) => ({
-      ...row,
-      dup_count: counts.get(String(row.imdb_id).trim().toLowerCase()) ?? 0
-    }));
+    .sort((left, right) => {
+      const toneWeight = (tone: DuplicateGroup["tone"]) => {
+        if (tone === "delete") return 0;
+        if (tone === "maybe") return 1;
+        return 2;
+      };
+      const toneDelta = toneWeight(left.tone) - toneWeight(right.tone);
+      if (toneDelta !== 0) {
+        return toneDelta;
+      }
+      if (right.duplicateCount !== left.duplicateCount) {
+        return right.duplicateCount - left.duplicateCount;
+      }
+      if (right.libraryCount !== left.libraryCount) {
+        return right.libraryCount - left.libraryCount;
+      }
+      return left.imdbTitle.localeCompare(right.imdbTitle);
+    })
 }
 
 export function filterMetadata(
@@ -219,8 +441,7 @@ export function filterMetadata(
 export function collectGenres(rows: ReportRow[]) {
   const counts = new Map<string, { keep: number; maybe: number; delete: number }>();
   rows.forEach((row) => {
-    const omdb = parseOmdbJson(row);
-    const rawGenre = typeof omdb?.Genre === "string" ? omdb.Genre : "";
+    const rawGenre = firstString(row.genre, parseOmdbJson(row)?.Genre) ?? "";
     const decision = String(row.decision || "").toUpperCase();
     rawGenre
       .split(",")
@@ -247,8 +468,7 @@ export function collectGenres(rows: ReportRow[]) {
 export function collectDirectors(rows: ReportRow[]) {
   const counts = new Map<string, { total: number; ratingTotal: number }>();
   rows.forEach((row) => {
-    const omdb = parseOmdbJson(row);
-    const rawDirector = typeof omdb?.Director === "string" ? omdb.Director : "";
+    const rawDirector = firstString(row.director, parseOmdbJson(row)?.Director) ?? "";
     const imdb = parseMaybeNumber(row.imdb_rating) ?? 0;
     rawDirector
       .split(",")
@@ -267,7 +487,6 @@ export function collectDirectors(rows: ReportRow[]) {
       total: value.total,
       mean: value.total ? value.ratingTotal / value.total : 0
     }))
-    .filter((item) => item.total >= 2)
     .sort((left, right) => right.mean - left.mean)
     .slice(0, 12);
 }

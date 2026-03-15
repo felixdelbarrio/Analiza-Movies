@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Analiza Movies
+Comment=Desktop-first cinematic control room for Plex and DLNA libraries.
+Exec=AnalizaMovies
+Icon=media-library-analyzer
+Terminal=false
+StartupWMClass=AnalizaMovies
+Categories=AudioVideo;Utility;

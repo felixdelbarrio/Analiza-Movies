@@ -22,17 +22,13 @@ const ChartCard = lazy(async () => {
 
 export function DashboardPage() {
   const { locale, t } = useI18n();
-  const { activeProfileId, config, preferences } = useAppContext();
+  const { activeProfileId, preferences } = useAppContext();
   const reportAllQuery = useReportAll(activeProfileId);
   const reportAll = reportAllQuery.data ?? [];
   const summary = useMemo(() => computeSummary(reportAll), [reportAll]);
   const selectedViews = useMemo(
     () => normalizeDashboardViews(preferences.dashboardViews),
     [preferences.dashboardViews]
-  );
-  const activeProfile = useMemo(
-    () => config?.profiles.find((profile) => profile.id === activeProfileId) ?? null,
-    [activeProfileId, config?.profiles]
   );
   const chartViews = useMemo(
     () =>
@@ -43,6 +39,10 @@ export function DashboardPage() {
       })),
     [locale, preferences.theme, reportAll, selectedViews, t]
   );
+  const titleUnitLabel = useMemo(
+    () => t("chart.metric.titles").toLocaleLowerCase(locale),
+    [locale, t]
+  );
 
   return (
     <div className="page-stack">
@@ -50,12 +50,6 @@ export function DashboardPage() {
         eyebrow={t("dashboard.hero.eyebrow")}
         title={t("dashboard.hero.title")}
         description={t("dashboard.hero.description")}
-        actions={
-          <div className="hero-badge">
-            <span>{t("dashboard.active_source")}</span>
-            <strong>{activeProfile ? activeProfile.name : t("app.default_profile")}</strong>
-          </div>
-        }
       />
 
       {reportAllQuery.isLoading ? (
@@ -96,22 +90,38 @@ export function DashboardPage() {
           <section className="kpi-grid">
             <KpiCard
               label={t("dashboard.kpi.catalog")}
-              value={formatCountSize(summary.totalCount, summary.totalSizeGb, locale, t)}
+              value={`${summary.totalSizeGb.toLocaleString(locale, {
+                minimumFractionDigits: 1,
+                maximumFractionDigits: 1
+              })} GB`}
+              detail={`${summary.totalCount.toLocaleString(locale)} ${titleUnitLabel}`}
             />
             <KpiCard
               label={t("decision.keep")}
               tone="keep"
-              value={formatCountSize(summary.keepCount, summary.keepSizeGb, locale, t)}
+              value={`${summary.keepSizeGb.toLocaleString(locale, {
+                minimumFractionDigits: 1,
+                maximumFractionDigits: 1
+              })} GB`}
+              detail={`${summary.keepCount.toLocaleString(locale)} ${titleUnitLabel}`}
             />
             <KpiCard
               label={t("decision.delete")}
               tone="delete"
-              value={formatCountSize(summary.deleteCount, summary.deleteSizeGb, locale, t)}
+              value={`${summary.deleteSizeGb.toLocaleString(locale, {
+                minimumFractionDigits: 1,
+                maximumFractionDigits: 1
+              })} GB`}
+              detail={`${summary.deleteCount.toLocaleString(locale)} ${titleUnitLabel}`}
             />
             <KpiCard
               label={t("decision.maybe")}
               tone="maybe"
-              value={formatCountSize(summary.maybeCount, summary.maybeSizeGb, locale, t)}
+              value={`${summary.maybeSizeGb.toLocaleString(locale, {
+                minimumFractionDigits: 1,
+                maximumFractionDigits: 1
+              })} GB`}
+              detail={`${summary.maybeCount.toLocaleString(locale)} ${titleUnitLabel}`}
             />
             <KpiCard
               label={t("dashboard.kpi.imdb_mean")}

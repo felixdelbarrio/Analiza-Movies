@@ -20,11 +20,37 @@ export interface ReportRow {
   poster_url?: string | null;
   trailer_url?: string | null;
   omdb_json?: string | null;
+  genre?: string | null;
+  director?: string | null;
+  actors?: string | null;
+  plot?: string | null;
   wikipedia_title?: string | null;
   wikidata_id?: string | null;
   decade?: number | null;
   decade_label?: string | null;
+  search_all?: string | null;
+  search_title?: string | null;
   [key: string]: unknown;
+}
+
+export interface DuplicateGroup {
+  imdbId: string;
+  imdbTitle: string;
+  year?: number | string | null;
+  duplicateCount: number;
+  libraryCount: number;
+  tone: "neutral" | "keep" | "maybe" | "delete";
+  decisionCounts: {
+    KEEP: number;
+    MAYBE: number;
+    DELETE: number;
+    UNKNOWN: number;
+  };
+  imdbRating: number | null;
+  rtScore: number | null;
+  metacriticScore: number | null;
+  primaryRow: ReportRow;
+  copies: ReportRow[];
 }
 
 export interface MetadataRow {
