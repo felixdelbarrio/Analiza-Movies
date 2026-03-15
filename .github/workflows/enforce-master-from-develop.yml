@@ -21,10 +21,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Fail if master is not fully contained in develop
+      - name: Fail if master has content not present in develop
         run: |
           git fetch origin master develop
-          if ! git merge-base --is-ancestor origin/master origin/develop; then
-            echo "ERROR: master has commits not in develop. Merge master into develop before merging to master."
+          if ! git diff --quiet origin/develop...origin/master; then
+            echo "ERROR: master contains changes not present in develop. Merge master into develop before merging to master."
             exit 1
           fi
