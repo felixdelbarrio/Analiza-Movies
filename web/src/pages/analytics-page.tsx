@@ -44,7 +44,7 @@ export function AnalyticsPage() {
     DASHBOARD_VIEWS[0]
   );
   const [search, setSearch] = useState("");
-  const [searchScope, setSearchScope] = useState<ReportSearchScope>("all");
+  const [searchScope, setSearchScope] = useState<ReportSearchScope>("title");
   const [libraryFilter, setLibraryFilter] = useState("");
   const [decisionFilter, setDecisionFilter] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -76,7 +76,9 @@ export function AnalyticsPage() {
     () => buildChartOption(selectedView, filteredRows, { locale, t }),
     [filteredRows, locale, preferences.theme, selectedView, t]
   );
-  const hasActiveFilters = Boolean(search.trim() || libraryFilter || decisionFilter);
+  const hasActiveFilters = Boolean(
+    search.trim() || libraryFilter || decisionFilter || searchScope !== "title"
+  );
 
   useEffect(() => {
     if (!DASHBOARD_VIEWS.includes(selectedView)) {
@@ -170,7 +172,7 @@ export function AnalyticsPage() {
                     role="tablist"
                     aria-label={t("library.search.scope")}
                   >
-                    {(["all", "title"] as const).map((scope) => (
+                    {(["title", "all"] as const).map((scope) => (
                       <button
                         key={scope}
                         className={searchScope === scope ? "is-active" : ""}
@@ -240,7 +242,7 @@ export function AnalyticsPage() {
                   disabled={!hasActiveFilters}
                   onClick={() => {
                     setSearch("");
-                    setSearchScope("all");
+                    setSearchScope("title");
                     setLibraryFilter("");
                     setDecisionFilter("");
                   }}

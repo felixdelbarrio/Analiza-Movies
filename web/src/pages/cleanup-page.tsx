@@ -11,6 +11,7 @@ import { useReportFiltered } from "../hooks/use-dashboard-data";
 import { translateDecision } from "../i18n/helpers";
 import { useI18n } from "../i18n/provider";
 import { runDeleteAction } from "../lib/api";
+import { getDecisionTone } from "../lib/data";
 import type { ReportRow } from "../lib/types";
 
 export function CleanupPage() {
@@ -131,12 +132,14 @@ export function CleanupPage() {
                   key: "imdb",
                   label: t("column.imdb"),
                   width: "10%",
+                  align: "center",
                   render: (row) => String(row.imdb_rating || t("app.empty_dash"))
                 },
                 {
                   key: "size",
                   label: t("column.size"),
                   width: "8%",
+                  align: "center",
                   render: (row) =>
                     row.file_size_gb
                       ? Number(row.file_size_gb).toLocaleString(locale, {
@@ -153,6 +156,7 @@ export function CleanupPage() {
                 }
               ]}
               onSelect={setSelectedIndex}
+              rowTone={(row) => getDecisionTone(row.decision)}
               rows={reportFiltered}
               selectedIndex={selectedIndex}
             />

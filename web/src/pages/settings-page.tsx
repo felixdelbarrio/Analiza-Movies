@@ -320,31 +320,79 @@ export function SettingsPage() {
         }
       >
         <div className="settings-preferences-grid">
-          <div className="settings-form-grid">
-            <label className="form-field">
-              <span>{t("locale.label")}</span>
-              <select
-                onChange={(event) => preferences.setLocale(event.target.value as typeof preferences.locale)}
-                value={preferences.locale}
-              >
-                {SUPPORTED_LOCALES.map((value) => (
-                  <option key={value} value={value}>
-                    {t(`locale.${value}`)}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <div className="settings-preference-stack">
+            <article className="settings-preference-card settings-preference-card--accent">
+              <div className="settings-preference-card__header">
+                <span>{t("settings.theme.label")}</span>
+                <strong>
+                  {preferences.theme === "aurora"
+                    ? t("theme.aurora")
+                    : t("theme.cinema")}
+                </strong>
+              </div>
+              <label className="form-field">
+                <select
+                  aria-label={t("settings.theme.label")}
+                  onChange={(event) => preferences.setTheme(event.target.value as "aurora" | "cinema")}
+                  value={preferences.theme}
+                >
+                  <option value="aurora">{t("theme.aurora")}</option>
+                  <option value="cinema">{t("theme.cinema")}</option>
+                </select>
+              </label>
+            </article>
 
-            <label className="form-field">
-              <span>{t("settings.theme.label")}</span>
-              <select
-                onChange={(event) => preferences.setTheme(event.target.value as "aurora" | "cinema")}
-                value={preferences.theme}
+            <article className="settings-preference-card">
+              <div className="settings-preference-card__header">
+                <span>{t("locale.label")}</span>
+                <strong>{t(`locale.${preferences.locale}`)}</strong>
+              </div>
+              <label className="form-field">
+                <select
+                  aria-label={t("locale.label")}
+                  onChange={(event) => preferences.setLocale(event.target.value as typeof preferences.locale)}
+                  value={preferences.locale}
+                >
+                  {SUPPORTED_LOCALES.map((value) => (
+                    <option key={value} value={value}>
+                      {t(`locale.${value}`)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </article>
+
+            <div className="settings-option-grid">
+              <label
+                className={`settings-option-card${
+                  preferences.numericFilters ? " is-active" : ""
+                }`}
               >
-                <option value="aurora">{t("theme.aurora")}</option>
-                <option value="cinema">{t("theme.cinema")}</option>
-              </select>
-            </label>
+                <div className="settings-option-card__copy">
+                  <strong>{t("settings.numeric_filters")}</strong>
+                </div>
+                <input
+                  checked={preferences.numericFilters}
+                  onChange={(event) => preferences.setNumericFilters(event.target.checked)}
+                  type="checkbox"
+                />
+              </label>
+
+              <label
+                className={`settings-option-card${
+                  preferences.chartThresholds ? " is-active" : ""
+                }`}
+              >
+                <div className="settings-option-card__copy">
+                  <strong>{t("settings.chart_thresholds")}</strong>
+                </div>
+                <input
+                  checked={preferences.chartThresholds}
+                  onChange={(event) => preferences.setChartThresholds(event.target.checked)}
+                  type="checkbox"
+                />
+              </label>
+            </div>
           </div>
 
           <div className="settings-dashboard-curation">
@@ -370,26 +418,6 @@ export function SettingsPage() {
                 );
               })}
             </div>
-          </div>
-
-          <div className="settings-toggle-row">
-            <label className="toggle-pill">
-              <input
-                checked={preferences.numericFilters}
-                onChange={(event) => preferences.setNumericFilters(event.target.checked)}
-                type="checkbox"
-              />
-              <span>{t("settings.numeric_filters")}</span>
-            </label>
-
-            <label className="toggle-pill">
-              <input
-                checked={preferences.chartThresholds}
-                onChange={(event) => preferences.setChartThresholds(event.target.checked)}
-                type="checkbox"
-              />
-              <span>{t("settings.chart_thresholds")}</span>
-            </label>
           </div>
         </div>
       </SectionCard>

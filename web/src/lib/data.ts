@@ -83,23 +83,74 @@ function firstString(...values: unknown[]) {
   return null;
 }
 
-function buildSearchText(row: ReportRow, metadata: Array<string | null>) {
+function normalizeSearchValue(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function collectSearchTerms(
+  value: unknown,
+  searchParts: string[],
+  seenObjects: WeakSet<object>
+) {
+  if (value === null || value === undefined) {
+    return;
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    const normalized = String(value).trim();
+    if (normalized && normalized !== "N/A") {
+      searchParts.push(normalized);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectSearchTerms(item, searchParts, seenObjects));
+    return;
+  }
+  if (typeof value === "object") {
+    if (seenObjects.has(value)) {
+      return;
+    }
+    seenObjects.add(value);
+    Object.values(value).forEach((item) => collectSearchTerms(item, searchParts, seenObjects));
+  }
+}
+
+function buildSearchText(
+  row: ReportRow,
+  omdb: Record<string, unknown> | null,
+  metadata: Array<string | null>
+) {
+  const searchParts: string[] = [];
+  const seenObjects = new WeakSet<object>();
+
+  Object.entries(row).forEach(([key, value]) => {
+    if (key === "omdb_json" || key === "search_all" || key === "search_title") {
+      return;
+    }
+    collectSearchTerms(value, searchParts, seenObjects);
+  });
+  collectSearchTerms(omdb, searchParts, seenObjects);
+  collectSearchTerms(metadata, searchParts, seenObjects);
+
+  return normalizeSearchValue(Array.from(new Set(searchParts)).join(" "));
+}
+
+function buildTitleSearchText(row: ReportRow, omdb: Record<string, unknown> | null) {
   const searchParts = [
     row.title,
-    row.library,
-    row.file,
-    row.imdb_id,
-    row.year,
-    row.decision,
-    row.reason,
-    row.wikipedia_title,
-    ...metadata
-  ]
-    .filter((value): value is string | number => typeof value === "string" || typeof value === "number")
-    .map((value) => String(value).trim())
-    .filter(Boolean);
+    typeof omdb?.Title === "string" ? omdb.Title : null,
+    row.wikipedia_title
+    ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
 
-  return searchParts.join(" ").toLowerCase();
+  return normalizeSearchValue(Array.from(new Set(searchParts)).join(" "));
 }
 
 export function enrichRows(rows: ReportRow[]): ReportRow[] {
@@ -134,8 +185,8 @@ export function enrichRows(rows: ReportRow[]): ReportRow[] {
       plot,
       decade,
       decade_label: decade ? String(decade) : null,
-      search_title: String(row.title || "").trim().toLowerCase(),
-      search_all: buildSearchText(row, [genre, director, actors, plot])
+      search_title: buildTitleSearchText(row, omdb),
+      search_all: buildSearchText(row, omdb, [genre, director, actors, plot])
     };
   });
 }
@@ -236,8 +287,8 @@ export function buildReportRowKey(row: ReportRow) {
 }
 
 export function filterReportRows(rows: ReportRow[], filters: ReportFilterOptions) {
-  const searchValue = filters.search.trim().toLowerCase();
-  const searchScope = filters.searchScope ?? "all";
+  const searchValue = normalizeSearchValue(filters.search);
+  const searchScope = filters.searchScope ?? "title";
   const libraryFilter = String(filters.library || "").trim();
   const decisionFilter = String(filters.decision || "").trim().toUpperCase();
 
@@ -248,8 +299,8 @@ export function filterReportRows(rows: ReportRow[], filters: ReportFilterOptions
     const matchesDecision = !decisionFilter || decision === decisionFilter;
     const haystack =
       searchScope === "title"
-        ? String(row.search_title ?? row.title ?? "").toLowerCase()
-        : String(row.search_all ?? "").toLowerCase();
+        ? String(row.search_title ?? row.title ?? "")
+        : String(row.search_all ?? "");
     const matchesSearch = !searchValue || haystack.includes(searchValue);
     return matchesLibrary && matchesDecision && matchesSearch;
   });

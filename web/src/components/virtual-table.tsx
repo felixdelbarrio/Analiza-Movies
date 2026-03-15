@@ -25,6 +25,7 @@ interface VirtualTableProps<T> {
   onSelect: (index: number) => void;
   maxHeight?: number;
   fillHeight?: boolean;
+  variant?: "default" | "sheet";
   sortState?: VirtualTableSortState | null;
   onSortChange?: (sortState: VirtualTableSortState) => void;
   rowTone?: (row: T) => "neutral" | "keep" | "maybe" | "delete";
@@ -37,6 +38,7 @@ export function VirtualTable<T>({
   onSelect,
   maxHeight = 620,
   fillHeight = false,
+  variant = "default",
   sortState = null,
   onSortChange,
   rowTone
@@ -64,7 +66,9 @@ export function VirtualTable<T>({
   }
 
   return (
-    <div className={`virtual-table${fillHeight ? " virtual-table--fill" : ""}`}>
+    <div
+      className={`virtual-table virtual-table--${variant}${fillHeight ? " virtual-table--fill" : ""}`}
+    >
       <div className="virtual-table__header" style={{ gridTemplateColumns }}>
         {columns.map((column) => (
           column.sortable && onSortChange ? (
@@ -72,7 +76,7 @@ export function VirtualTable<T>({
               key={column.key}
               className={`virtual-table__sort${
                 sortState?.key === column.key ? " is-active" : ""
-              }`}
+              } virtual-table__sort--${column.align ?? "left"}`}
               onClick={() =>
                 onSortChange({
                   key: column.key,
@@ -96,7 +100,12 @@ export function VirtualTable<T>({
               )}
             </button>
           ) : (
-            <span key={column.key} className="virtual-table__header-label">
+            <span
+              key={column.key}
+              className={`virtual-table__header-label virtual-table__header-label--${
+                column.align ?? "left"
+              }`}
+            >
               {column.label}
             </span>
           )

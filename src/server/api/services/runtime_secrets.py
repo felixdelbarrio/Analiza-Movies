@@ -1,76 +1,60 @@
 from __future__ import annotations
 
-import json
+import logging
 import os
-from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Final
 
-from shared.runtime_profiles import DATA_DIR, SourceProfile
+import keyring  # type: ignore[import-untyped]
+from keyring.errors import KeyringError, PasswordDeleteError  # type: ignore[import-untyped]
 
-SECRETS_PATH = DATA_DIR / "runtime_secrets.json"
+from shared.runtime_profiles import SourceProfile
 
+SERVICE_NAME: Final = "analiza-movies"
+OMDB_ENTRY: Final = "omdb_api_keys"
+PROFILE_TOKEN_PREFIX: Final = "profile_token:"
+
+_UNSET = object()
 _LOCK = Lock()
-_PROFILE_TOKENS: dict[str, str] = {}
-_OMDB_API_KEYS: str | None = None
-_CACHE_LOADED = False
+_PROFILE_TOKENS: dict[str, str | None] = {}
+_OMDB_API_KEYS: str | None | object = _UNSET
+
+logger = logging.getLogger(__name__)
 
 
-def _read_store(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
+def _profile_entry(profile_id: str) -> str:
+    return f"{PROFILE_TOKEN_PREFIX}{profile_id}"
+
+
+def _read_secret(entry: str) -> str | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+        secret = keyring.get_password(SERVICE_NAME, entry)
+    except KeyringError:
+        logger.warning("No se pudo leer el secreto '%s' del keyring.", entry)
+        return None
+    clean_secret = str(secret or "").strip()
+    return clean_secret or None
 
 
-def _write_store(path: Path, *, omdb_api_keys: str | None, profile_tokens: dict[str, str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "omdb_api_keys": omdb_api_keys or "",
-        "profile_tokens": profile_tokens,
-    }
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _ensure_loaded_locked() -> None:
-    global _CACHE_LOADED, _OMDB_API_KEYS, _PROFILE_TOKENS
-    if _CACHE_LOADED:
-        return
-    payload = _read_store(SECRETS_PATH)
-    raw_tokens = payload.get("profile_tokens")
-    if isinstance(raw_tokens, dict):
-        _PROFILE_TOKENS = {
-            str(profile_id).strip(): str(token).strip()
-            for profile_id, token in raw_tokens.items()
-            if str(profile_id).strip() and str(token).strip()
-        }
-    else:
-        _PROFILE_TOKENS = {}
-    raw_omdb = str(payload.get("omdb_api_keys") or "").strip()
-    _OMDB_API_KEYS = raw_omdb or None
-    _CACHE_LOADED = True
-
-
-def _persist_locked() -> None:
-    _write_store(
-        SECRETS_PATH,
-        omdb_api_keys=_OMDB_API_KEYS,
-        profile_tokens=_PROFILE_TOKENS,
-    )
+def _write_secret(entry: str, value: str | None) -> None:
+    clean_value = str(value or "").strip()
+    try:
+        if clean_value:
+            keyring.set_password(SERVICE_NAME, entry, clean_value)
+            return
+        try:
+            keyring.delete_password(SERVICE_NAME, entry)
+        except PasswordDeleteError:
+            return
+    except KeyringError:
+        logger.warning("No se pudo persistir el secreto '%s' en el keyring.", entry)
 
 
 def reset_runtime_secrets_cache() -> None:
-    global _CACHE_LOADED, _OMDB_API_KEYS, _PROFILE_TOKENS
+    global _OMDB_API_KEYS
     with _LOCK:
-        _CACHE_LOADED = False
-        _OMDB_API_KEYS = None
-        _PROFILE_TOKENS = {}
+        _PROFILE_TOKENS.clear()
+        _OMDB_API_KEYS = _UNSET
 
 
 def remember_profile_token(profile_id: str | None, token: str | None) -> None:
@@ -79,35 +63,49 @@ def remember_profile_token(profile_id: str | None, token: str | None) -> None:
     if not clean_profile_id or not clean_token:
         return
     with _LOCK:
-        _ensure_loaded_locked()
         _PROFILE_TOKENS[clean_profile_id] = clean_token
-        _persist_locked()
+    _write_secret(_profile_entry(clean_profile_id), clean_token)
 
 
 def resolve_profile_token(profile: SourceProfile) -> str | None:
     direct_token = str(profile.plex_token or "").strip()
     if direct_token:
         return direct_token
+
+    clean_profile_id = str(profile.id or "").strip()
+    if not clean_profile_id:
+        return None
+
     with _LOCK:
-        _ensure_loaded_locked()
-        stored_token = _PROFILE_TOKENS.get(profile.id)
-    return None if stored_token is None else stored_token.strip() or None
+        if clean_profile_id in _PROFILE_TOKENS:
+            return _PROFILE_TOKENS[clean_profile_id]
+
+    stored_token = _read_secret(_profile_entry(clean_profile_id))
+    with _LOCK:
+        _PROFILE_TOKENS[clean_profile_id] = stored_token
+    return stored_token
 
 
 def remember_omdb_api_keys(value: str | None) -> None:
-    clean_value = str(value or "").strip()
+    global _OMDB_API_KEYS
+    clean_value = str(value or "").strip() or None
     with _LOCK:
-        global _OMDB_API_KEYS
-        _ensure_loaded_locked()
-        _OMDB_API_KEYS = clean_value or None
-        _persist_locked()
+        _OMDB_API_KEYS = clean_value
+    _write_secret(OMDB_ENTRY, clean_value)
 
 
 def resolve_omdb_api_keys() -> str:
+    global _OMDB_API_KEYS
     with _LOCK:
-        _ensure_loaded_locked()
         runtime_keys = _OMDB_API_KEYS
-    if runtime_keys:
+
+    if runtime_keys is _UNSET:
+        stored_keys = _read_secret(OMDB_ENTRY)
+        with _LOCK:
+            _OMDB_API_KEYS = stored_keys
+            runtime_keys = _OMDB_API_KEYS
+
+    if isinstance(runtime_keys, str) and runtime_keys:
         return runtime_keys
 
     env_value = str(os.getenv("OMDB_API_KEYS") or "").strip()
@@ -117,6 +115,7 @@ def resolve_omdb_api_keys() -> str:
     fallback_value = str(os.getenv("OMDB_API_KEY") or "").strip()
     if fallback_value:
         return fallback_value
+
     return ""
 
 

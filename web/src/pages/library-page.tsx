@@ -1,15 +1,21 @@
 import {
+  Download,
+  Image,
+  LayoutGrid,
+  Rows3,
+  Search
+} from "lucide-react";
+import {
   startTransition,
   useDeferredValue,
   useEffect,
   useMemo,
-  useState
+  useState,
+  type KeyboardEvent
 } from "react";
-import { Search } from "lucide-react";
 
 import { useAppContext } from "../app/use-app-context";
 import { MovieDetailModal } from "../components/movie-detail-modal";
-import { MovieDetailPanel } from "../components/movie-detail-panel";
 import { PageHero } from "../components/page-hero";
 import { PageState } from "../components/page-state";
 import { SectionCard } from "../components/section-card";
@@ -25,11 +31,14 @@ import {
   buildReportRowKey,
   filterReportRows,
   getDecisionTone,
+  getPoster,
   parseMaybeNumber,
   sumReportSizeGb,
   uniqueValues,
   type ReportSearchScope
 } from "../lib/data";
+import { downloadCsv } from "../lib/export";
+import { useStoredState } from "../lib/preferences";
 import type { ReportRow } from "../lib/types";
 
 const DECISION_ORDER: Record<string, number> = {
@@ -39,17 +48,219 @@ const DECISION_ORDER: Record<string, number> = {
   UNKNOWN: 3
 };
 
+type LibraryViewMode = "table" | "cards" | "poster";
+
+function formatSizeValue(
+  value: unknown,
+  locale: string,
+  unitLabel: string,
+  fallback: string
+) {
+  const size = parseMaybeNumber(value);
+  if (size === null) {
+    return fallback;
+  }
+  return `${size.toLocaleString(locale, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1
+  })} ${unitLabel}`;
+}
+
+function formatMetricValue(
+  value: unknown,
+  fallback: string,
+  options?: { suffix?: string; round?: boolean }
+) {
+  const numeric = parseMaybeNumber(value);
+  if (numeric === null) {
+    return fallback;
+  }
+  if (options?.round) {
+    return `${Math.round(numeric)}${options.suffix ?? ""}`;
+  }
+  if (options?.suffix) {
+    return `${numeric}${options.suffix}`;
+  }
+  return String(numeric);
+}
+
+function handleActivate(event: KeyboardEvent<HTMLElement>, onActivate: () => void) {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  event.preventDefault();
+  onActivate();
+}
+
+interface MetricChipProps {
+  label: string;
+  value: string;
+}
+
+function MetricChip({ label, value }: MetricChipProps) {
+  return (
+    <div className="library-metric-chip">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+interface PosterGalleryProps {
+  locale: string;
+  rows: ReportRow[];
+  onOpenDetail: (row: ReportRow) => void;
+  t: ReturnType<typeof useI18n>["t"];
+}
+
+function PosterGallery({ locale, rows, onOpenDetail, t }: PosterGalleryProps) {
+  if (!rows.length) {
+    return <div className="virtual-table__empty">{t("table.empty")}</div>;
+  }
+
+  return (
+    <div className="library-poster-grid">
+      {rows.map((row) => {
+        const tone = getDecisionTone(row.decision);
+        const poster = getPoster(row);
+        const subtitle = row.actors || row.director || row.genre || t("app.empty_dash");
+        return (
+          <article
+            key={buildReportRowKey(row)}
+            className="library-poster-card"
+            data-tone={tone}
+            onClick={() => onOpenDetail(row)}
+            onKeyDown={(event) => handleActivate(event, () => onOpenDetail(row))}
+            role="button"
+            tabIndex={0}
+          >
+            <div className="library-poster-card__poster">
+              {poster ? (
+                <img alt={String(row.title || t("detail.poster_alt"))} src={poster} />
+              ) : (
+                <span>{t("detail.poster_missing")}</span>
+              )}
+            </div>
+
+            <div className="library-poster-card__body">
+              <div className="library-poster-card__header">
+                <div className="library-poster-card__heading">
+                  <span className="library-poster-card__eyebrow">
+                    {row.library || t("detail.fallback.library")}
+                  </span>
+                  <h3>{row.title || t("app.empty_dash")}</h3>
+                  <p>{[row.year, row.imdb_id].filter(Boolean).join(" · ") || t("app.empty_dash")}</p>
+                </div>
+                <span className={`decision-chip decision-chip--${tone}`}>
+                  {translateDecision(String(row.decision || "UNKNOWN"), t)}
+                </span>
+              </div>
+
+              <div className="library-poster-card__metrics">
+                <MetricChip
+                  label={t("column.imdb")}
+                  value={formatMetricValue(row.imdb_rating, t("app.empty_dash"))}
+                />
+                <MetricChip
+                  label="RT"
+                  value={formatMetricValue(row.rt_score, t("app.empty_dash"), { suffix: "%" })}
+                />
+                <MetricChip
+                  label="MC"
+                  value={formatMetricValue(row.metacritic_score, t("app.empty_dash"), { round: true })}
+                />
+                <MetricChip
+                  label={t("detail.metric.size")}
+                  value={formatSizeValue(row.file_size_gb, locale, t("unit.gb"), t("app.empty_dash"))}
+                />
+              </div>
+
+              <p className="library-poster-card__summary">{subtitle}</p>
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+interface SignalCardGridProps {
+  locale: string;
+  rows: ReportRow[];
+  onOpenDetail: (row: ReportRow) => void;
+  t: ReturnType<typeof useI18n>["t"];
+}
+
+function SignalCardGrid({ locale, rows, onOpenDetail, t }: SignalCardGridProps) {
+  if (!rows.length) {
+    return <div className="virtual-table__empty">{t("table.empty")}</div>;
+  }
+
+  return (
+    <div className="library-signal-grid">
+      {rows.map((row) => {
+        const tone = getDecisionTone(row.decision);
+        return (
+          <article
+            key={buildReportRowKey(row)}
+            className="library-signal-card"
+            data-tone={tone}
+            onClick={() => onOpenDetail(row)}
+            onKeyDown={(event) => handleActivate(event, () => onOpenDetail(row))}
+            role="button"
+            tabIndex={0}
+          >
+            <div className="library-signal-card__header">
+              <div>
+                <span className="library-signal-card__eyebrow">
+                  {row.library || t("detail.fallback.library")}
+                </span>
+                <h3>{row.title || t("app.empty_dash")}</h3>
+                <p>{[row.year, row.imdb_id].filter(Boolean).join(" · ") || t("app.empty_dash")}</p>
+              </div>
+              <span className={`decision-chip decision-chip--${tone}`}>
+                {translateDecision(String(row.decision || "UNKNOWN"), t)}
+              </span>
+            </div>
+
+            <div className="library-signal-card__metrics">
+              <MetricChip
+                label={t("column.imdb")}
+                value={formatMetricValue(row.imdb_rating, t("app.empty_dash"))}
+              />
+              <MetricChip
+                label={t("detail.metric.size")}
+                value={formatSizeValue(row.file_size_gb, locale, t("unit.gb"), t("app.empty_dash"))}
+              />
+              <MetricChip
+                label={t("detail.director")}
+                value={String(row.director || t("app.empty_dash"))}
+              />
+            </div>
+
+            <div className="library-signal-card__footer">
+              <span>{t("detail.actors")}</span>
+              <strong>{String(row.actors || row.genre || t("app.empty_dash"))}</strong>
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 export function LibraryPage() {
   const { locale, t } = useI18n();
   const { activeProfileId } = useAppContext();
   const reportAllQuery = useReportAll(activeProfileId);
   const reportAll = reportAllQuery.data ?? [];
   const [search, setSearch] = useState("");
-  const [searchScope, setSearchScope] = useState<ReportSearchScope>("all");
+  const [searchScope, setSearchScope] = useState<ReportSearchScope>("title");
   const [libraryFilter, setLibraryFilter] = useState("");
   const [decisionFilter, setDecisionFilter] = useState("");
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
+  const [viewMode, setViewMode] = useStoredState<LibraryViewMode>("am.library.view", "table");
   const [sortState, setSortState] = useState<VirtualTableSortState>({
     key: "title",
     direction: "asc"
@@ -66,6 +277,18 @@ export function LibraryPage() {
         searchScope
       }),
     [decisionFilter, deferredSearch, libraryFilter, reportAll, searchScope]
+  );
+  const fullSearchRows = useMemo(
+    () =>
+      deferredSearch.trim()
+        ? filterReportRows(reportAll, {
+            decision: decisionFilter,
+            library: libraryFilter,
+            search: deferredSearch,
+            searchScope: "all"
+          })
+        : filteredRows,
+    [decisionFilter, deferredSearch, filteredRows, libraryFilter, reportAll]
   );
   const sortedRows = useMemo(() => {
     const multiplier = sortState.direction === "asc" ? 1 : -1;
@@ -109,10 +332,7 @@ export function LibraryPage() {
       }
     });
   }, [filteredRows, locale, sortState]);
-  const visibleSizeGb = useMemo(
-    () => sumReportSizeGb(sortedRows),
-    [sortedRows]
-  );
+  const visibleSizeGb = useMemo(() => sumReportSizeGb(sortedRows), [sortedRows]);
   const activeSortLabel = useMemo(() => {
     const keyToLabel: Record<string, string> = {
       title: t("column.title"),
@@ -124,6 +344,33 @@ export function LibraryPage() {
     };
     return keyToLabel[sortState.key] ?? t("column.title");
   }, [sortState.key, t]);
+  const searchAssistVisible =
+    searchScope === "title" &&
+    deferredSearch.trim().length > 0 &&
+    fullSearchRows.length > filteredRows.length;
+
+  const exportAllColumns = useMemo(
+    () => [
+      { header: t("column.title"), value: (row: ReportRow) => row.title },
+      { header: t("column.year"), value: (row: ReportRow) => row.year },
+      { header: t("column.library"), value: (row: ReportRow) => row.library },
+      {
+        header: t("column.decision"),
+        value: (row: ReportRow) => translateDecision(String(row.decision || "UNKNOWN"), t)
+      },
+      { header: t("column.imdb_id"), value: (row: ReportRow) => row.imdb_id },
+      { header: t("column.imdb"), value: (row: ReportRow) => row.imdb_rating },
+      { header: "RT", value: (row: ReportRow) => row.rt_score },
+      { header: "Metacritic", value: (row: ReportRow) => row.metacritic_score },
+      { header: t("column.size"), value: (row: ReportRow) => row.file_size_gb },
+      { header: t("detail.genre"), value: (row: ReportRow) => row.genre },
+      { header: t("detail.director"), value: (row: ReportRow) => row.director },
+      { header: t("detail.actors"), value: (row: ReportRow) => row.actors },
+      { header: t("detail.plot"), value: (row: ReportRow) => row.plot },
+      { header: t("column.route"), value: (row: ReportRow) => row.file }
+    ],
+    [t]
+  );
 
   useEffect(() => {
     if (!sortedRows.length) {
@@ -152,7 +399,9 @@ export function LibraryPage() {
     [selectedRowKey, sortedRows]
   );
   const row = sortedRows[selectedIndex] ?? sortedRows[0] ?? null;
-  const hasActiveFilters = Boolean(search.trim() || libraryFilter || decisionFilter);
+  const hasActiveFilters = Boolean(
+    search.trim() || libraryFilter || decisionFilter || searchScope !== "title"
+  );
 
   function selectRow(current: ReportRow) {
     setSelectedRowKey(buildReportRowKey(current));
@@ -161,6 +410,14 @@ export function LibraryPage() {
   function openDetail(current: ReportRow) {
     selectRow(current);
     setDetailModalOpen(true);
+  }
+
+  function exportRows(rows: ReportRow[], scope: "visible" | "all") {
+    downloadCsv(
+      `catalog-${scope}-${new Date().toISOString().slice(0, 10)}.csv`,
+      exportAllColumns,
+      rows
+    );
   }
 
   return (
@@ -206,10 +463,7 @@ export function LibraryPage() {
 
       {!reportAllQuery.isLoading && !reportAllQuery.error && reportAll.length ? (
         <>
-          <SectionCard
-            title={t("library.filters.title")}
-            eyebrow={t("library.filters.eyebrow")}
-          >
+          <SectionCard title={t("library.filters.title")} eyebrow={t("library.filters.eyebrow")}>
             <div className="library-toolbar">
               <div className="library-toolbar__search">
                 <label className="search-field search-field--toolbar">
@@ -224,8 +478,9 @@ export function LibraryPage() {
                     value={search}
                   />
                 </label>
+
                 <div className="scope-switch" role="tablist" aria-label={t("library.search.scope")}>
-                  {(["all", "title"] as const).map((scope) => (
+                  {(["title", "all"] as const).map((scope) => (
                     <button
                       key={scope}
                       className={searchScope === scope ? "is-active" : ""}
@@ -238,6 +493,24 @@ export function LibraryPage() {
                     </button>
                   ))}
                 </div>
+
+                {searchAssistVisible ? (
+                  <div className="library-search-assist">
+                    <p>
+                      {t("library.search.assist", {
+                        visible: filteredRows.length,
+                        total: fullSearchRows.length
+                      })}
+                    </p>
+                    <button
+                      className="inline-link"
+                      onClick={() => setSearchScope("all")}
+                      type="button"
+                    >
+                      {t("library.search.try_all")}
+                    </button>
+                  </div>
+                ) : null}
               </div>
 
               <label className="form-field form-field--compact">
@@ -296,7 +569,7 @@ export function LibraryPage() {
                     setSearch("");
                     setLibraryFilter("");
                     setDecisionFilter("");
-                    setSearchScope("all");
+                    setSearchScope("title");
                   }}
                   type="button"
                 >
@@ -306,18 +579,74 @@ export function LibraryPage() {
             </div>
           </SectionCard>
 
-          <div className="split-layout split-layout--library">
-            <SectionCard
-              title={t("library.catalog.title", { count: sortedRows.length })}
-              eyebrow={t("library.catalog.eyebrow")}
-              className="split-layout__main library-table-card"
-            >
+          <SectionCard
+            title={t("library.catalog.title", { count: sortedRows.length })}
+            eyebrow={t("library.catalog.eyebrow")}
+            className="library-catalog-card"
+            actions={
+              <div className="inline-actions">
+                <div
+                  className="scope-switch scope-switch--compact"
+                  role="tablist"
+                  aria-label={t("library.view.label")}
+                >
+                  <button
+                    className={viewMode === "table" ? "is-active" : ""}
+                    onClick={() => setViewMode("table")}
+                    type="button"
+                  >
+                    <Rows3 size={16} />
+                    {t("library.view.table")}
+                  </button>
+                  <button
+                    className={viewMode === "cards" ? "is-active" : ""}
+                    onClick={() => setViewMode("cards")}
+                    type="button"
+                  >
+                    <LayoutGrid size={16} />
+                    {t("library.view.cards")}
+                  </button>
+                  <button
+                    className={viewMode === "poster" ? "is-active" : ""}
+                    onClick={() => setViewMode("poster")}
+                    type="button"
+                  >
+                    <Image size={16} />
+                    {t("library.view.poster")}
+                  </button>
+                </div>
+
+                {hasActiveFilters ? (
+                  <button
+                    className="secondary-button"
+                    onClick={() => exportRows(reportAll, "all")}
+                    type="button"
+                  >
+                    <Download size={16} />
+                    {t("app.action.export_all_csv")}
+                  </button>
+                ) : null}
+
+                <button
+                  className="secondary-button"
+                  onClick={() => exportRows(sortedRows, "visible")}
+                  type="button"
+                >
+                  <Download size={16} />
+                  {hasActiveFilters
+                    ? t("app.action.export_visible_csv")
+                    : t("app.action.export_csv")}
+                </button>
+              </div>
+            }
+          >
+            {viewMode === "table" ? (
               <VirtualTable<ReportRow>
                 columns={[
                   {
                     key: "title",
                     label: t("column.title"),
-                    width: "36%",
+                    width: "28%",
                     sortable: true,
                     render: (current) => (
                       <button
@@ -342,14 +671,15 @@ export function LibraryPage() {
                   {
                     key: "year",
                     label: t("column.year"),
-                    width: "10%",
+                    width: "8%",
+                    align: "center",
                     sortable: true,
                     render: (current) => String(current.year || t("app.empty_dash"))
                   },
                   {
                     key: "library",
                     label: t("column.library"),
-                    width: "22%",
+                    width: "16%",
                     sortable: true,
                     render: (current) => String(current.library || t("app.empty_dash"))
                   },
@@ -357,6 +687,7 @@ export function LibraryPage() {
                     key: "decision",
                     label: t("column.decision"),
                     width: "14%",
+                    align: "center",
                     sortable: true,
                     render: (current) => (
                       <span
@@ -371,16 +702,16 @@ export function LibraryPage() {
                   {
                     key: "imdb",
                     label: t("column.imdb"),
-                    width: "10%",
-                    align: "right",
+                    width: "8%",
+                    align: "center",
                     sortable: true,
                     render: (current) => String(current.imdb_rating || t("app.empty_dash"))
                   },
                   {
                     key: "size",
                     label: t("column.size"),
-                    width: "8%",
-                    align: "right",
+                    width: "10%",
+                    align: "center",
                     sortable: true,
                     render: (current) =>
                       current.file_size_gb
@@ -389,22 +720,33 @@ export function LibraryPage() {
                             maximumFractionDigits: 1
                           })
                         : t("app.empty_dash")
+                  },
+                  {
+                    key: "director",
+                    label: t("detail.director"),
+                    width: "16%",
+                    render: (current) => String(current.director || t("app.empty_dash"))
                   }
                 ]}
-                fillHeight
+                maxHeight={780}
                 onSelect={(index) => selectRow(sortedRows[index])}
                 onSortChange={setSortState}
                 rowTone={(current) => getDecisionTone(current.decision)}
                 rows={sortedRows}
                 selectedIndex={selectedIndex}
                 sortState={sortState}
+                variant="sheet"
               />
-            </SectionCard>
+            ) : null}
 
-            <div className="split-layout__aside library-detail-panel">
-              <MovieDetailPanel row={row} />
-            </div>
-          </div>
+            {viewMode === "cards" ? (
+              <SignalCardGrid locale={locale} onOpenDetail={openDetail} rows={sortedRows} t={t} />
+            ) : null}
+
+            {viewMode === "poster" ? (
+              <PosterGallery locale={locale} onOpenDetail={openDetail} rows={sortedRows} t={t} />
+            ) : null}
+          </SectionCard>
 
           <MovieDetailModal
             open={detailModalOpen}

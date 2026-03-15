@@ -28,6 +28,7 @@ setup(
         "requests>=2.31",
         "urllib3>=2.0",
         "typing_extensions>=4.9",
+        "keyring>=25.6",
         # App runtime
         "plexapi>=4.15",
         "pandas>=2.1",

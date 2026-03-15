@@ -15,7 +15,7 @@ from shared import runtime_profiles
 
 def _patch_runtime_config(tmp_path, monkeypatch: pytest.MonkeyPatch):
     config_path = tmp_path / "source_profiles.json"
-    secrets_path = tmp_path / "runtime_secrets.json"
+    secrets_store: dict[str, str] = {}
 
     def _load():
         return runtime_profiles.load_runtime_config(config_path)
@@ -23,9 +23,20 @@ def _patch_runtime_config(tmp_path, monkeypatch: pytest.MonkeyPatch):
     def _save(config):
         return runtime_profiles.save_runtime_config(config, config_path)
 
+    def _read_secret(entry: str) -> str | None:
+        return secrets_store.get(entry)
+
+    def _write_secret(entry: str, value: str | None) -> None:
+        clean_value = str(value or "").strip()
+        if clean_value:
+            secrets_store[entry] = clean_value
+            return
+        secrets_store.pop(entry, None)
+
     monkeypatch.setattr(configuration_router, "load_runtime_config", _load)
     monkeypatch.setattr(configuration_router, "save_runtime_config", _save)
-    monkeypatch.setattr(runtime_secrets, "SECRETS_PATH", secrets_path)
+    monkeypatch.setattr(runtime_secrets, "_read_secret", _read_secret)
+    monkeypatch.setattr(runtime_secrets, "_write_secret", _write_secret)
     runtime_secrets.reset_runtime_secrets_cache()
     return config_path
 
