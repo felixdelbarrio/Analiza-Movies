@@ -23,6 +23,7 @@ from server.api.services.runtime_secrets import (
     has_omdb_api_keys,
     remember_omdb_api_keys,
     remember_profile_token,
+    resolve_profile_token,
 )
 from shared.runtime_profiles import (
     RuntimeConfig,
@@ -98,8 +99,14 @@ def save_profile(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         plex_token=incoming_plex_token,
         profile_id=data.get("id"),
     )
-    if incoming_plex_token is not None:
-        remember_profile_token(profile.id, incoming_plex_token)
+    if source_type == "plex":
+        resolved_token = incoming_plex_token or resolve_profile_token(profile)
+        if not resolved_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Vincula Plex y autoriza el servidor antes de guardarlo.",
+            )
+        remember_profile_token(profile.id, resolved_token)
 
     config = load_runtime_config()
     existing = config.get_profile(profile.id)

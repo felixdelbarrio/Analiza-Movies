@@ -378,7 +378,6 @@ textarea {
 }
 
 .kpi-grid,
-.settings-grid,
 .chart-grid,
 .insight-grid,
 .profile-grid {
@@ -961,6 +960,56 @@ select[multiple] {
   max-width: none;
 }
 
+.duplicate-glance-grid,
+.settings-overview-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.duplicate-search {
+  width: min(360px, 100%);
+}
+
+.duplicate-imdb-id {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.9rem;
+  letter-spacing: 0.04em;
+}
+
+.duplicate-title-cell,
+.duplicate-count-cell {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.duplicate-title-cell strong,
+.duplicate-count-cell strong {
+  font-size: 1rem;
+}
+
+.duplicate-imdb-id,
+.duplicate-title-cell strong,
+.duplicate-title-cell small,
+.duplicate-count-cell strong,
+.duplicate-count-cell small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.duplicate-title-cell small,
+.duplicate-count-cell small,
+.settings-section-copy p,
+.settings-helper,
+.settings-profile-card small,
+.source-auth-card__copy p {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .detail-panel {
   display: grid;
   gap: 1.1rem;
@@ -1157,10 +1206,302 @@ select[multiple] {
   max-height: 320px;
 }
 
+.duplicate-detail-panel {
+  gap: 1.3rem;
+}
+
+.duplicate-detail-panel__summary {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.duplicate-detail-panel__section {
+  display: grid;
+  gap: 1rem;
+}
+
+.duplicate-detail-panel__section-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: end;
+}
+
+.duplicate-detail-panel__section-header span,
+.settings-section-copy span,
+.source-auth-card__copy span {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  font-size: 0.72rem;
+}
+
+.duplicate-detail-panel__section-header h4,
+.source-auth-card__copy h3 {
+  margin: 0.28rem 0 0;
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+}
+
+.duplicate-detail-panel__section-header p {
+  margin: 0;
+  max-width: 280px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.duplicate-route-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.duplicate-route {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+}
+
+.duplicate-route--keep {
+  background: linear-gradient(120deg, rgba(105, 210, 157, 0.08), rgba(255, 255, 255, 0.02));
+}
+
+.duplicate-route--maybe {
+  background: linear-gradient(120deg, rgba(240, 191, 98, 0.11), rgba(255, 255, 255, 0.02));
+}
+
+.duplicate-route--delete {
+  background: linear-gradient(120deg, rgba(255, 122, 122, 0.14), rgba(255, 255, 255, 0.02));
+}
+
+.duplicate-route__meta,
+.settings-profile-card__head,
+.settings-profile-card__badges,
+.source-auth-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.duplicate-route__library {
+  font-weight: 600;
+}
+
+.duplicate-route__facts {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.duplicate-route__path {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.duplicate-route__path span {
+  min-width: 0;
+  word-break: break-word;
+  line-height: 1.55;
+}
+
 .settings-stack,
 .log-stack {
   display: grid;
   gap: 1rem;
+}
+
+.settings-preferences-grid,
+.source-control-layout,
+.settings-connector-card {
+  display: grid;
+  gap: 1rem;
+}
+
+.settings-preferences-grid {
+  grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.2fr);
+}
+
+.settings-form-grid {
+  display: grid;
+  gap: 0.9rem;
+  align-content: start;
+}
+
+.settings-dashboard-curation {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(circle at top left, rgba(113, 213, 255, 0.12), transparent 46%),
+    var(--panel-solid);
+}
+
+.settings-section-copy {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.settings-section-copy p,
+.source-auth-card__copy p {
+  margin: 0;
+}
+
+.dashboard-chip-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.dashboard-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  cursor: pointer;
+  transition: 0.18s ease;
+  text-align: left;
+}
+
+.dashboard-chip.is-active {
+  border-color: rgba(113, 213, 255, 0.28);
+  background:
+    linear-gradient(135deg, rgba(113, 213, 255, 0.16), rgba(127, 230, 189, 0.1)),
+    rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 0 0 1px rgba(113, 213, 255, 0.18);
+}
+
+.dashboard-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.settings-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  grid-column: 1 / -1;
+}
+
+.settings-state-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.48rem 0.78rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.76rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.settings-state-pill--accent {
+  color: var(--accent);
+  border-color: rgba(113, 213, 255, 0.22);
+  background: rgba(113, 213, 255, 0.08);
+}
+
+.source-control-layout {
+  grid-template-columns: minmax(0, 1.15fr) minmax(340px, 0.95fr);
+  align-items: start;
+}
+
+.source-registry,
+.source-workbench {
+  display: grid;
+  gap: 1rem;
+}
+
+.source-auth-card {
+  padding: 1rem 1.05rem;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(140deg, rgba(113, 213, 255, 0.08), rgba(127, 230, 189, 0.07)),
+    var(--panel-solid);
+  align-items: flex-start;
+}
+
+.source-auth-card--pending {
+  background:
+    linear-gradient(140deg, rgba(240, 191, 98, 0.16), rgba(255, 255, 255, 0.03)),
+    var(--panel-solid);
+}
+
+.source-auth-card--error {
+  background:
+    linear-gradient(140deg, rgba(255, 122, 122, 0.18), rgba(255, 255, 255, 0.03)),
+    var(--panel-solid);
+}
+
+.source-auth-card__copy {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.settings-profile-card {
+  position: relative;
+}
+
+.settings-profile-card p,
+.settings-profile-card small {
+  margin: 0;
+}
+
+.settings-profile-card__badges {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.settings-mini-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.24rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.settings-empty-card {
+  place-content: center;
+  min-height: 180px;
+}
+
+.settings-connector-card {
+  grid-template-columns: minmax(0, 0.9fr) minmax(280px, 1.1fr);
+  align-items: start;
+}
+
+.settings-connector-card__form {
+  display: grid;
+  gap: 1rem;
+}
+
+.settings-helper {
+  margin: 0;
+}
+
+.settings-helper--error {
+  color: var(--danger);
 }
 
 .run-console {
@@ -1203,10 +1544,6 @@ select[multiple] {
   line-height: 1.45;
 }
 
-.settings-grid {
-  grid-template-columns: 1.1fr 1fr;
-}
-
 .log-stack pre {
   margin: 0;
   padding: 1rem;
@@ -1242,12 +1579,14 @@ select[multiple] {
 
   .page-hero,
   .split-layout,
-  .settings-grid,
   .filter-grid,
   .analytics-picker,
   .analytics-toolbar,
   .library-toolbar,
-  .library-toolbar__metrics {
+  .library-toolbar__metrics,
+  .settings-preferences-grid,
+  .source-control-layout,
+  .settings-connector-card {
     grid-template-columns: 1fr;
   }
 
@@ -1262,6 +1601,17 @@ select[multiple] {
   .detail-panel__hero,
   .detail-metrics-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .duplicate-detail-panel__section-header,
+  .source-auth-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .duplicate-detail-panel__section-header p {
+    max-width: none;
+    text-align: left;
   }
 
   .virtual-table__header,
@@ -1288,5 +1638,9 @@ select[multiple] {
 
   .scope-switch button {
     flex: 1;
+  }
+
+  .duplicate-route__facts {
+    grid-template-columns: 1fr;
   }
 }

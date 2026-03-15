@@ -3,19 +3,10 @@ import type { EChartsOption } from "echarts";
 import type { Translator } from "../i18n/catalog";
 import { translateDecision } from "../i18n/helpers";
 import { collectDirectors, collectGenres, collectTitleWords, parseMaybeNumber } from "./data";
+import { readThemeTokens, type ThemeTokens } from "./theme";
 import type { DashboardViewKey, ReportRow } from "./types";
 
-interface ChartTheme {
-  text: string;
-  muted: string;
-  line: string;
-  panel: string;
-  accent: string;
-  accent2: string;
-  keep: string;
-  maybe: string;
-  danger: string;
-}
+type ChartTheme = ThemeTokens;
 
 type ScatterValue = [number, number, string, string];
 type WasteValue = [number, number, number, string];
@@ -36,26 +27,8 @@ interface ChartIntl {
   t: Translator;
 }
 
-function readCssVar(name: string, fallback: string) {
-  if (typeof window === "undefined") {
-    return fallback;
-  }
-  const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return value || fallback;
-}
-
 function chartTheme(): ChartTheme {
-  return {
-    text: readCssVar("--text", "#edf2f7"),
-    muted: readCssVar("--muted", "#99a7bd"),
-    line: readCssVar("--line", "rgba(158, 179, 209, 0.14)"),
-    panel: readCssVar("--panel-solid", "#101a2a"),
-    accent: readCssVar("--accent", "#71d5ff"),
-    accent2: readCssVar("--accent-2", "#7fe6bd"),
-    keep: readCssVar("--keep", "#69d29d"),
-    maybe: readCssVar("--warn", "#f0bf62"),
-    danger: readCssVar("--danger", "#ff7a7a")
-  };
+  return readThemeTokens();
 }
 
 function decisionColors(theme: ChartTheme): Record<string, string> {
@@ -103,7 +76,7 @@ function tooltipCard(theme: ChartTheme, title: string, rows: Array<{ label: stri
     .map(
       (row) =>
         `<div style="display:flex;justify-content:space-between;gap:16px;align-items:center;">
-          <span style="display:inline-flex;align-items:center;gap:8px;color:${theme.muted};">
+          <span style="display:inline-flex;align-items:center;gap:8px;color:${theme.tooltipMuted};">
             ${
               row.color
                 ? `<span style="width:10px;height:10px;border-radius:999px;background:${row.color};display:inline-block;"></span>`
@@ -111,15 +84,30 @@ function tooltipCard(theme: ChartTheme, title: string, rows: Array<{ label: stri
             }
             ${escapeHtml(row.label)}
           </span>
-          <strong style="color:${theme.text};font-weight:700;">${escapeHtml(row.value)}</strong>
+          <strong style="color:${theme.tooltipText};font-weight:700;">${escapeHtml(row.value)}</strong>
         </div>`
     )
     .join("");
 
   return `<div style="display:grid;gap:10px;min-width:220px;">
-    <div style="font-size:13px;font-weight:700;color:${theme.text};">${escapeHtml(title)}</div>
+    <div style="font-size:13px;font-weight:700;color:${theme.tooltipText};">${escapeHtml(title)}</div>
     <div style="display:grid;gap:6px;">${body}</div>
   </div>`;
+}
+
+function buildTooltip(theme: ChartTheme, option: Record<string, unknown> = {}) {
+  return {
+    backgroundColor: theme.tooltipBg,
+    borderColor: theme.tooltipBorder,
+    borderWidth: 1,
+    padding: 12,
+    textStyle: {
+      color: theme.tooltipText,
+      fontFamily: "Space Grotesk"
+    },
+    extraCssText: `border-radius:18px;box-shadow:${theme.tooltipShadow};backdrop-filter:blur(18px);`,
+    ...option
+  };
 }
 
 function firstTooltipParam(params: unknown) {
@@ -149,14 +137,7 @@ function baseChart(): EChartsOption {
     animationDurationUpdate: 260,
     animationEasing: "cubicOut",
     textStyle: { color: theme.text, fontFamily: "Space Grotesk" },
-    tooltip: {
-      trigger: "axis",
-      backgroundColor: theme.panel,
-      borderColor: theme.line,
-      borderWidth: 1,
-      padding: 12,
-      textStyle: { color: theme.text }
-    },
+    tooltip: buildTooltip(theme, { trigger: "axis" }),
     grid: { top: 64, left: 50, right: 28, bottom: 48, containLabel: true },
     xAxis: {
       axisLine: { show: false },

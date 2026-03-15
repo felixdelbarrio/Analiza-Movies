@@ -9,11 +9,13 @@ from fastapi.testclient import TestClient
 from backend.dlna_discovery import DLNADevice
 from server.api.app import create_app
 import server.api.routers.configuration as configuration_router
+from server.api.services import runtime_secrets
 from shared import runtime_profiles
 
 
-def _patch_runtime_config(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _patch_runtime_config(tmp_path, monkeypatch: pytest.MonkeyPatch):
     config_path = tmp_path / "source_profiles.json"
+    secrets_path = tmp_path / "runtime_secrets.json"
 
     def _load():
         return runtime_profiles.load_runtime_config(config_path)
@@ -23,10 +25,13 @@ def _patch_runtime_config(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(configuration_router, "load_runtime_config", _load)
     monkeypatch.setattr(configuration_router, "save_runtime_config", _save)
+    monkeypatch.setattr(runtime_secrets, "SECRETS_PATH", secrets_path)
+    runtime_secrets.reset_runtime_secrets_cache()
+    return config_path
 
 
 def test_config_profile_roundtrip_and_run(monkeypatch, tmp_path):
-    _patch_runtime_config(tmp_path, monkeypatch)
+    config_path = _patch_runtime_config(tmp_path, monkeypatch)
     monkeypatch.setattr(
         configuration_router,
         "start_profile_run",
@@ -62,6 +67,14 @@ def test_config_profile_roundtrip_and_run(monkeypatch, tmp_path):
     omdb_res = client.put("/config/state", json={"omdb_api_keys": "key-a,key-b"})
     assert omdb_res.status_code == 200
     assert omdb_res.json()["has_omdb_api_keys"] is True
+
+    runtime_secrets.reset_runtime_secrets_cache()
+    reloaded_profile = runtime_profiles.load_runtime_config(config_path).get_profile(
+        "plex-machine-a"
+    )
+    assert reloaded_profile is not None
+    assert runtime_secrets.resolve_profile_token(reloaded_profile) == "secret-token"
+    assert runtime_secrets.resolve_omdb_api_keys() == "key-a,key-b"
 
     run_res = client.post("/config/run", json={"profile_id": "plex-machine-a"})
     assert run_res.status_code == 200
@@ -156,6 +169,30 @@ def test_config_discovery_endpoints(monkeypatch, tmp_path):
     assert plex_res.status_code == 200
     assert plex_res.json()["auth_complete"] is True
     assert plex_res.json()["servers"][0]["plex_token"] is None
+
+
+def test_save_profile_requires_plex_token_or_link(monkeypatch, tmp_path):
+    _patch_runtime_config(tmp_path, monkeypatch)
+
+    client = TestClient(create_app())
+
+    save_res = client.post(
+        "/config/profiles",
+        json={
+            "profile": {
+                "source_type": "plex",
+                "name": "Plex Invitados",
+                "host": "192.168.1.50",
+                "port": 32400,
+                "base_url": "http://192.168.1.50",
+                "machine_identifier": "machine-c",
+            },
+            "set_active": True,
+        },
+    )
+
+    assert save_res.status_code == 400
+    assert "Plex" in save_res.json()["detail"]
 
 
 def test_run_monitor_endpoints(monkeypatch, tmp_path):
