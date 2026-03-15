@@ -8,6 +8,7 @@ import type { ReportRow } from "../lib/types";
 
 interface MovieDetailPanelProps {
   row?: ReportRow | null;
+  variant?: "panel" | "modal";
 }
 
 function metric(label: string, value: string | number | null | undefined, fallback: string) {
@@ -19,7 +20,7 @@ function metric(label: string, value: string | number | null | undefined, fallba
   );
 }
 
-export function MovieDetailPanel({ row }: MovieDetailPanelProps) {
+export function MovieDetailPanel({ row, variant = "panel" }: MovieDetailPanelProps) {
   const { locale, t } = useI18n();
   if (!row) {
     return (
@@ -37,68 +38,96 @@ export function MovieDetailPanel({ row }: MovieDetailPanelProps) {
   const tone = getDecisionTone(row.decision);
 
   return (
-    <article className={`detail-panel detail-panel--${tone}`}>
-      <div className="detail-panel__poster">
-        {poster ? <img alt={String(row.title || t("detail.poster_alt"))} src={poster} /> : <span>{t("detail.poster_missing")}</span>}
-      </div>
-
-      <div className="detail-panel__body">
-        <div className="detail-panel__header">
-          <div>
-            <span className="detail-panel__eyebrow">{row.library || t("detail.fallback.library")}</span>
-            <h3>
-              {row.title}
-              {row.year ? <small>{` · ${row.year}`}</small> : null}
-            </h3>
-          </div>
-          <span className={`decision-chip decision-chip--${tone}`}>
-            {translateDecision(row.decision, t)}
-          </span>
-        </div>
-
-        <div className="detail-panel__links">
-          {imdbUrl ? (
-            <button
-              className="secondary-button"
-              onClick={() => void openInAppContainer(imdbUrl, `IMDb · ${String(row.title || t("detail.fallback.movie"))}`)}
-              type="button"
-            >
-              IMDb <ExternalLink size={14} />
-            </button>
-          ) : null}
-          {plexUrl ? (
-            <button
-              className="secondary-button"
-              onClick={() => void openInAppContainer(plexUrl, `Plex · ${String(row.title || t("detail.fallback.movie"))}`)}
-              type="button"
-            >
-              Plex <ExternalLink size={14} />
-            </button>
-          ) : null}
-          {row.file ? (
-            <span className="detail-panel__path">
-              <LibraryBig size={14} />
-              {row.file}
-            </span>
-          ) : null}
-        </div>
-
-        <div className="detail-metrics-grid">
-          {metric(t("detail.metric.imdb"), row.imdb_rating as number | string | null, t("app.na"))}
-          {metric(t("detail.metric.rt"), row.rt_score ? `${row.rt_score}%` : null, t("app.na"))}
-          {metric(t("detail.metric.metacritic"), row.metacritic_score as number | string | null, t("app.na"))}
-          {metric(
-            t("detail.metric.size"),
-            row.file_size_gb
-              ? `${Number(row.file_size_gb).toLocaleString(locale, {
-                  minimumFractionDigits: 1,
-                  maximumFractionDigits: 1
-                })} ${t("unit.gb")}`
-              : null,
-            t("app.na")
+    <article className={`detail-panel detail-panel--${tone} detail-panel--${variant}`}>
+      <div className="detail-panel__hero">
+        <div className="detail-panel__poster">
+          {poster ? (
+            <img alt={String(row.title || t("detail.poster_alt"))} src={poster} />
+          ) : (
+            <span>{t("detail.poster_missing")}</span>
           )}
         </div>
 
+        <div className="detail-panel__hero-copy">
+          <div className="detail-panel__header">
+            <div>
+              <span className="detail-panel__eyebrow">
+                {row.library || t("detail.fallback.library")}
+              </span>
+              <h3>
+                {row.title}
+                {row.year ? <small>{` · ${row.year}`}</small> : null}
+              </h3>
+            </div>
+            <span className={`decision-chip decision-chip--${tone}`}>
+              {translateDecision(row.decision, t)}
+            </span>
+          </div>
+
+          <div className="detail-panel__links">
+            {imdbUrl ? (
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  void openInAppContainer(
+                    imdbUrl,
+                    `IMDb · ${String(row.title || t("detail.fallback.movie"))}`
+                  )
+                }
+                type="button"
+              >
+                IMDb <ExternalLink size={14} />
+              </button>
+            ) : null}
+            {plexUrl ? (
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  void openInAppContainer(
+                    plexUrl,
+                    `Plex · ${String(row.title || t("detail.fallback.movie"))}`
+                  )
+                }
+                type="button"
+              >
+                Plex <ExternalLink size={14} />
+              </button>
+            ) : null}
+            {row.file ? (
+              <span className="detail-panel__path">
+                <LibraryBig size={14} />
+                {row.file}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="detail-metrics-grid">
+            {metric(
+              t("detail.metric.imdb"),
+              row.imdb_rating as number | string | null,
+              t("app.na")
+            )}
+            {metric(t("detail.metric.rt"), row.rt_score ? `${row.rt_score}%` : null, t("app.na"))}
+            {metric(
+              t("detail.metric.metacritic"),
+              row.metacritic_score as number | string | null,
+              t("app.na")
+            )}
+            {metric(
+              t("detail.metric.size"),
+              row.file_size_gb
+                ? `${Number(row.file_size_gb).toLocaleString(locale, {
+                    minimumFractionDigits: 1,
+                    maximumFractionDigits: 1
+                  })} ${t("unit.gb")}`
+                : null,
+              t("app.na")
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="detail-panel__content">
         {row.reason || row.reason_code ? (
           <section className="detail-copy">
             <span>{t("detail.reasoning")}</span>
@@ -128,7 +157,11 @@ export function MovieDetailPanel({ row }: MovieDetailPanelProps) {
           </div>
           <div>
             <dt>{t("detail.wikipedia")}</dt>
-            <dd>{typeof row.wikipedia_title === "string" ? row.wikipedia_title : t("app.empty_dash")}</dd>
+            <dd>
+              {typeof row.wikipedia_title === "string"
+                ? row.wikipedia_title
+                : t("app.empty_dash")}
+            </dd>
           </div>
         </dl>
       </div>

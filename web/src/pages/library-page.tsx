@@ -8,16 +8,38 @@ import {
 import { Search } from "lucide-react";
 
 import { useAppContext } from "../app/use-app-context";
+import { MovieDetailModal } from "../components/movie-detail-modal";
 import { MovieDetailPanel } from "../components/movie-detail-panel";
 import { PageHero } from "../components/page-hero";
 import { PageState } from "../components/page-state";
 import { SectionCard } from "../components/section-card";
-import { VirtualTable } from "../components/virtual-table";
+import {
+  VirtualTable,
+  type VirtualTableSortState
+} from "../components/virtual-table";
 import { useReportAll } from "../hooks/use-dashboard-data";
 import { translateDecision } from "../i18n/helpers";
 import { useI18n } from "../i18n/provider";
-import { uniqueValues } from "../lib/data";
+import { getDecisionTone, parseMaybeNumber, uniqueValues } from "../lib/data";
 import type { ReportRow } from "../lib/types";
+
+type SearchScope = "all" | "title";
+
+const DECISION_ORDER: Record<string, number> = {
+  KEEP: 0,
+  MAYBE: 1,
+  DELETE: 2,
+  UNKNOWN: 3
+};
+
+function reportRowKey(row: ReportRow) {
+  return String(
+    row.guid ??
+      row.file ??
+      row.imdb_id ??
+      [row.title, row.year, row.library].filter(Boolean).join("::")
+  );
+}
 
 export function LibraryPage() {
   const { locale, t } = useI18n();
@@ -25,9 +47,15 @@ export function LibraryPage() {
   const reportAllQuery = useReportAll(activeProfileId);
   const reportAll = reportAllQuery.data ?? [];
   const [search, setSearch] = useState("");
-  const [libraries, setLibraries] = useState<string[]>([]);
-  const [decisions, setDecisions] = useState<string[]>([]);
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [searchScope, setSearchScope] = useState<SearchScope>("all");
+  const [libraryFilter, setLibraryFilter] = useState("");
+  const [decisionFilter, setDecisionFilter] = useState("");
+  const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
+  const [sortState, setSortState] = useState<VirtualTableSortState>({
+    key: "title",
+    direction: "asc"
+  });
   const deferredSearch = useDeferredValue(search);
 
   const libraryOptions = useMemo(() => uniqueValues(reportAll, "library", locale), [locale, reportAll]);
@@ -35,28 +63,126 @@ export function LibraryPage() {
     () =>
       reportAll.filter((row) => {
         const matchesLibrary =
-          !libraries.length ||
-          (typeof row.library === "string" && libraries.includes(row.library));
+          !libraryFilter || (typeof row.library === "string" && row.library === libraryFilter);
         const decision = String(row.decision || "").toUpperCase();
-        const matchesDecision = !decisions.length || decisions.includes(decision);
+        const matchesDecision = !decisionFilter || decision === decisionFilter;
         const searchValue = deferredSearch.trim().toLowerCase();
+        const values =
+          searchScope === "title"
+            ? [row.title]
+            : Object.values(row).filter(
+                (value) =>
+                  typeof value === "string" ||
+                  typeof value === "number" ||
+                  typeof value === "boolean"
+              );
         const matchesSearch =
           !searchValue ||
-          [row.title, row.library, row.imdb_id, row.file]
-            .filter(Boolean)
+          values
             .some((value) => String(value).toLowerCase().includes(searchValue));
         return matchesLibrary && matchesDecision && matchesSearch;
       }),
-    [decisions, deferredSearch, libraries, reportAll]
+    [decisionFilter, deferredSearch, libraryFilter, reportAll, searchScope]
   );
+  const sortedRows = useMemo(() => {
+    const multiplier = sortState.direction === "asc" ? 1 : -1;
+    return [...filteredRows].sort((left, right) => {
+      switch (sortState.key) {
+        case "year":
+          return (
+            ((parseMaybeNumber(left.year) ?? Number.NEGATIVE_INFINITY) -
+              (parseMaybeNumber(right.year) ?? Number.NEGATIVE_INFINITY)) *
+            multiplier
+          );
+        case "library":
+          return (
+            String(left.library || "").localeCompare(String(right.library || ""), locale) *
+            multiplier
+          );
+        case "decision":
+          return (
+            ((DECISION_ORDER[String(left.decision || "UNKNOWN").toUpperCase()] ?? 99) -
+              (DECISION_ORDER[String(right.decision || "UNKNOWN").toUpperCase()] ?? 99)) *
+            multiplier
+          );
+        case "imdb":
+          return (
+            ((parseMaybeNumber(left.imdb_rating) ?? Number.NEGATIVE_INFINITY) -
+              (parseMaybeNumber(right.imdb_rating) ?? Number.NEGATIVE_INFINITY)) *
+            multiplier
+          );
+        case "size":
+          return (
+            ((parseMaybeNumber(left.file_size_gb) ?? Number.NEGATIVE_INFINITY) -
+              (parseMaybeNumber(right.file_size_gb) ?? Number.NEGATIVE_INFINITY)) *
+            multiplier
+          );
+        case "title":
+        default:
+          return (
+            String(left.title || "").localeCompare(String(right.title || ""), locale) *
+            multiplier
+          );
+      }
+    });
+  }, [filteredRows, locale, sortState]);
+  const visibleSizeGb = useMemo(
+    () =>
+      sortedRows.reduce(
+        (total, row) => total + (parseMaybeNumber(row.file_size_gb) ?? 0),
+        0
+      ),
+    [sortedRows]
+  );
+  const activeSortLabel = useMemo(() => {
+    const keyToLabel: Record<string, string> = {
+      title: t("column.title"),
+      year: t("column.year"),
+      library: t("column.library"),
+      decision: t("column.decision"),
+      imdb: t("column.imdb"),
+      size: t("column.size")
+    };
+    return keyToLabel[sortState.key] ?? t("column.title");
+  }, [sortState.key, t]);
 
   useEffect(() => {
-    if (selectedIndex >= filteredRows.length) {
-      setSelectedIndex(0);
+    if (!sortedRows.length) {
+      setSelectedRowKey(null);
+      setDetailModalOpen(false);
+      return;
     }
-  }, [filteredRows.length, selectedIndex]);
 
-  const row = filteredRows[selectedIndex] ?? filteredRows[0] ?? null;
+    if (!selectedRowKey) {
+      setSelectedRowKey(reportRowKey(sortedRows[0]));
+      return;
+    }
+
+    const stillVisible = sortedRows.some((row) => reportRowKey(row) === selectedRowKey);
+    if (!stillVisible) {
+      setSelectedRowKey(reportRowKey(sortedRows[0]));
+    }
+  }, [selectedRowKey, sortedRows]);
+
+  const selectedIndex = useMemo(
+    () =>
+      Math.max(
+        sortedRows.findIndex((row) => reportRowKey(row) === selectedRowKey),
+        0
+      ),
+    [selectedRowKey, sortedRows]
+  );
+  const row = sortedRows[selectedIndex] ?? sortedRows[0] ?? null;
+  const hasActiveFilters = Boolean(search.trim() || libraryFilter || decisionFilter);
+
+  function selectRow(current: ReportRow) {
+    setSelectedRowKey(reportRowKey(current));
+  }
+
+  function openDetail(current: ReportRow) {
+    selectRow(current);
+    setDetailModalOpen(true);
+  }
 
   return (
     <div className="page-stack">
@@ -101,35 +227,47 @@ export function LibraryPage() {
 
       {!reportAllQuery.isLoading && !reportAllQuery.error && reportAll.length ? (
         <>
-          <SectionCard title={t("library.filters.title")} eyebrow={t("library.filters.eyebrow")}>
-            <div className="filter-grid">
-              <label className="search-field">
-                <Search size={16} />
-                <input
-                  onChange={(event) =>
-                    startTransition(() => {
-                      setSearch(event.target.value);
-                      setSelectedIndex(0);
-                    })
-                  }
-                  placeholder={t("library.search.placeholder")}
-                  value={search}
-                />
-              </label>
+          <SectionCard
+            title={t("library.filters.title")}
+            eyebrow={t("library.filters.eyebrow")}
+          >
+            <div className="library-toolbar">
+              <div className="library-toolbar__search">
+                <label className="search-field search-field--toolbar">
+                  <Search size={16} />
+                  <input
+                    onChange={(event) =>
+                      startTransition(() => {
+                        setSearch(event.target.value);
+                      })
+                    }
+                    placeholder={t("library.search.placeholder")}
+                    value={search}
+                  />
+                </label>
+                <div className="scope-switch" role="tablist" aria-label={t("library.search.scope")}>
+                  {(["all", "title"] as const).map((scope) => (
+                    <button
+                      key={scope}
+                      className={searchScope === scope ? "is-active" : ""}
+                      onClick={() => setSearchScope(scope)}
+                      type="button"
+                    >
+                      {scope === "all"
+                        ? t("library.search.scope.all")
+                        : t("library.search.scope.title")}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-              <label>
+              <label className="form-field form-field--compact">
                 <span>{t("library.filter.library")}</span>
                 <select
-                  multiple
-                  onChange={(event) => {
-                    const values = Array.from(event.target.selectedOptions).map(
-                      (option) => option.value
-                    );
-                    setLibraries(values);
-                    setSelectedIndex(0);
-                  }}
-                  value={libraries}
+                  onChange={(event) => setLibraryFilter(event.target.value)}
+                  value={libraryFilter}
                 >
+                  <option value="">{t("library.filter.all_libraries")}</option>
                   {libraryOptions.map((library) => (
                     <option key={library} value={library}>
                       {library}
@@ -138,19 +276,13 @@ export function LibraryPage() {
                 </select>
               </label>
 
-              <label>
+              <label className="form-field form-field--compact">
                 <span>{t("library.filter.decision")}</span>
                 <select
-                  multiple
-                  onChange={(event) => {
-                    const values = Array.from(event.target.selectedOptions).map(
-                      (option) => option.value
-                    );
-                    setDecisions(values);
-                    setSelectedIndex(0);
-                  }}
-                  value={decisions}
+                  onChange={(event) => setDecisionFilter(event.target.value)}
+                  value={decisionFilter}
                 >
+                  <option value="">{t("library.filter.all_decisions")}</option>
                   {["KEEP", "MAYBE", "DELETE", "UNKNOWN"].map((decision) => (
                     <option key={decision} value={decision}>
                       {translateDecision(decision, t)}
@@ -158,14 +290,48 @@ export function LibraryPage() {
                   ))}
                 </select>
               </label>
+
+              <div className="library-toolbar__metrics">
+                <article className="library-glance">
+                  <span>{t("library.filter.results")}</span>
+                  <strong>{sortedRows.length.toLocaleString(locale)}</strong>
+                </article>
+                <article className="library-glance">
+                  <span>{t("library.filter.visible_space")}</span>
+                  <strong>
+                    {visibleSizeGb.toLocaleString(locale, {
+                      minimumFractionDigits: 1,
+                      maximumFractionDigits: 1
+                    })}{" "}
+                    {t("unit.gb")}
+                  </strong>
+                </article>
+                <article className="library-glance">
+                  <span>{t("library.filter.sorting")}</span>
+                  <strong>{activeSortLabel}</strong>
+                </article>
+                <button
+                  className="secondary-button"
+                  disabled={!hasActiveFilters}
+                  onClick={() => {
+                    setSearch("");
+                    setLibraryFilter("");
+                    setDecisionFilter("");
+                    setSearchScope("all");
+                  }}
+                  type="button"
+                >
+                  {t("library.filter.clear")}
+                </button>
+              </div>
             </div>
           </SectionCard>
 
-          <div className="split-layout">
+          <div className="split-layout split-layout--library">
             <SectionCard
-              title={t("library.catalog.title", { count: filteredRows.length })}
+              title={t("library.catalog.title", { count: sortedRows.length })}
               eyebrow={t("library.catalog.eyebrow")}
-              className="split-layout__main"
+              className="split-layout__main library-table-card"
             >
               <VirtualTable<ReportRow>
                 columns={[
@@ -173,36 +339,70 @@ export function LibraryPage() {
                     key: "title",
                     label: t("column.title"),
                     width: "36%",
-                    render: (current) => String(current.title || t("app.empty_dash"))
+                    sortable: true,
+                    render: (current) => (
+                      <button
+                        className="table-title-button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openDetail(current);
+                        }}
+                        type="button"
+                      >
+                        <span
+                          className={`table-title-button__dot table-title-button__dot--${getDecisionTone(
+                            current.decision
+                          )}`}
+                        />
+                        <span className="table-title-button__label">
+                          {String(current.title || t("app.empty_dash"))}
+                        </span>
+                      </button>
+                    )
                   },
                   {
                     key: "year",
                     label: t("column.year"),
                     width: "10%",
+                    sortable: true,
                     render: (current) => String(current.year || t("app.empty_dash"))
                   },
                   {
                     key: "library",
                     label: t("column.library"),
                     width: "22%",
+                    sortable: true,
                     render: (current) => String(current.library || t("app.empty_dash"))
                   },
                   {
                     key: "decision",
                     label: t("column.decision"),
                     width: "14%",
-                    render: (current) => translateDecision(String(current.decision || "UNKNOWN"), t)
+                    sortable: true,
+                    render: (current) => (
+                      <span
+                        className={`decision-chip decision-chip--${getDecisionTone(
+                          current.decision
+                        )}`}
+                      >
+                        {translateDecision(String(current.decision || "UNKNOWN"), t)}
+                      </span>
+                    )
                   },
                   {
                     key: "imdb",
                     label: t("column.imdb"),
                     width: "10%",
+                    align: "right",
+                    sortable: true,
                     render: (current) => String(current.imdb_rating || t("app.empty_dash"))
                   },
                   {
                     key: "size",
                     label: t("column.size"),
                     width: "8%",
+                    align: "right",
+                    sortable: true,
                     render: (current) =>
                       current.file_size_gb
                         ? Number(current.file_size_gb).toLocaleString(locale, {
@@ -212,16 +412,26 @@ export function LibraryPage() {
                         : t("app.empty_dash")
                   }
                 ]}
-                onSelect={setSelectedIndex}
-                rows={filteredRows}
+                fillHeight
+                onSelect={(index) => selectRow(sortedRows[index])}
+                onSortChange={setSortState}
+                rowTone={(current) => getDecisionTone(current.decision)}
+                rows={sortedRows}
                 selectedIndex={selectedIndex}
+                sortState={sortState}
               />
             </SectionCard>
 
-            <div className="split-layout__aside">
+            <div className="split-layout__aside library-detail-panel">
               <MovieDetailPanel row={row} />
             </div>
           </div>
+
+          <MovieDetailModal
+            open={detailModalOpen}
+            onClose={() => setDetailModalOpen(false)}
+            row={row}
+          />
         </>
       ) : null}
     </div>
