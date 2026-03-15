@@ -20,10 +20,16 @@ export interface ReportRow {
   poster_url?: string | null;
   trailer_url?: string | null;
   omdb_json?: string | null;
+  genre?: string | null;
+  director?: string | null;
+  actors?: string | null;
+  plot?: string | null;
   wikipedia_title?: string | null;
   wikidata_id?: string | null;
   decade?: number | null;
   decade_label?: string | null;
+  search_all?: string | null;
+  search_title?: string | null;
   [key: string]: unknown;
 }
 

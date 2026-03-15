@@ -20,10 +20,17 @@ import {
 import { useReportAll } from "../hooks/use-dashboard-data";
 import { translateDecision } from "../i18n/helpers";
 import { useI18n } from "../i18n/provider";
-import { getDecisionTone, parseMaybeNumber, uniqueValues } from "../lib/data";
+import {
+  REPORT_DECISION_OPTIONS,
+  buildReportRowKey,
+  filterReportRows,
+  getDecisionTone,
+  parseMaybeNumber,
+  sumReportSizeGb,
+  uniqueValues,
+  type ReportSearchScope
+} from "../lib/data";
 import type { ReportRow } from "../lib/types";
-
-type SearchScope = "all" | "title";
 
 const DECISION_ORDER: Record<string, number> = {
   KEEP: 0,
@@ -32,22 +39,13 @@ const DECISION_ORDER: Record<string, number> = {
   UNKNOWN: 3
 };
 
-function reportRowKey(row: ReportRow) {
-  return String(
-    row.guid ??
-      row.file ??
-      row.imdb_id ??
-      [row.title, row.year, row.library].filter(Boolean).join("::")
-  );
-}
-
 export function LibraryPage() {
   const { locale, t } = useI18n();
   const { activeProfileId } = useAppContext();
   const reportAllQuery = useReportAll(activeProfileId);
   const reportAll = reportAllQuery.data ?? [];
   const [search, setSearch] = useState("");
-  const [searchScope, setSearchScope] = useState<SearchScope>("all");
+  const [searchScope, setSearchScope] = useState<ReportSearchScope>("all");
   const [libraryFilter, setLibraryFilter] = useState("");
   const [decisionFilter, setDecisionFilter] = useState("");
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
@@ -61,26 +59,11 @@ export function LibraryPage() {
   const libraryOptions = useMemo(() => uniqueValues(reportAll, "library", locale), [locale, reportAll]);
   const filteredRows = useMemo(
     () =>
-      reportAll.filter((row) => {
-        const matchesLibrary =
-          !libraryFilter || (typeof row.library === "string" && row.library === libraryFilter);
-        const decision = String(row.decision || "").toUpperCase();
-        const matchesDecision = !decisionFilter || decision === decisionFilter;
-        const searchValue = deferredSearch.trim().toLowerCase();
-        const values =
-          searchScope === "title"
-            ? [row.title]
-            : Object.values(row).filter(
-                (value) =>
-                  typeof value === "string" ||
-                  typeof value === "number" ||
-                  typeof value === "boolean"
-              );
-        const matchesSearch =
-          !searchValue ||
-          values
-            .some((value) => String(value).toLowerCase().includes(searchValue));
-        return matchesLibrary && matchesDecision && matchesSearch;
+      filterReportRows(reportAll, {
+        decision: decisionFilter,
+        library: libraryFilter,
+        search: deferredSearch,
+        searchScope
       }),
     [decisionFilter, deferredSearch, libraryFilter, reportAll, searchScope]
   );
@@ -127,11 +110,7 @@ export function LibraryPage() {
     });
   }, [filteredRows, locale, sortState]);
   const visibleSizeGb = useMemo(
-    () =>
-      sortedRows.reduce(
-        (total, row) => total + (parseMaybeNumber(row.file_size_gb) ?? 0),
-        0
-      ),
+    () => sumReportSizeGb(sortedRows),
     [sortedRows]
   );
   const activeSortLabel = useMemo(() => {
@@ -154,20 +133,20 @@ export function LibraryPage() {
     }
 
     if (!selectedRowKey) {
-      setSelectedRowKey(reportRowKey(sortedRows[0]));
+      setSelectedRowKey(buildReportRowKey(sortedRows[0]));
       return;
     }
 
-    const stillVisible = sortedRows.some((row) => reportRowKey(row) === selectedRowKey);
+    const stillVisible = sortedRows.some((row) => buildReportRowKey(row) === selectedRowKey);
     if (!stillVisible) {
-      setSelectedRowKey(reportRowKey(sortedRows[0]));
+      setSelectedRowKey(buildReportRowKey(sortedRows[0]));
     }
   }, [selectedRowKey, sortedRows]);
 
   const selectedIndex = useMemo(
     () =>
       Math.max(
-        sortedRows.findIndex((row) => reportRowKey(row) === selectedRowKey),
+        sortedRows.findIndex((row) => buildReportRowKey(row) === selectedRowKey),
         0
       ),
     [selectedRowKey, sortedRows]
@@ -176,7 +155,7 @@ export function LibraryPage() {
   const hasActiveFilters = Boolean(search.trim() || libraryFilter || decisionFilter);
 
   function selectRow(current: ReportRow) {
-    setSelectedRowKey(reportRowKey(current));
+    setSelectedRowKey(buildReportRowKey(current));
   }
 
   function openDetail(current: ReportRow) {
@@ -283,7 +262,7 @@ export function LibraryPage() {
                   value={decisionFilter}
                 >
                   <option value="">{t("library.filter.all_decisions")}</option>
-                  {["KEEP", "MAYBE", "DELETE", "UNKNOWN"].map((decision) => (
+                  {REPORT_DECISION_OPTIONS.map((decision) => (
                     <option key={decision} value={decision}>
                       {translateDecision(decision, t)}
                     </option>

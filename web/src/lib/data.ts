@@ -23,6 +23,16 @@ export const DASHBOARD_VIEWS: DashboardViewKey[] = [
   "imdb-by-decision"
 ];
 
+export const REPORT_DECISION_OPTIONS = ["KEEP", "MAYBE", "DELETE", "UNKNOWN"] as const;
+export type ReportSearchScope = "all" | "title";
+
+interface ReportFilterOptions {
+  search: string;
+  searchScope?: ReportSearchScope;
+  library?: string | null;
+  decision?: string | null;
+}
+
 const DEFAULT_DASHBOARD_VIEW_KEYS: DashboardViewKey[] = [
   "imdb-metacritic",
   "decision-distribution",
@@ -63,6 +73,34 @@ export function parseOmdbJson(row: ReportRow) {
   }
 }
 
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim() && value !== "N/A") {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function buildSearchText(row: ReportRow, metadata: Array<string | null>) {
+  const searchParts = [
+    row.title,
+    row.library,
+    row.file,
+    row.imdb_id,
+    row.year,
+    row.decision,
+    row.reason,
+    row.wikipedia_title,
+    ...metadata
+  ]
+    .filter((value): value is string | number => typeof value === "string" || typeof value === "number")
+    .map((value) => String(value).trim())
+    .filter(Boolean);
+
+  return searchParts.join(" ").toLowerCase();
+}
+
 export function enrichRows(rows: ReportRow[]): ReportRow[] {
   return rows.map((row) => {
     const year = parseMaybeNumber(row.year);
@@ -75,6 +113,10 @@ export function enrichRows(rows: ReportRow[]): ReportRow[] {
     const imdbRating = parseMaybeNumber(row.imdb_rating);
     const rtScore = parseMaybeNumber(row.rt_score);
     const plexRating = parseMaybeNumber(row.plex_rating);
+    const genre = firstString(row.genre, omdb?.Genre);
+    const director = firstString(row.director, omdb?.Director);
+    const actors = firstString(row.actors, omdb?.Actors);
+    const plot = firstString(row.plot, omdb?.Plot);
     const decade = year ? Math.floor(year / 10) * 10 : null;
     return {
       ...row,
@@ -85,8 +127,14 @@ export function enrichRows(rows: ReportRow[]): ReportRow[] {
       imdb_rating: imdbRating,
       rt_score: rtScore,
       plex_rating: plexRating,
+      genre,
+      director,
+      actors,
+      plot,
       decade,
-      decade_label: decade ? String(decade) : null
+      decade_label: decade ? String(decade) : null,
+      search_title: String(row.title || "").trim().toLowerCase(),
+      search_all: buildSearchText(row, [genre, director, actors, plot])
     };
   });
 }
@@ -177,6 +225,39 @@ export function getDecisionTone(decision?: string | null) {
   return "neutral";
 }
 
+export function buildReportRowKey(row: ReportRow) {
+  return String(
+    row.guid ??
+      row.file ??
+      row.imdb_id ??
+      [row.title, row.year, row.library].filter(Boolean).join("::")
+  );
+}
+
+export function filterReportRows(rows: ReportRow[], filters: ReportFilterOptions) {
+  const searchValue = filters.search.trim().toLowerCase();
+  const searchScope = filters.searchScope ?? "all";
+  const libraryFilter = String(filters.library || "").trim();
+  const decisionFilter = String(filters.decision || "").trim().toUpperCase();
+
+  return rows.filter((row) => {
+    const matchesLibrary =
+      !libraryFilter || (typeof row.library === "string" && row.library === libraryFilter);
+    const decision = String(row.decision || "").toUpperCase();
+    const matchesDecision = !decisionFilter || decision === decisionFilter;
+    const haystack =
+      searchScope === "title"
+        ? String(row.search_title ?? row.title ?? "").toLowerCase()
+        : String(row.search_all ?? "").toLowerCase();
+    const matchesSearch = !searchValue || haystack.includes(searchValue);
+    return matchesLibrary && matchesDecision && matchesSearch;
+  });
+}
+
+export function sumReportSizeGb(rows: ReportRow[]) {
+  return rows.reduce((total, row) => total + (parseMaybeNumber(row.file_size_gb) ?? 0), 0);
+}
+
 export function findDuplicates(rows: ReportRow[]) {
   const counts = new Map<string, number>();
   rows.forEach((row) => {
@@ -219,8 +300,7 @@ export function filterMetadata(
 export function collectGenres(rows: ReportRow[]) {
   const counts = new Map<string, { keep: number; maybe: number; delete: number }>();
   rows.forEach((row) => {
-    const omdb = parseOmdbJson(row);
-    const rawGenre = typeof omdb?.Genre === "string" ? omdb.Genre : "";
+    const rawGenre = firstString(row.genre, parseOmdbJson(row)?.Genre) ?? "";
     const decision = String(row.decision || "").toUpperCase();
     rawGenre
       .split(",")
@@ -247,8 +327,7 @@ export function collectGenres(rows: ReportRow[]) {
 export function collectDirectors(rows: ReportRow[]) {
   const counts = new Map<string, { total: number; ratingTotal: number }>();
   rows.forEach((row) => {
-    const omdb = parseOmdbJson(row);
-    const rawDirector = typeof omdb?.Director === "string" ? omdb.Director : "";
+    const rawDirector = firstString(row.director, parseOmdbJson(row)?.Director) ?? "";
     const imdb = parseMaybeNumber(row.imdb_rating) ?? 0;
     rawDirector
       .split(",")
@@ -267,7 +346,6 @@ export function collectDirectors(rows: ReportRow[]) {
       total: value.total,
       mean: value.total ? value.ratingTotal / value.total : 0
     }))
-    .filter((item) => item.total >= 2)
     .sort((left, right) => right.mean - left.mean)
     .slice(0, 12);
 }

@@ -19,6 +19,17 @@ interface ChartTheme {
 
 type ScatterValue = [number, number, string, string];
 type WasteValue = [number, number, number, string];
+type ValuePerGbRow = {
+  deletePct: number;
+  deleteSize: number;
+  keepPct: number;
+  keepSize: number;
+  library: string;
+  maybePct: number;
+  maybeSize: number;
+  metric: number;
+  totalSize: number;
+};
 
 interface ChartIntl {
   locale: string;
@@ -103,6 +114,36 @@ function baseChart(): EChartsOption {
   };
 }
 
+function emptyChartOption(intl: ChartIntl): EChartsOption {
+  const theme = chartTheme();
+  return {
+    backgroundColor: "transparent",
+    animation: false,
+    xAxis: { show: false, type: "value" },
+    yAxis: { show: false, type: "value" },
+    series: [],
+    graphic: [
+      {
+        type: "group",
+        left: "center",
+        top: "middle",
+        children: [
+          {
+            type: "text",
+            style: {
+              fill: theme.text,
+              fontFamily: "Space Grotesk",
+              fontSize: 16,
+              fontWeight: 700,
+              text: intl.t("chart.no_data")
+            }
+          }
+        ]
+      }
+    ]
+  };
+}
+
 function scatterOption(
   rows: ReportRow[],
   xKey: keyof ReportRow,
@@ -128,6 +169,9 @@ function scatterOption(
       })
       .filter((value): value is ScatterValue => Array.isArray(value))
   }));
+  if (!groups.some((group) => group.data.length)) {
+    return emptyChartOption(intl);
+  }
 
   return {
     ...baseChart(),
@@ -163,6 +207,9 @@ function decisionDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption
     value,
     itemStyle: { color: colors[name] ?? colors.UNKNOWN }
   }));
+  if (!data.length) {
+    return emptyChartOption(intl);
+  }
   return {
     ...baseChart(),
     tooltip: { trigger: "item" },
@@ -208,6 +255,9 @@ function boxplotByLibrary(rows: ReportRow[], intl: ChartIntl): EChartsOption {
     })
     .sort((left, right) => right.stats[2] - left.stats[2])
     .slice(0, 12);
+  if (!libraries.length) {
+    return emptyChartOption(intl);
+  }
 
   return {
     ...baseChart(),
@@ -231,66 +281,184 @@ function boxplotByLibrary(rows: ReportRow[], intl: ChartIntl): EChartsOption {
 function wasteMap(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const colors = decisionColors(theme);
+  const series = ["DELETE", "MAYBE", "KEEP"].map((decision) => ({
+    name: translateDecision(decision, intl.t),
+    type: "scatter" as const,
+    itemStyle: { color: colors[decision] },
+    symbolSize: (value: Array<number | string>) => Math.max(10, Number(value[2] || 0) * 1.4),
+    data: rows
+      .filter((row) => decisionKey(row) === decision)
+      .map((row) => {
+        const imdb = parseMaybeNumber(row.imdb_rating);
+        const size = parseMaybeNumber(row.file_size_gb);
+        if (imdb === null || size === null) return null;
+        return [imdb, size, size, String(row.title || intl.t("column.title"))];
+      })
+      .filter((value): value is WasteValue => Array.isArray(value))
+  }));
+  if (!series.some((item) => item.data.length)) {
+    return emptyChartOption(intl);
+  }
   return {
     ...baseChart(),
     legend: { top: 0, textStyle: { color: theme.muted } },
     xAxis: { type: "value", name: intl.t("chart.metric.imdb") },
     yAxis: { type: "value", name: intl.t("chart.metric.gb") },
-    series: ["DELETE", "MAYBE", "KEEP"].map((decision) => ({
-      name: translateDecision(decision, intl.t),
-      type: "scatter" as const,
-      itemStyle: { color: colors[decision] },
-      symbolSize: (value: Array<number | string>) => Math.max(10, Number(value[2] || 0) * 1.4),
-      data: rows
-        .filter((row) => decisionKey(row) === decision)
-        .map((row) => {
-          const imdb = parseMaybeNumber(row.imdb_rating);
-          const size = parseMaybeNumber(row.file_size_gb);
-          if (imdb === null || size === null) return null;
-          return [imdb, size, size, String(row.title || intl.t("column.title"))];
-        })
-        .filter((value): value is WasteValue => Array.isArray(value))
-    }))
+    series
   };
 }
 
 function valuePerGb(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
-  const grouped = new Map<string, { size: number; score: number; total: number }>();
+  const grouped = new Map<
+    string,
+    {
+      size: number;
+      score: number;
+      total: number;
+      decisionSizes: Record<string, number>;
+    }
+  >();
   rows.forEach((row) => {
     const library = String(row.library || "").trim();
     const size = parseMaybeNumber(row.file_size_gb);
     const imdb = parseMaybeNumber(row.imdb_rating);
     if (!library || size === null || imdb === null) return;
-    const current = grouped.get(library) ?? { size: 0, score: 0, total: 0 };
+    const current = grouped.get(library) ?? {
+      size: 0,
+      score: 0,
+      total: 0,
+      decisionSizes: { KEEP: 0, MAYBE: 0, DELETE: 0, UNKNOWN: 0 }
+    };
     current.size += size;
     current.score += imdb;
     current.total += 1;
+    current.decisionSizes[decisionKey(row)] += size;
     grouped.set(library, current);
   });
   const data = Array.from(grouped.entries())
     .map(([library, value]) => ({
       library,
-      metric: value.size > 0 ? (value.score / value.total) / value.size : 0
+      metric: value.size > 0 ? (value.score / value.total) / value.size : 0,
+      totalSize: value.size,
+      keepSize: value.decisionSizes.KEEP,
+      maybeSize: value.decisionSizes.MAYBE,
+      deleteSize: value.decisionSizes.DELETE,
+      keepPct: value.size > 0 ? (value.decisionSizes.KEEP / value.size) * 100 : 0,
+      maybePct: value.size > 0 ? (value.decisionSizes.MAYBE / value.size) * 100 : 0,
+      deletePct: value.size > 0 ? (value.decisionSizes.DELETE / value.size) * 100 : 0
     }))
     .sort((left, right) => right.metric - left.metric)
-    .slice(0, 12);
+    .slice(0, 12) as ValuePerGbRow[];
+  if (!data.length) {
+    return emptyChartOption(intl);
+  }
+  const maxMetric = Math.max(...data.map((item) => item.metric), 0.1);
+  const rowByLibrary = new Map(data.map((item) => [item.library, item]));
 
   return {
     ...baseChart(),
-    xAxis: { type: "value", name: intl.t("chart.metric.average_imdb_per_gb") },
+    grid: { top: 72, left: 44, right: 92, bottom: 48 },
+    legend: { top: 0, textStyle: { color: theme.muted } },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      backgroundColor: theme.panel,
+      borderColor: theme.line,
+      textStyle: { color: theme.text },
+      formatter: (params: unknown) => {
+        const items = Array.isArray(params) ? params : [params];
+        const axisValue = items[0] && typeof items[0] === "object" && "axisValue" in items[0]
+          ? String(items[0].axisValue)
+          : "";
+        const row = rowByLibrary.get(axisValue);
+        if (!row) {
+          return intl.t("chart.no_data");
+        }
+        return [
+          row.library,
+          `${intl.t("chart.metric.average_imdb_per_gb")}: ${formatValue(row.metric, intl.locale, 3)}`,
+          `${intl.t("chart.metric.gb")}: ${formatValue(row.totalSize, intl.locale, 1)}`,
+          `${translateDecision("KEEP", intl.t)}: ${formatValue(row.keepPct, intl.locale, 1)}% · ${formatValue(row.keepSize, intl.locale, 1)} GB`,
+          `${translateDecision("MAYBE", intl.t)}: ${formatValue(row.maybePct, intl.locale, 1)}% · ${formatValue(row.maybeSize, intl.locale, 1)} GB`,
+          `${translateDecision("DELETE", intl.t)}: ${formatValue(row.deletePct, intl.locale, 1)}% · ${formatValue(row.deleteSize, intl.locale, 1)} GB`
+        ].join("<br/>");
+      }
+    },
+    xAxis: [
+      {
+        type: "value",
+        min: 0,
+        max: 100,
+        axisLabel: {
+          color: theme.muted,
+          formatter: (value: number) => `${Math.round(value)}%`
+        },
+        splitLine: { lineStyle: { color: theme.line } }
+      },
+      {
+        type: "value",
+        min: 0,
+        max: Number((maxMetric * 1.18).toFixed(3)),
+        position: "top",
+        name: intl.t("chart.metric.average_imdb_per_gb"),
+        nameTextStyle: { color: theme.muted },
+        axisLine: { lineStyle: { color: theme.line } },
+        axisLabel: { color: theme.muted },
+        splitLine: { show: false }
+      }
+    ],
     yAxis: {
       type: "category",
       data: data.map((item) => item.library),
+      inverse: true,
       axisLabel: { color: theme.muted }
     },
     series: [
       {
+        name: translateDecision("KEEP", intl.t),
         type: "bar" as const,
-        data: data.map((item) => ({
-          value: Number(item.metric.toFixed(4)),
-          itemStyle: { color: theme.accent }
-        }))
+        stack: "composition",
+        barWidth: 18,
+        itemStyle: { color: theme.keep, borderRadius: [999, 0, 0, 999] },
+        data: data.map((item) => Number(item.keepPct.toFixed(2)))
+      },
+      {
+        name: translateDecision("MAYBE", intl.t),
+        type: "bar" as const,
+        stack: "composition",
+        barWidth: 18,
+        itemStyle: { color: theme.maybe },
+        data: data.map((item) => Number(item.maybePct.toFixed(2)))
+      },
+      {
+        name: translateDecision("DELETE", intl.t),
+        type: "bar" as const,
+        stack: "composition",
+        barWidth: 18,
+        itemStyle: { color: theme.danger, borderRadius: [0, 999, 999, 0] },
+        data: data.map((item) => Number(item.deletePct.toFixed(2)))
+      },
+      {
+        name: intl.t("chart.metric.average_imdb_per_gb"),
+        type: "scatter" as const,
+        xAxisIndex: 1,
+        symbol: "diamond",
+        symbolSize: 18,
+        itemStyle: {
+          color: theme.accent,
+          borderColor: theme.panel,
+          borderWidth: 2
+        },
+        label: {
+          show: true,
+          position: "right",
+          color: theme.text,
+          formatter: (params: { value?: unknown }) =>
+            formatValue(Number(params.value ?? 0), intl.locale, 3)
+        },
+        data: data.map((item) => Number(item.metric.toFixed(3))),
+        z: 4
       }
     ]
   };
@@ -316,6 +484,9 @@ function spaceByLibrary(rows: ReportRow[], intl: ChartIntl): EChartsOption {
       )
     )
   }));
+  if (!libraries.length) {
+    return emptyChartOption(intl);
+  }
 
   return {
     ...baseChart(),
@@ -346,6 +517,9 @@ function decadeDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption {
         rows.filter((row) => row.decade === decade && decisionKey(row) === decision).length
     )
   }));
+  if (!decades.length) {
+    return emptyChartOption(intl);
+  }
   return {
     ...baseChart(),
     legend: { top: 0, textStyle: { color: theme.muted } },
@@ -363,6 +537,9 @@ function genreDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const colors = decisionColors(theme);
   const genres = collectGenres(rows);
+  if (!genres.length) {
+    return emptyChartOption(intl);
+  }
   return {
     ...baseChart(),
     legend: { top: 0, textStyle: { color: theme.muted } },
@@ -383,6 +560,9 @@ function genreDistribution(rows: ReportRow[], intl: ChartIntl): EChartsOption {
 function directorRanking(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const directors = collectDirectors(rows);
+  if (!directors.length) {
+    return emptyChartOption(intl);
+  }
   return {
     ...baseChart(),
     xAxis: { type: "value", name: intl.t("chart.metric.average_imdb") },
@@ -406,6 +586,9 @@ function directorRanking(rows: ReportRow[], intl: ChartIntl): EChartsOption {
 function wordRanking(rows: ReportRow[], intl: ChartIntl): EChartsOption {
   const theme = chartTheme();
   const words = collectTitleWords(rows);
+  if (!words.length) {
+    return emptyChartOption(intl);
+  }
   return {
     ...baseChart(),
     xAxis: { type: "value", name: intl.t("chart.metric.frequency") },
@@ -434,6 +617,9 @@ function imdbByDecision(rows: ReportRow[], intl: ChartIntl): EChartsOption {
       itemStyle: { color: colors[decision] }
     };
   });
+  if (!data.some((item) => item.value > 0)) {
+    return emptyChartOption(intl);
+  }
   return {
     ...baseChart(),
     xAxis: {
