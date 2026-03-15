@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/ci.yml/badge.svg)](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/ci.yml)
 [![Typing](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/typing.yml/badge.svg)](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/typing.yml)
+[![Desktop Build](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/desktop-build.yml/badge.svg)](https://github.com/felixdelbarrio/Analiza-Movies/actions/workflows/desktop-build.yml)
 [![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-2ea44f.svg)](https://github.com/sponsors/felixdelbarrio)
 [![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://paypal.me/felixdelbarrio)
 
@@ -42,51 +43,56 @@ If you find this project useful, you can support its development here:
 
 1) Create environment files:
    - `cp .env.example .env`
-   - `cp .env.front.example .env.front`
-2) Install dependencies: `make dev`
-3) Run:
-   - Backend CLI: `make backend`
-   - API server: `make server`
-   - Frontend dashboard: `make frontend`
+2) Use Python `3.10+` and install dependencies: `make install`
+3) Run the application: `make run`
+
+### Production-like local run
+
+1) Launch the native shell: `make run`
+2) Close the native window to stop both UI and embedded backend
+
+### Native desktop build
+
+1) Install dependencies: `make install`
+2) Generate the native bundle for your current OS: `make build`
+3) Find the artifact in `dist-desktop/`
+
+The desktop app embeds FastAPI + React in a native window and keeps external flows such as Plex login, IMDb and OMDb inside the application container instead of opening browser tabs.
 
 ---
 
-## 🖥️ Interactive Frontend (Streamlit)
+## 🖥️ Interactive Frontend (React)
 
-The **frontend** is a first-class component of Analiza Movies, implemented using **Streamlit** and designed to sit directly on top of the generated reports and/or the REST API.
+The frontend is now implemented from scratch in **React + TypeScript + Vite**.
 
-It provides a **human-in-the-loop** decision layer, turning raw analysis results into actionable insights.
+It keeps the same analytical structure of the original dashboard, but moves to a component-based architecture that is significantly easier to evolve, optimize and brand at a higher visual level.
 
 ### Frontend Capabilities
 
-- 📑 **Tab-based navigation**, each tab focused on a specific analytical task  
-- 🔎 **Advanced filtering and search** across large movie catalogs  
-- 📊 **Charts, KPIs, and summary metrics**  
-- 🧠 **Decision-oriented views** (KEEP / DELETE / REVIEW)  
-- 🧾 **Metadata inspection and validation**  
-- 🗑️ **Deletion candidate review** with safety-first logic  
-- 🔌 **Dual data source support**:
-  - CSV reports (offline / batch mode)
-  - REST API (live / service mode)
+- Cinematic navigation across dashboard, library, analytics, duplicates, metadata, cleanup and settings
+- High-density exploration with virtualized tables and editorial detail panels
+- ECharts-based visual storytelling with theme-aware rendering
+- Profile-aware browsing across multiple Plex and DLNA origins
+- React Query data loading on top of the FastAPI backend
+- Safe delete execution through the API with dry-run support
 
-### Main Dashboard Sections
+### Development Model
 
-- **All Movies**  
-  Full catalog exploration with filters and sortable tables.
+- `make install` resets and provisions the full local environment
+- `make run` launches the native desktop container with FastAPI embedded
+- `make build` creates a native bundle for macOS, Linux or Windows
+- `make ci` runs the local CI gate
+- `make test` runs pytest only
 
-- **Candidates**  
-  Automatically identified low-value or problematic titles.
+### Repository layout
 
-- **Metadata**  
-  Detection of mismatches, missing fields, and ambiguities.
-
-- **Charts & Statistics**  
-  Visual overview of quality distribution and trends.
-
-- **Delete / Review**  
-  Explicit human validation before any destructive action.
-
-The frontend is intentionally **read-only by default**, ensuring that all deletion or corrective actions remain explicit and controlled.
+- `src/backend`: analysis engine, collectors, scoring and CLI orchestration
+- `src/server`: FastAPI API, routers, middleware and services
+- `src/desktop`: native desktop shell and packaging
+- `src/shared`: runtime profiles and cross-application utilities
+- `web/`: React frontend
+- `docs/`: architecture and project documentation
+- `tests/`: automated validation
 
 ---
 
@@ -122,37 +128,50 @@ Si este proyecto te resulta útil, puedes apoyarlo aquí:
 
 1) Crea los archivos de entorno:
    - `cp .env.example .env`
-   - `cp .env.front.example .env.front`
-2) Instala dependencias: `make dev`
-3) Ejecuta:
-   - Backend CLI: `make backend`
-   - API server: `make server`
-   - Frontend dashboard: `make frontend`
+2) Usa Python `3.10+` e instala dependencias: `make install`
+3) Ejecuta la aplicación: `make run`
 
 ---
 
-## 🖥️ Frontend Interactivo (Streamlit)
+## 🖥️ Frontend Interactivo (React)
 
-El **frontend** es un componente clave de Analiza Movies y actúa como la capa de **exploración, validación y decisión humana** sobre los resultados del análisis.
+El frontend está ahora construido desde cero con **React + TypeScript + Vite**.
 
-Está diseñado para trabajar tanto con **informes CSV** como con la **API REST**, permitiendo distintos modos de operación.
+Mantiene la navegación, estructura analítica y riqueza visual del dashboard anterior, pero pasa a una arquitectura preparada para evolucionar con mucha más libertad en diseño, rendimiento y mantenibilidad.
 
 ### Funcionalidades del Frontend
 
-- Navegación clara por pestañas, orientada a tareas reales  
-- Filtros avanzados para bibliotecas grandes  
-- Métricas, gráficas y KPIs visuales  
-- Vistas orientadas a decisión (KEEP / DELETE / REVIEW)  
-- Revisión manual de candidatos antes de actuar  
-- Consumo directo de API o ficheros generados  
+- Navegación editorial entre dashboard, biblioteca, analítica, duplicados, metadata, limpieza y configuración
+- Tablas virtualizadas para catálogos grandes
+- Gráficos ECharts adaptados al tema visual activo
+- Cambio global del origen visible entre múltiples perfiles Plex y DLNA
+- Gestión de perfiles, descubrimiento en red y vinculación Plex desde la UI
+- Acciones destructivas controladas vía API con soporte de simulación
 
-### Casos de Uso Clave
+### Ejecución
 
-- Explorar el catálogo completo  
-- Identificar películas problemáticas  
-- Validar candidatos a eliminación  
-- Detectar errores de metadatos  
-- Compartir resultados mediante CSV o HTML  
+- `make install` reinicia y prepara todo el entorno local
+- `make run` arranca la aplicación en contenedor nativo con FastAPI embebido
+- `make build` genera la distribución nativa para tu sistema actual
+- `make ci` ejecuta la pasarela local de calidad
+- `make test` ejecuta solo pytest
+
+### Estructura del repositorio
+
+- `src/backend`: motor de análisis, scoring, clientes y CLI
+- `src/server`: API FastAPI, routers, middleware y servicios
+- `src/desktop`: shell nativo y empaquetado multiplataforma
+- `src/shared`: perfiles de runtime y utilidades comunes
+- `web/`: frontend React
+- `docs/`: arquitectura y documentación de proyecto
+- `tests/`: validación automatizada
+
+### Distribuciones nativas
+
+- La app de escritorio empaqueta FastAPI + React dentro de una ventana nativa.
+- `dist-desktop/` contiene los artefactos locales generados con PyInstaller.
+- GitHub Actions publica builds de Windows, Linux y macOS en cada ejecución del workflow de desktop.
+- Si existen secretos de Apple Developer, la build de macOS firma y notariza; si no existen, la build sigue adelante sin bloquearse.
 
 ---
 
@@ -160,13 +179,13 @@ Está diseñado para trabajar tanto con **informes CSV** como con la **API REST*
 
 - Backend Analyzer (CLI / batch)
 - REST API Server (FastAPI)
-- Interactive Frontend (Streamlit)
+- Interactive Frontend (React)
 - Scoring & Decision Engine
 - Caching & Resilience Layer
 - Advanced Reporting
 
 📐 **Architecture details / Detalle técnico:**  
-➡️ [ARCHITECTURE.md](ARCHITECTURE.md)
+➡️ [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## Typing support
 
@@ -196,4 +215,5 @@ flowchart LR
     Backend[Backend Analyzer]
     Reports[Reports & Metrics]
     API[FastAPI REST API]
-    Frontend[Streamlit Dashboard]
+    Frontend[React SPA]
+```

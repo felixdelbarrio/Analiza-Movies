@@ -1,4 +1,5 @@
 import json
+import importlib
 
 import pytest
 
@@ -14,6 +15,9 @@ import server.api.paths as paths
 import server.api.routers.health as health_router
 import server.api.services.omdb as omdb_service
 import server.api.services.wiki as wiki_service
+from shared.runtime_profiles import ArtifactPaths
+
+api_app_module = importlib.import_module("server.api.app")
 
 
 def _settings() -> Settings:
@@ -40,22 +44,27 @@ def _patch_paths(tmp_path, monkeypatch):
     report_all.write_text("title\nMovie\n", encoding="utf-8")
     metadata_fix.write_text("title\nMovie\n", encoding="utf-8")
 
-    monkeypatch.setattr(paths, "OMDB_CACHE_PATH", omdb_path)
-    monkeypatch.setattr(paths, "WIKI_CACHE_PATH", wiki_path)
-    monkeypatch.setattr(paths, "REPORT_ALL_PATH", report_all)
-    monkeypatch.setattr(paths, "REPORT_FILTERED_PATH", tmp_path / "report_filtered.csv")
-    monkeypatch.setattr(paths, "METADATA_FIX_PATH", metadata_fix)
-
-    monkeypatch.setattr(health_router, "OMDB_CACHE_PATH", omdb_path)
-    monkeypatch.setattr(health_router, "WIKI_CACHE_PATH", wiki_path)
-    monkeypatch.setattr(health_router, "REPORT_ALL_PATH", report_all)
-    monkeypatch.setattr(
-        health_router, "REPORT_FILTERED_PATH", tmp_path / "report_filtered.csv"
+    bundle = ArtifactPaths(
+        profile_id="plex-test",
+        data_dir=tmp_path,
+        reports_dir=tmp_path,
+        omdb_cache_path=omdb_path,
+        wiki_cache_path=wiki_path,
+        report_all_path=report_all,
+        report_filtered_path=tmp_path / "report_filtered.csv",
+        metadata_fix_path=metadata_fix,
     )
-    monkeypatch.setattr(health_router, "METADATA_FIX_PATH", metadata_fix)
 
-    monkeypatch.setattr(omdb_service, "OMDB_CACHE_PATH", omdb_path)
-    monkeypatch.setattr(wiki_service, "WIKI_CACHE_PATH", wiki_path)
+    monkeypatch.setattr(paths, "get_artifact_paths", lambda profile_id=None: bundle)
+    monkeypatch.setattr(
+        health_router, "get_artifact_paths", lambda profile_id=None: bundle
+    )
+    monkeypatch.setattr(
+        omdb_service, "get_omdb_cache_path", lambda profile_id=None: omdb_path
+    )
+    monkeypatch.setattr(
+        wiki_service, "get_wiki_cache_path", lambda profile_id=None: wiki_path
+    )
 
 
 def test_health_ready_and_metrics(monkeypatch, tmp_path):
@@ -78,3 +87,40 @@ def test_health_ready_and_metrics(monkeypatch, tmp_path):
     metrics = client.get("/metrics")
     assert metrics.status_code == 200
     assert "text/plain" in metrics.headers.get("content-type", "")
+
+
+def test_root_returns_placeholder_when_frontend_bundle_is_missing(
+    monkeypatch, tmp_path
+):
+    missing_dist = tmp_path / "web-dist-missing"
+    monkeypatch.setattr(api_app_module, "_WEB_DIST_DIR", missing_dist)
+    monkeypatch.setattr(api_app_module, "_WEB_INDEX_PATH", missing_dist / "index.html")
+
+    client = TestClient(api_app_module.create_app())
+    response = client.get("/")
+
+    assert response.status_code == 503
+    assert "Frontend React no compilado" in response.text
+
+
+def test_spa_routes_do_not_escape_dist_directory(monkeypatch, tmp_path):
+    dist_dir = tmp_path / "web-dist"
+    dist_dir.mkdir()
+    index_path = dist_dir / "index.html"
+    index_path.write_text("<html>index</html>", encoding="utf-8")
+    (dist_dir / "app.js").write_text("console.log('ok')", encoding="utf-8")
+    outside_path = tmp_path / "secret.txt"
+    outside_path.write_text("secret", encoding="utf-8")
+
+    monkeypatch.setattr(api_app_module, "_WEB_DIST_DIR", dist_dir)
+    monkeypatch.setattr(api_app_module, "_WEB_INDEX_PATH", index_path)
+
+    client = TestClient(api_app_module.create_app())
+
+    asset = client.get("/app.js")
+    assert asset.status_code == 200
+    assert "console.log('ok')" in asset.text
+
+    traversal = client.get("/../secret.txt")
+    assert traversal.status_code == 200
+    assert traversal.text == "<html>index</html>"

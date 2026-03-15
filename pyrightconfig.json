@@ -1,11 +1,12 @@
 {
-  "include": ["backend", "frontend", "server"],
+  "include": ["src/backend", "src/desktop", "src/server", "src/shared"],
 
   "exclude": [
     "**/.git/**",
     "**/__pycache__/**",
     "**/*.pyc",
     "dist",
+    "dist-desktop",
     "build",
     "*.egg-info",
     ".venv",
@@ -18,13 +19,13 @@
 
   "typeCheckingMode": "standard",
 
-  "pythonVersion": "3.14",
+  "pythonVersion": "3.10",
   "pythonPlatform": "All",
 
   "executionEnvironments": [
     {
       "root": ".",
-      "extraPaths": ["."]
+      "extraPaths": ["src", "."]
     }
   ],
 
