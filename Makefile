@@ -28,8 +28,8 @@ help:
 	@echo "--------------"
 	@echo "make install   Reinicia el entorno e instala dependencias"
 	@echo "make dev       Alias de make install"
-	@echo "make run       Ejecuta la app completa en contenedor nativo"
-	@echo "make build     Genera la distribución nativa para tu SO actual"
+	@echo "make run       Reutiliza o genera el bundle nativo local y lo abre con su icono oficial"
+	@echo "make build     Reutiliza o genera la distribución nativa para tu SO actual"
 	@echo "make ci        Ejecuta build frontend + lint + black-check + typecheck + tests-cov"
 	@echo "make test      Ejecuta pytest"
 	@echo "make doctor    Diagnóstico del entorno"
@@ -60,11 +60,12 @@ install:
 dev: install
 
 run: $(PY_DEPS_STAMP) $(WEB_BUILD_TARGET)
-	@$(VENV)/bin/start-desktop
+	@echo "Lanzando bundle nativo local con branding oficial..."
+	@$(PY) -m desktop.build --skip-frontend --no-archive --reuse-existing --quiet --run
 
 build: $(PY_DEPS_STAMP) $(WEB_BUILD_TARGET)
 	@echo "Empaquetando distribución nativa para $$(uname -s)..."
-	@$(PY) -m desktop.build --skip-frontend
+	@$(PY) -m desktop.build --skip-frontend --reuse-existing --quiet
 
 ci: $(PY_DEPS_STAMP) $(WEB_BUILD_TARGET)
 	@$(PY) -m ruff check .

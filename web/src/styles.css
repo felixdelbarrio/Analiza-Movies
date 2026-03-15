@@ -2003,6 +2003,111 @@ select[multiple] {
   color: var(--danger);
 }
 
+.settings-support-shell {
+  display: grid;
+  gap: 1rem;
+}
+
+.settings-support-card,
+.settings-support-thanks {
+  display: grid;
+  gap: 1.1rem;
+  padding: 1.15rem;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background:
+    var(--accent-panel-wash-soft),
+    var(--panel-solid);
+}
+
+.settings-support-card__header,
+.settings-support-thanks {
+  align-content: start;
+}
+
+.settings-support-card__header {
+  display: grid;
+  gap: 0.35rem;
+  max-width: 60rem;
+}
+
+.settings-support-card__header span,
+.settings-support-thanks span {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  font-size: 0.72rem;
+}
+
+.settings-support-card__header h3,
+.settings-support-thanks h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(1.55rem, 2.4vw, 2.2rem);
+  line-height: 1.02;
+}
+
+.settings-support-card__header p,
+.settings-support-thanks p,
+.settings-support-bundle p,
+.settings-support-note,
+.settings-support-meta {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.settings-support-bundles {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.settings-support-bundle {
+  display: grid;
+  gap: 0.45rem;
+  padding: 1rem;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+}
+
+.settings-support-bundle span {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 0.72rem;
+}
+
+.settings-support-bundle strong {
+  font-family: var(--font-display);
+  font-size: 1.7rem;
+  line-height: 1;
+}
+
+.settings-support-note {
+  max-width: 58rem;
+}
+
+.settings-support-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.settings-support-meta {
+  max-width: 28rem;
+  text-align: right;
+}
+
+.settings-support-thanks {
+  background:
+    var(--keep-wash),
+    var(--panel-solid);
+}
+
 .run-console {
   display: grid;
   gap: 1rem;
@@ -2095,6 +2200,21 @@ select[multiple] {
 
   .library-toolbar__metrics .secondary-button {
     width: 100%;
+  }
+
+  .settings-support-bundles {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-support-actions,
+  .settings-support-actions .inline-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .settings-support-meta {
+    max-width: none;
+    text-align: left;
   }
 
   .detail-panel__hero,

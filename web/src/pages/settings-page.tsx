@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import {
   ArrowUpRight,
   Check,
+  Heart,
   Link2,
   Radar,
   RefreshCcw,
@@ -34,10 +35,12 @@ import {
 } from "../lib/api";
 import { getDashboardViews, normalizeDashboardViews } from "../lib/data";
 import { isDesktopShell, openInAppContainer } from "../lib/desktop";
+import { useStoredState } from "../lib/preferences";
 import type { DashboardViewKey, Profile, ServerDiscovery } from "../lib/types";
 
 type SourceKind = "plex" | "dlna";
 type PlexLinkState = "idle" | "pending" | "complete" | "error";
+const SUPPORT_URL = "https://paypal.me/felixdelbarrio";
 
 function describeEndpoint(host?: string | null, port?: number | null) {
   const cleanHost = String(host || "").trim();
@@ -79,6 +82,10 @@ export function SettingsPage() {
   const [plexAuthUrl, setPlexAuthUrl] = useState("");
   const [plexLinkState, setPlexLinkState] = useState<PlexLinkState>("idle");
   const [discovery, setDiscovery] = useState<ServerDiscovery[]>([]);
+  const [hasSupportedProject, setHasSupportedProject] = useStoredState<boolean>(
+    "am.settings.support.has_contributed",
+    false
+  );
   const desktopShell = isDesktopShell();
   const isRunActive = run?.status === "running" || run?.status === "stopping";
   const runLogsQuery = useRunLogs(Boolean(run), 120);
@@ -121,6 +128,29 @@ export function SettingsPage() {
         return String(left.name || "").localeCompare(String(right.name || ""), locale);
       }),
     [discovery, locale]
+  );
+  const supportBundles = useMemo(
+    () => [
+      {
+        key: "fair",
+        amount: t("settings.support.bundle.entry.value"),
+        label: t("settings.support.bundle.entry.label"),
+        copy: t("settings.support.bundle.entry.copy")
+      },
+      {
+        key: "useful",
+        amount: t("settings.support.bundle.core.value"),
+        label: t("settings.support.bundle.core.label"),
+        copy: t("settings.support.bundle.core.copy")
+      },
+      {
+        key: "patron",
+        amount: t("settings.support.bundle.patron.value"),
+        label: t("settings.support.bundle.patron.label"),
+        copy: t("settings.support.bundle.patron.copy")
+      }
+    ],
+    [t]
   );
 
   useEffect(() => {
@@ -758,6 +788,70 @@ export function SettingsPage() {
               )}
             </div>
           </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title={t("settings.support.title")}
+        eyebrow={t("settings.support.eyebrow")}
+        actions={
+          hasSupportedProject ? (
+            <span className="settings-state-pill settings-state-pill--accent">
+              <Check size={14} /> {t("settings.support.supported_badge")}
+            </span>
+          ) : null
+        }
+      >
+        <div className="settings-support-shell">
+          {hasSupportedProject ? (
+            <article className="settings-support-thanks">
+              <span>{t("settings.support.eyebrow")}</span>
+              <h3>{t("settings.support.thanks_title")}</h3>
+              <p>{t("settings.support.thanks_copy")}</p>
+            </article>
+          ) : (
+            <article className="settings-support-card">
+              <div className="settings-support-card__header">
+                <span>{t("settings.support.eyebrow")}</span>
+                <h3>{t("settings.support.title")}</h3>
+                <p>{t("settings.support.copy")}</p>
+              </div>
+
+              <div className="settings-support-bundles">
+                {supportBundles.map((bundle) => (
+                  <article key={bundle.key} className="settings-support-bundle">
+                    <span>{bundle.label}</span>
+                    <strong>{bundle.amount}</strong>
+                    <p>{bundle.copy}</p>
+                  </article>
+                ))}
+              </div>
+
+              <p className="settings-support-note">{t("settings.support.note")}</p>
+
+              <div className="settings-support-actions">
+                <div className="inline-actions">
+                  <button
+                    className="primary-button"
+                    onClick={() =>
+                      void openInAppContainer(SUPPORT_URL, t("settings.support.title"))
+                    }
+                    type="button"
+                  >
+                    <Heart size={14} /> {t("settings.support.cta")}
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => setHasSupportedProject(true)}
+                    type="button"
+                  >
+                    <Check size={14} /> {t("settings.support.already_supported")}
+                  </button>
+                </div>
+                <small className="settings-support-meta">{t("settings.support.cta_subtitle")}</small>
+              </div>
+            </article>
+          )}
         </div>
       </SectionCard>
     </div>

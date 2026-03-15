@@ -76,6 +76,9 @@ jobs:
       - name: Build React bundle
         run: npm --prefix web run build
 
+      - name: Validate desktop branding assets
+        run: python -m desktop.build --validate-assets
+
       - name: Build native desktop distribution
         run: python -m desktop.build --skip-frontend
 
