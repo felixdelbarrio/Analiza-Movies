@@ -116,7 +116,8 @@ def _pyinstaller_args(dist_dir: Path, work_dir: Path) -> list[str]:
         "--collect-submodules=webview",
         "--collect-data=webview",
         f"--add-data={WEB_DIST_DIR}{_data_sep()}web/dist",
-        str(ROOT_DIR / "src" / "desktop" / "app.py"),
+        # Bundle the package entrypoint so the frozen app always executes main().
+        str(ROOT_DIR / "src" / "desktop" / "__main__.py"),
     ]
 
     if platform.system() == "Darwin":

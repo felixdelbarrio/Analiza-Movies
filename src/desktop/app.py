@@ -139,3 +139,7 @@ def main() -> None:
         webview.start(debug=False)
     finally:
         server.stop()
+
+
+if __name__ == "__main__":
+    main()
