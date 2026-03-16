@@ -40,7 +40,7 @@ setup(
     extras_require={
         "dev": [
             # Tooling
-            "black==25.12.0",
+            "black==26.3.1",
             "ruff>=0.6",
             "pytest>=8.0",
             "pytest-cov>=4.1",
