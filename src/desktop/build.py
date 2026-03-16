@@ -12,8 +12,6 @@ import time
 import warnings
 from pathlib import Path
 
-from PyInstaller.__main__ import run as pyinstaller_run
-
 APP_NAME = "AnalizaMovies"
 APP_DISPLAY_NAME = "Analiza Movies"
 APP_COMMENT = "Desktop-first cinematic control room for Plex and DLNA libraries."
@@ -441,6 +439,8 @@ def build_desktop(
             ),
             category=UserWarning,
         )
+        from PyInstaller.__main__ import run as pyinstaller_run
+
         pyinstaller_run(pyinstaller_args)
 
     if platform.system() == "Linux":
