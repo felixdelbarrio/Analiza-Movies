@@ -385,6 +385,10 @@ textarea {
   line-height: 1.55;
 }
 
+.run-console__message--error {
+  color: var(--danger);
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;

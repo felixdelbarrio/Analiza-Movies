@@ -15,7 +15,10 @@ from xml.etree import ElementTree
 
 import requests
 
-from server.api.services.runtime_secrets import remember_profile_token
+from server.api.services.runtime_secrets import (
+    remember_plex_user_token,
+    remember_profile_token,
+)
 from shared.runtime_profiles import (
     PROJECT_DIR,
     build_profile_from_discovery,
@@ -413,6 +416,7 @@ def poll_plex_auth_session(session_id: str) -> dict[str, Any]:
 
     session.status = "complete"
     session.user_token = token
+    remember_plex_user_token(token)
     session.servers = discover_plex_servers(token)
 
     with _AUTH_LOCK:
