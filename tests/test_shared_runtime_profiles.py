@@ -14,6 +14,59 @@ from shared.runtime_profiles import (
 )
 
 
+def test_project_root_prefers_workspace_for_local_frozen_bundle(tmp_path: Path) -> None:
+    project_root = tmp_path / "Analiza-Movies"
+    (project_root / "web").mkdir(parents=True)
+    (project_root / "setup.py").write_text("", encoding="utf-8")
+    executable = (
+        project_root
+        / "dist-desktop"
+        / "macos"
+        / "AnalizaMovies.app"
+        / "Contents"
+        / "MacOS"
+        / "AnalizaMovies"
+    )
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text("", encoding="utf-8")
+
+    resolved = runtime_profiles._project_root(
+        source_dir=tmp_path / "standalone-src",
+        executable=executable,
+        frozen_root="/tmp/_MEI12345",
+    )
+
+    assert resolved == project_root
+
+
+def test_project_root_falls_back_to_persistent_user_dir_when_bundle_is_standalone(
+    tmp_path: Path,
+) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    executable = (
+        tmp_path
+        / "Applications"
+        / "AnalizaMovies.app"
+        / "Contents"
+        / "MacOS"
+        / "AnalizaMovies"
+    )
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text("", encoding="utf-8")
+
+    resolved = runtime_profiles._project_root(
+        source_dir=tmp_path / "standalone-src",
+        executable=executable,
+        frozen_root="/tmp/_MEI67890",
+        env={},
+        system_name="Darwin",
+        home_dir=home_dir,
+    )
+
+    assert resolved == home_dir / "Library" / "Application Support" / "Analiza Movies"
+
+
 def test_runtime_profiles_roundtrip(tmp_path: Path) -> None:
     profile = build_profile_from_discovery(
         source_type="plex",

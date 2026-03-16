@@ -9,6 +9,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import warnings
 from pathlib import Path
 
 from PyInstaller.__main__ import run as pyinstaller_run
@@ -431,7 +432,16 @@ def build_desktop(
     if quiet:
         pyinstaller_args.extend(["--log-level", "ERROR"])
 
-    pyinstaller_run(pyinstaller_args)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                "Core Pydantic V1 functionality isn't compatible with Python 3.14 "
+                "or greater."
+            ),
+            category=UserWarning,
+        )
+        pyinstaller_run(pyinstaller_args)
 
     if platform.system() == "Linux":
         _install_linux_branding_assets(dist_dir)

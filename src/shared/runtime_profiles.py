@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
 import re
 import shutil
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,14 +16,93 @@ SourceType = Literal["plex", "dlna"]
 
 _CONFIG_VERSION = 1
 _PROFILE_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_APP_DIR_NAME = "Analiza Movies"
+_APP_DIR_SLUG = "analiza-movies"
 
 SHARED_DIR = Path(__file__).resolve().parent
 
 
-def _project_root() -> Path:
-    frozen_root = getattr(sys, "_MEIPASS", None)
-    if frozen_root:
-        return Path(frozen_root)
+def _find_source_project_root(start: Path | None) -> Path | None:
+    if start is None:
+        return None
+    root = start.resolve()
+    candidates = (root,) if root.is_dir() else (root.parent,)
+    for base in candidates:
+        for candidate in (base, *base.parents):
+            if (candidate / "setup.py").exists() and (candidate / "web").exists():
+                return candidate
+    return None
+
+
+def _persistent_app_root(
+    *,
+    env: Mapping[str, str] | None = None,
+    system_name: str | None = None,
+    home_dir: Path | None = None,
+) -> Path:
+    resolved_env = os.environ if env is None else env
+    raw_override = (
+        str(
+            resolved_env.get("ANALIZA_MOVIES_STATE_DIR")
+            or resolved_env.get("ANALIZA_MOVIES_HOME")
+            or ""
+        )
+        .strip()
+        .strip('"')
+        .strip("'")
+    )
+    if raw_override:
+        return Path(raw_override).expanduser().resolve()
+
+    system = system_name or platform.system()
+    home = (home_dir or Path.home()).expanduser()
+    if system == "Darwin":
+        return home / "Library" / "Application Support" / _APP_DIR_NAME
+    if system == "Windows":
+        appdata = str(resolved_env.get("APPDATA") or "").strip()
+        base = Path(appdata).expanduser() if appdata else home / "AppData" / "Roaming"
+        return base / _APP_DIR_NAME
+
+    xdg_home = str(resolved_env.get("XDG_DATA_HOME") or "").strip()
+    base = Path(xdg_home).expanduser() if xdg_home else home / ".local" / "share"
+    return base / _APP_DIR_SLUG
+
+
+def _project_root(
+    *,
+    source_dir: Path | None = None,
+    executable: Path | None = None,
+    frozen_root: str | None = None,
+    env: Mapping[str, str] | None = None,
+    system_name: str | None = None,
+    home_dir: Path | None = None,
+) -> Path:
+    resolved_env = os.environ if env is None else env
+    raw_override = (
+        str(resolved_env.get("ANALIZA_MOVIES_PROJECT_DIR") or "")
+        .strip()
+        .strip('"')
+        .strip("'")
+    )
+    if raw_override:
+        return Path(raw_override).expanduser().resolve()
+
+    source_root = _find_source_project_root(source_dir or SHARED_DIR)
+    if source_root is not None:
+        return source_root
+
+    frozen_candidate = frozen_root if frozen_root is not None else getattr(sys, "_MEIPASS", None)
+    executable_candidate = executable if executable is not None else Path(sys.executable)
+    if frozen_candidate:
+        bundled_project_root = _find_source_project_root(executable_candidate)
+        if bundled_project_root is not None:
+            return bundled_project_root
+        return _persistent_app_root(
+            env=resolved_env,
+            system_name=system_name,
+            home_dir=home_dir,
+        )
+
     for candidate in SHARED_DIR.parents:
         if (candidate / "setup.py").exists() and (candidate / "web").exists():
             return candidate
