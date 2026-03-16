@@ -91,8 +91,12 @@ def _project_root(
     if source_root is not None:
         return source_root
 
-    frozen_candidate = frozen_root if frozen_root is not None else getattr(sys, "_MEIPASS", None)
-    executable_candidate = executable if executable is not None else Path(sys.executable)
+    frozen_candidate = (
+        frozen_root if frozen_root is not None else getattr(sys, "_MEIPASS", None)
+    )
+    executable_candidate = (
+        executable if executable is not None else Path(sys.executable)
+    )
     if frozen_candidate:
         bundled_project_root = _find_source_project_root(executable_candidate)
         if bundled_project_root is not None:

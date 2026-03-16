@@ -249,6 +249,10 @@ export function SettingsPage() {
       await refreshRun();
     }
   });
+  const runActionError = errorMessage(
+    runMutation.error ?? stopRunMutation.error,
+    t("run.message.failed")
+  );
 
   function toggleDashboardView(viewKey: DashboardViewKey) {
     if (selectedDashboardViews.includes(viewKey)) {
@@ -712,8 +716,16 @@ export function SettingsPage() {
               ) : null}
             </div>
 
-            <p className="run-console__message">
-              {translateRunMessage(run?.progress, t) || t("settings.run.default_message")}
+            <p
+              className={`run-console__message${
+                runMutation.isError || stopRunMutation.isError
+                  ? " run-console__message--error"
+                  : ""
+              }`}
+            >
+              {runMutation.isError || stopRunMutation.isError
+                ? runActionError
+                : translateRunMessage(run?.progress, t) || t("settings.run.default_message")}
             </p>
 
             {runPercent !== null ? (

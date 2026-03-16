@@ -93,7 +93,7 @@ def test_config_profile_roundtrip_and_run(monkeypatch, tmp_path):
 
 
 def test_config_discovery_endpoints(monkeypatch, tmp_path):
-    _patch_runtime_config(tmp_path, monkeypatch)
+    config_path = _patch_runtime_config(tmp_path, monkeypatch)
     monkeypatch.setattr(
         configuration_router,
         "discover_dlna_devices",
@@ -180,6 +180,29 @@ def test_config_discovery_endpoints(monkeypatch, tmp_path):
     assert plex_res.status_code == 200
     assert plex_res.json()["auth_complete"] is True
     assert plex_res.json()["servers"][0]["plex_token"] is None
+
+    save_res = client.post(
+        "/config/profiles",
+        json={
+            "profile": {
+                "source_type": "plex",
+                "name": "Plex Despacho",
+                "host": "192.168.1.40",
+                "port": 32400,
+                "base_url": "http://192.168.1.40",
+                "machine_identifier": "machine-b",
+            },
+            "set_active": True,
+        },
+    )
+    assert save_res.status_code == 200
+
+    runtime_secrets.reset_runtime_secrets_cache()
+    reloaded_profile = runtime_profiles.load_runtime_config(config_path).get_profile(
+        "plex-machine-b"
+    )
+    assert reloaded_profile is not None
+    assert runtime_secrets.resolve_profile_token(reloaded_profile) == "user-token"
 
 
 def test_save_profile_requires_plex_token_or_link(monkeypatch, tmp_path):

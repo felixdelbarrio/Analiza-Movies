@@ -22,6 +22,7 @@ from server.api.services.plex_sources import (
 from server.api.services.runtime_secrets import (
     has_omdb_api_keys,
     remember_omdb_api_keys,
+    remember_plex_user_token,
     remember_profile_token,
     resolve_profile_token,
 )
@@ -157,6 +158,7 @@ def discover_plex(
             token = session.get("user_token")
             if isinstance(token, str) and token.strip():
                 user_token = token.strip()
+                remember_plex_user_token(user_token)
 
     servers = sanitize_plex_servers(discover_plex_servers(user_token))
     return {
@@ -186,6 +188,9 @@ def plex_auth_start(
 def plex_auth_status(session_id: str) -> dict[str, Any]:
     try:
         payload = poll_plex_auth_session(session_id)
+        user_token = payload.get("user_token")
+        if isinstance(user_token, str) and user_token.strip():
+            remember_plex_user_token(user_token.strip())
         servers = payload.get("servers")
         if isinstance(servers, list):
             payload["servers"] = sanitize_plex_servers(
