@@ -1,5 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useQueryClient } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQueryClient
+} from "@tanstack/react-query";
 import { Suspense, lazy, useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { Navigate, RouterProvider, createBrowserRouter } from "react-router-dom";
@@ -63,6 +66,31 @@ function withSuspense(element: ReactNode) {
   return <Suspense fallback={<RouteFallback />}>{element}</Suspense>;
 }
 
+async function refreshCompletedRunData(client: QueryClient, profileId: string | null) {
+  await Promise.all([
+    client.refetchQueries({
+      queryKey: queryKeys.reportAll(profileId),
+      exact: true,
+      type: "all"
+    }),
+    client.refetchQueries({
+      queryKey: queryKeys.reportFiltered(profileId),
+      exact: true,
+      type: "all"
+    }),
+    client.refetchQueries({
+      queryKey: queryKeys.metadata(profileId),
+      exact: true,
+      type: "all"
+    }),
+    client.refetchQueries({
+      queryKey: queryKeys.configState(),
+      exact: true,
+      type: "all"
+    })
+  ]);
+}
+
 function AppRoot() {
   const configQuery = useConfigState();
   const runQuery = useRunState(configQuery.isSuccess);
@@ -106,20 +134,7 @@ function AppRoot() {
     lastTerminalizedRunIdRef.current = runId;
     const completedProfileId = run?.profile_id ?? null;
 
-    void Promise.all([
-      client.invalidateQueries({
-        queryKey: queryKeys.reportAll(completedProfileId)
-      }),
-      client.invalidateQueries({
-        queryKey: queryKeys.reportFiltered(completedProfileId)
-      }),
-      client.invalidateQueries({
-        queryKey: queryKeys.metadata(completedProfileId)
-      }),
-      client.invalidateQueries({
-        queryKey: queryKeys.configState()
-      })
-    ]);
+    void refreshCompletedRunData(client, completedProfileId);
   }, [client, run?.profile_id, run?.run_id, run?.status]);
 
   const context: AppOutletContext = {
