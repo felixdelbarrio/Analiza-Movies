@@ -1,6 +1,7 @@
 import {
+  ArrowDown,
+  ArrowUp,
   Download,
-  Image,
   LayoutGrid,
   Rows3,
   Search
@@ -16,6 +17,7 @@ import {
 
 import { useAppContext } from "../app/use-app-context";
 import { MovieDetailModal } from "../components/movie-detail-modal";
+import { MovieDetailPanel } from "../components/movie-detail-panel";
 import { PageHero } from "../components/page-hero";
 import { PageState } from "../components/page-state";
 import { SectionCard } from "../components/section-card";
@@ -106,14 +108,23 @@ function MetricChip({ label, value }: MetricChipProps) {
   );
 }
 
-interface PosterGalleryProps {
+interface LibraryCardGridProps {
   locale: string;
-  rows: ReportRow[];
   onOpenDetail: (row: ReportRow) => void;
+  onSelect: (row: ReportRow) => void;
+  rows: ReportRow[];
+  selectedRowKey: string | null;
   t: ReturnType<typeof useI18n>["t"];
 }
 
-function PosterGallery({ locale, rows, onOpenDetail, t }: PosterGalleryProps) {
+function LibraryCardGrid({
+  locale,
+  onOpenDetail,
+  onSelect,
+  rows,
+  selectedRowKey,
+  t
+}: LibraryCardGridProps) {
   if (!rows.length) {
     return <div className="virtual-table__empty">{t("table.empty")}</div>;
   }
@@ -121,16 +132,19 @@ function PosterGallery({ locale, rows, onOpenDetail, t }: PosterGalleryProps) {
   return (
     <div className="library-poster-grid">
       {rows.map((row) => {
+        const rowKey = buildReportRowKey(row);
         const tone = getDecisionTone(row.decision);
         const poster = getPoster(row);
         const subtitle = row.actors || row.director || row.genre || t("app.empty_dash");
+        const selected = rowKey === selectedRowKey;
+
         return (
           <article
-            key={buildReportRowKey(row)}
-            className="library-poster-card"
+            key={rowKey}
+            className={`library-poster-card${selected ? " is-selected" : ""}`}
             data-tone={tone}
-            onClick={() => onOpenDetail(row)}
-            onKeyDown={(event) => handleActivate(event, () => onOpenDetail(row))}
+            onClick={() => onSelect(row)}
+            onKeyDown={(event) => handleActivate(event, () => onSelect(row))}
             role="button"
             tabIndex={0}
           >
@@ -148,7 +162,24 @@ function PosterGallery({ locale, rows, onOpenDetail, t }: PosterGalleryProps) {
                   <span className="library-poster-card__eyebrow">
                     {row.library || t("detail.fallback.library")}
                   </span>
-                  <h3>{row.title || t("app.empty_dash")}</h3>
+                  <h3>
+                    <button
+                      className="library-title-link"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSelect(row);
+                      }}
+                      onDoubleClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onOpenDetail(row);
+                      }}
+                      onKeyDown={(event) => handleActivate(event, () => onOpenDetail(row))}
+                      type="button"
+                    >
+                      {row.title || t("app.empty_dash")}
+                    </button>
+                  </h3>
                   <p>{[row.year, row.imdb_id].filter(Boolean).join(" · ") || t("app.empty_dash")}</p>
                 </div>
                 <span className={`decision-chip decision-chip--${tone}`}>
@@ -167,80 +198,22 @@ function PosterGallery({ locale, rows, onOpenDetail, t }: PosterGalleryProps) {
                 />
                 <MetricChip
                   label="MC"
-                  value={formatMetricValue(row.metacritic_score, t("app.empty_dash"), { round: true })}
+                  value={formatMetricValue(row.metacritic_score, t("app.empty_dash"), {
+                    round: true
+                  })}
                 />
                 <MetricChip
                   label={t("detail.metric.size")}
-                  value={formatSizeValue(row.file_size_gb, locale, t("unit.gb"), t("app.empty_dash"))}
+                  value={formatSizeValue(
+                    row.file_size_gb,
+                    locale,
+                    t("unit.gb"),
+                    t("app.empty_dash")
+                  )}
                 />
               </div>
 
               <p className="library-poster-card__summary">{subtitle}</p>
-            </div>
-          </article>
-        );
-      })}
-    </div>
-  );
-}
-
-interface SignalCardGridProps {
-  locale: string;
-  rows: ReportRow[];
-  onOpenDetail: (row: ReportRow) => void;
-  t: ReturnType<typeof useI18n>["t"];
-}
-
-function SignalCardGrid({ locale, rows, onOpenDetail, t }: SignalCardGridProps) {
-  if (!rows.length) {
-    return <div className="virtual-table__empty">{t("table.empty")}</div>;
-  }
-
-  return (
-    <div className="library-signal-grid">
-      {rows.map((row) => {
-        const tone = getDecisionTone(row.decision);
-        return (
-          <article
-            key={buildReportRowKey(row)}
-            className="library-signal-card"
-            data-tone={tone}
-            onClick={() => onOpenDetail(row)}
-            onKeyDown={(event) => handleActivate(event, () => onOpenDetail(row))}
-            role="button"
-            tabIndex={0}
-          >
-            <div className="library-signal-card__header">
-              <div>
-                <span className="library-signal-card__eyebrow">
-                  {row.library || t("detail.fallback.library")}
-                </span>
-                <h3>{row.title || t("app.empty_dash")}</h3>
-                <p>{[row.year, row.imdb_id].filter(Boolean).join(" · ") || t("app.empty_dash")}</p>
-              </div>
-              <span className={`decision-chip decision-chip--${tone}`}>
-                {translateDecision(String(row.decision || "UNKNOWN"), t)}
-              </span>
-            </div>
-
-            <div className="library-signal-card__metrics">
-              <MetricChip
-                label={t("column.imdb")}
-                value={formatMetricValue(row.imdb_rating, t("app.empty_dash"))}
-              />
-              <MetricChip
-                label={t("detail.metric.size")}
-                value={formatSizeValue(row.file_size_gb, locale, t("unit.gb"), t("app.empty_dash"))}
-              />
-              <MetricChip
-                label={t("detail.director")}
-                value={String(row.director || t("app.empty_dash"))}
-              />
-            </div>
-
-            <div className="library-signal-card__footer">
-              <span>{t("detail.actors")}</span>
-              <strong>{String(row.actors || row.genre || t("app.empty_dash"))}</strong>
             </div>
           </article>
         );
@@ -266,8 +239,12 @@ export function LibraryPage() {
     direction: "asc"
   });
   const deferredSearch = useDeferredValue(search);
+  const normalizedViewMode = viewMode === "table" ? "table" : "cards";
 
-  const libraryOptions = useMemo(() => uniqueValues(reportAll, "library", locale), [locale, reportAll]);
+  const libraryOptions = useMemo(
+    () => uniqueValues(reportAll, "library", locale),
+    [locale, reportAll]
+  );
   const filteredRows = useMemo(
     () =>
       filterReportRows(reportAll, {
@@ -333,17 +310,23 @@ export function LibraryPage() {
     });
   }, [filteredRows, locale, sortState]);
   const visibleSizeGb = useMemo(() => sumReportSizeGb(sortedRows), [sortedRows]);
-  const activeSortLabel = useMemo(() => {
-    const keyToLabel: Record<string, string> = {
-      title: t("column.title"),
-      year: t("column.year"),
-      library: t("column.library"),
-      decision: t("column.decision"),
-      imdb: t("column.imdb"),
-      size: t("column.size")
-    };
-    return keyToLabel[sortState.key] ?? t("column.title");
-  }, [sortState.key, t]);
+  const cardSortOptions = useMemo(
+    () => [
+      { key: "title", label: t("column.title") },
+      { key: "year", label: t("column.year") },
+      { key: "library", label: t("column.library") },
+      { key: "decision", label: t("column.decision") },
+      { key: "imdb", label: t("column.imdb") },
+      { key: "size", label: t("column.size") }
+    ],
+    [t]
+  );
+  const activeSortLabel = useMemo(
+    () =>
+      cardSortOptions.find((option) => option.key === sortState.key)?.label ??
+      t("column.title"),
+    [cardSortOptions, sortState.key, t]
+  );
   const searchAssistVisible =
     searchScope === "title" &&
     deferredSearch.trim().length > 0 &&
@@ -373,6 +356,12 @@ export function LibraryPage() {
   );
 
   useEffect(() => {
+    if (viewMode === "poster") {
+      setViewMode("cards");
+    }
+  }, [setViewMode, viewMode]);
+
+  useEffect(() => {
     if (!sortedRows.length) {
       setSelectedRowKey(null);
       setDetailModalOpen(false);
@@ -398,7 +387,7 @@ export function LibraryPage() {
       ),
     [selectedRowKey, sortedRows]
   );
-  const row = sortedRows[selectedIndex] ?? sortedRows[0] ?? null;
+  const selectedRow = sortedRows[selectedIndex] ?? sortedRows[0] ?? null;
   const hasActiveFilters = Boolean(
     search.trim() || libraryFilter || decisionFilter || searchScope !== "title"
   );
@@ -418,6 +407,13 @@ export function LibraryPage() {
       exportAllColumns,
       rows
     );
+  }
+
+  function toggleSortDirection() {
+    setSortState((current) => ({
+      ...current,
+      direction: current.direction === "asc" ? "desc" : "asc"
+    }));
   }
 
   return (
@@ -591,7 +587,7 @@ export function LibraryPage() {
                   aria-label={t("library.view.label")}
                 >
                   <button
-                    className={viewMode === "table" ? "is-active" : ""}
+                    className={normalizedViewMode === "table" ? "is-active" : ""}
                     onClick={() => setViewMode("table")}
                     type="button"
                   >
@@ -599,20 +595,12 @@ export function LibraryPage() {
                     {t("library.view.table")}
                   </button>
                   <button
-                    className={viewMode === "cards" ? "is-active" : ""}
+                    className={normalizedViewMode === "cards" ? "is-active" : ""}
                     onClick={() => setViewMode("cards")}
                     type="button"
                   >
                     <LayoutGrid size={16} />
                     {t("library.view.cards")}
-                  </button>
-                  <button
-                    className={viewMode === "poster" ? "is-active" : ""}
-                    onClick={() => setViewMode("poster")}
-                    type="button"
-                  >
-                    <Image size={16} />
-                    {t("library.view.poster")}
                   </button>
                 </div>
 
@@ -640,118 +628,177 @@ export function LibraryPage() {
               </div>
             }
           >
-            {viewMode === "table" ? (
-              <VirtualTable<ReportRow>
-                columns={[
-                  {
-                    key: "title",
-                    label: t("column.title"),
-                    width: "28%",
-                    sortable: true,
-                    render: (current) => (
-                      <button
-                        className="table-title-button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openDetail(current);
-                        }}
-                        type="button"
-                      >
-                        <span
-                          className={`table-title-button__dot table-title-button__dot--${getDecisionTone(
-                            current.decision
-                          )}`}
-                        />
-                        <span className="table-title-button__label">
-                          {String(current.title || t("app.empty_dash"))}
-                        </span>
-                      </button>
-                    )
-                  },
-                  {
-                    key: "year",
-                    label: t("column.year"),
-                    width: "8%",
-                    align: "center",
-                    sortable: true,
-                    render: (current) => String(current.year || t("app.empty_dash"))
-                  },
-                  {
-                    key: "library",
-                    label: t("column.library"),
-                    width: "16%",
-                    sortable: true,
-                    render: (current) => String(current.library || t("app.empty_dash"))
-                  },
-                  {
-                    key: "decision",
-                    label: t("column.decision"),
-                    width: "14%",
-                    align: "center",
-                    sortable: true,
-                    render: (current) => (
-                      <span
-                        className={`decision-chip decision-chip--${getDecisionTone(
-                          current.decision
-                        )}`}
-                      >
-                        {translateDecision(String(current.decision || "UNKNOWN"), t)}
-                      </span>
-                    )
-                  },
-                  {
-                    key: "imdb",
-                    label: t("column.imdb"),
-                    width: "8%",
-                    align: "center",
-                    sortable: true,
-                    render: (current) => String(current.imdb_rating || t("app.empty_dash"))
-                  },
-                  {
-                    key: "size",
-                    label: t("column.size"),
-                    width: "10%",
-                    align: "center",
-                    sortable: true,
-                    render: (current) =>
-                      current.file_size_gb
-                        ? Number(current.file_size_gb).toLocaleString(locale, {
-                            minimumFractionDigits: 1,
-                            maximumFractionDigits: 1
-                          })
-                        : t("app.empty_dash")
-                  },
-                  {
-                    key: "director",
-                    label: t("detail.director"),
-                    width: "16%",
-                    render: (current) => String(current.director || t("app.empty_dash"))
-                  }
-                ]}
-                maxHeight={780}
-                onSelect={(index) => selectRow(sortedRows[index])}
-                onSortChange={setSortState}
-                rowTone={(current) => getDecisionTone(current.decision)}
-                rows={sortedRows}
-                selectedIndex={selectedIndex}
-                sortState={sortState}
-                variant="sheet"
-              />
+            {normalizedViewMode === "table" ? (
+              <div className="split-layout split-layout--library library-catalog-stage">
+                <div className="split-layout__main">
+                  <VirtualTable<ReportRow>
+                    columns={[
+                      {
+                        key: "title",
+                        label: t("column.title"),
+                        width: "28%",
+                        sortable: true,
+                        render: (current) => (
+                          <button
+                            className="table-title-button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              selectRow(current);
+                            }}
+                            onDoubleClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              openDetail(current);
+                            }}
+                            onKeyDown={(event) => handleActivate(event, () => openDetail(current))}
+                            type="button"
+                          >
+                            <span
+                              className={`table-title-button__dot table-title-button__dot--${getDecisionTone(
+                                current.decision
+                              )}`}
+                            />
+                            <span className="table-title-button__label">
+                              {String(current.title || t("app.empty_dash"))}
+                            </span>
+                          </button>
+                        )
+                      },
+                      {
+                        key: "year",
+                        label: t("column.year"),
+                        width: "8%",
+                        align: "center",
+                        sortable: true,
+                        render: (current) => String(current.year || t("app.empty_dash"))
+                      },
+                      {
+                        key: "library",
+                        label: t("column.library"),
+                        width: "16%",
+                        sortable: true,
+                        render: (current) => String(current.library || t("app.empty_dash"))
+                      },
+                      {
+                        key: "decision",
+                        label: t("column.decision"),
+                        width: "14%",
+                        align: "center",
+                        sortable: true,
+                        render: (current) => (
+                          <span
+                            className={`decision-chip decision-chip--${getDecisionTone(
+                              current.decision
+                            )}`}
+                          >
+                            {translateDecision(String(current.decision || "UNKNOWN"), t)}
+                          </span>
+                        )
+                      },
+                      {
+                        key: "imdb",
+                        label: t("column.imdb"),
+                        width: "8%",
+                        align: "center",
+                        sortable: true,
+                        render: (current) => String(current.imdb_rating || t("app.empty_dash"))
+                      },
+                      {
+                        key: "size",
+                        label: t("column.size"),
+                        width: "10%",
+                        align: "center",
+                        sortable: true,
+                        render: (current) =>
+                          current.file_size_gb
+                            ? Number(current.file_size_gb).toLocaleString(locale, {
+                                minimumFractionDigits: 1,
+                                maximumFractionDigits: 1
+                              })
+                            : t("app.empty_dash")
+                      },
+                      {
+                        key: "director",
+                        label: t("detail.director"),
+                        width: "16%",
+                        render: (current) => String(current.director || t("app.empty_dash"))
+                      }
+                    ]}
+                    maxHeight={780}
+                    onSelect={(index) => selectRow(sortedRows[index])}
+                    onSortChange={setSortState}
+                    rowTone={(current) => getDecisionTone(current.decision)}
+                    rows={sortedRows}
+                    selectedIndex={selectedIndex}
+                    sortState={sortState}
+                    variant="sheet"
+                  />
+                </div>
+
+                <div className="split-layout__aside library-detail-panel">
+                  <MovieDetailPanel row={selectedRow} />
+                </div>
+              </div>
             ) : null}
 
-            {viewMode === "cards" ? (
-              <SignalCardGrid locale={locale} onOpenDetail={openDetail} rows={sortedRows} t={t} />
-            ) : null}
+            {normalizedViewMode === "cards" ? (
+              <div className="library-card-stage">
+                <div className="library-card-sorter">
+                  <div className="library-card-sorter__copy">
+                    <span>{t("library.filter.sorting")}</span>
+                    <strong>{activeSortLabel}</strong>
+                  </div>
 
-            {viewMode === "poster" ? (
-              <PosterGallery locale={locale} onOpenDetail={openDetail} rows={sortedRows} t={t} />
+                  <div className="library-card-sorter__controls">
+                    <label className="form-field form-field--compact library-card-sorter__field">
+                      <span>{t("library.filter.sorting")}</span>
+                      <select
+                        onChange={(event) =>
+                          setSortState((current) => ({
+                            ...current,
+                            key: event.target.value
+                          }))
+                        }
+                        value={sortState.key}
+                      >
+                        {cardSortOptions.map((option) => (
+                          <option key={option.key} value={option.key}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <button
+                      className="secondary-button"
+                      onClick={toggleSortDirection}
+                      type="button"
+                    >
+                      {sortState.direction === "asc" ? <ArrowUp size={16} /> : <ArrowDown size={16} />}
+                      {sortState.direction === "asc"
+                        ? t("library.sort.direction.asc")
+                        : t("library.sort.direction.desc")}
+                    </button>
+                  </div>
+                </div>
+
+                <LibraryCardGrid
+                  locale={locale}
+                  onOpenDetail={openDetail}
+                  onSelect={selectRow}
+                  rows={sortedRows}
+                  selectedRowKey={selectedRowKey}
+                  t={t}
+                />
+              </div>
             ) : null}
           </SectionCard>
 
           <MovieDetailModal
             open={detailModalOpen}
             onClose={() => setDetailModalOpen(false)}
-            row={row}
+            profileId={activeProfileId}
+            row={selectedRow}
           />
         </>
       ) : null}

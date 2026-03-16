@@ -1,4 +1,5 @@
 import type {
+  ConsolidatedPayload,
   ConfigState,
   DeleteActionResponse,
   MetadataRow,
@@ -265,6 +266,35 @@ export async function fetchMetadata(profileId?: string | null) {
     }
     throw error;
   }
+}
+
+export async function fetchConsolidatedRecord(
+  row: Pick<ReportRow, "imdb_id" | "title" | "year">,
+  profileId?: string | null
+) {
+  const imdbId = String(row.imdb_id || "").trim();
+  if (imdbId) {
+    return requestJson<ConsolidatedPayload>(
+      `/cache/consolidated/by-imdb/${encodeURIComponent(imdbId)}`,
+      undefined,
+      { profile_id: profileId ?? undefined }
+    );
+  }
+
+  const title = String(row.title || "").trim();
+  if (!title) {
+    return null;
+  }
+
+  return requestJson<ConsolidatedPayload>(
+    "/cache/consolidated/by-title-year",
+    undefined,
+    {
+      title,
+      year: row.year ? String(row.year) : undefined,
+      profile_id: profileId ?? undefined
+    }
+  );
 }
 
 export async function runDeleteAction(
