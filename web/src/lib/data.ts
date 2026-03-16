@@ -93,6 +93,23 @@ function normalizeSearchValue(value: string) {
     .trim();
 }
 
+function parseStructuredSearchValue(value: string) {
+  const text = value.trim();
+  if (text.length < 2 || text.length > 12_000) {
+    return null;
+  }
+  const isObject = text.startsWith("{") && text.endsWith("}");
+  const isArray = text.startsWith("[") && text.endsWith("]");
+  if (!isObject && !isArray) {
+    return null;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 function collectSearchTerms(
   value: unknown,
   searchParts: string[],
@@ -104,6 +121,13 @@ function collectSearchTerms(
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     const normalized = String(value).trim();
     if (normalized && normalized !== "N/A") {
+      if (typeof value === "string") {
+        const parsed = parseStructuredSearchValue(normalized);
+        if (parsed !== null) {
+          collectSearchTerms(parsed, searchParts, seenObjects);
+          return;
+        }
+      }
       searchParts.push(normalized);
     }
     return;
@@ -288,6 +312,7 @@ export function buildReportRowKey(row: ReportRow) {
 
 export function filterReportRows(rows: ReportRow[], filters: ReportFilterOptions) {
   const searchValue = normalizeSearchValue(filters.search);
+  const searchTokens = searchValue ? searchValue.split(" ").filter(Boolean) : [];
   const searchScope = filters.searchScope ?? "title";
   const libraryFilter = String(filters.library || "").trim();
   const decisionFilter = String(filters.decision || "").trim().toUpperCase();
@@ -301,7 +326,8 @@ export function filterReportRows(rows: ReportRow[], filters: ReportFilterOptions
       searchScope === "title"
         ? String(row.search_title ?? row.title ?? "")
         : String(row.search_all ?? "");
-    const matchesSearch = !searchValue || haystack.includes(searchValue);
+    const matchesSearch =
+      searchTokens.length === 0 || searchTokens.every((token) => haystack.includes(token));
     return matchesLibrary && matchesDecision && matchesSearch;
   });
 }

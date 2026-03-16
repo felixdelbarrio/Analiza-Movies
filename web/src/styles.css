@@ -1086,9 +1086,63 @@ select[multiple] {
   color: var(--accent);
 }
 
+.library-title-link {
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.library-title-link:hover {
+  color: var(--accent);
+}
+
 .library-catalog-card .section-card__body {
   display: grid;
   gap: 1rem;
+}
+
+.library-catalog-stage,
+.library-card-stage {
+  display: grid;
+  gap: 1rem;
+}
+
+.library-card-sorter {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.05rem;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface-soft);
+}
+
+.library-card-sorter__copy,
+.library-card-sorter__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.library-card-sorter__copy span {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+}
+
+.library-card-sorter__field {
+  min-width: min(240px, 100%);
 }
 
 .library-search-assist {
@@ -1178,6 +1232,13 @@ select[multiple] {
 .library-poster-card:hover {
   border-color: var(--accent-border);
   box-shadow: var(--accent-ring);
+}
+
+.library-poster-card.is-selected {
+  border-color: var(--accent-border);
+  box-shadow:
+    var(--accent-shadow),
+    var(--accent-ring-strong);
 }
 
 .library-signal-card:focus-visible,
@@ -1592,6 +1653,23 @@ select[multiple] {
   margin-bottom: 0.35rem;
 }
 
+.detail-panel__helper {
+  margin: 0;
+  color: var(--muted);
+}
+
+.detail-panel__section {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.detail-panel__section-title {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+}
+
 .detail-modal {
   position: fixed;
   inset: 0;
@@ -1612,7 +1690,7 @@ select[multiple] {
 .detail-modal__dialog {
   position: relative;
   z-index: 1;
-  width: min(980px, calc(100vw - 2rem));
+  width: min(1120px, calc(100vw - 2rem));
   max-height: calc(100vh - 2rem);
   overflow: auto;
 }
@@ -2204,6 +2282,12 @@ select[multiple] {
 
   .library-toolbar__metrics .secondary-button {
     width: 100%;
+  }
+
+  .library-card-sorter,
+  .library-card-sorter__controls {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .settings-support-bundles {
