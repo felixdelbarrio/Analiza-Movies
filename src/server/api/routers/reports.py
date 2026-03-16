@@ -12,7 +12,11 @@ from server.api.paths import (
     get_report_all_path,
     get_report_filtered_path,
 )
-from server.api.services.reports import df_to_page, prepare_search_blob
+from server.api.services.reports import (
+    df_to_page,
+    enrich_report_context,
+    prepare_search_blob,
+)
 
 router = APIRouter()
 _TEXT_COLUMNS = ["poster_url", "trailer_url", "omdb_json"]
@@ -49,6 +53,7 @@ def _build_report_page(
             detail=read_error_detail or f"Error leyendo {path.name}",
         )
 
+    enrich_report_context(df, cache=cache, profile_id=profile_id)
     if "__search_blob" not in df.columns:
         prepare_search_blob(df)
 

@@ -7,6 +7,7 @@ export interface ReportRow {
   decision?: string | null;
   reason?: string | null;
   reason_code?: string | null;
+  misidentified_hint?: string | null;
   file?: string | null;
   file_size?: number | string | null;
   file_size_gb?: number | null;
@@ -16,15 +17,20 @@ export interface ReportRow {
   metacritic_score?: number | string | null;
   plex_rating?: number | string | null;
   imdb_id?: string | null;
+  rating_key?: string | number | null;
   guid?: string | null;
   poster_url?: string | null;
   trailer_url?: string | null;
+  thumb?: string | null;
   omdb_json?: string | null;
   genre?: string | null;
   director?: string | null;
   actors?: string | null;
   plot?: string | null;
+  source_language?: string | null;
+  search_context?: string | null;
   wikipedia_title?: string | null;
+  wikipedia_summary?: string | null;
   wikidata_id?: string | null;
   decade?: number | null;
   decade_label?: string | null;
@@ -129,6 +135,30 @@ export interface RunState {
 
 export interface RunStatusResponse {
   run: RunState | null;
+}
+
+export interface ConsolidatedSourceState {
+  rid?: string | null;
+  status?: string | null;
+  fetched_at?: string | number | null;
+  ttl_s?: number | null;
+}
+
+export interface ConsolidatedPayload {
+  key: {
+    imdb_id?: string | null;
+    title_norm?: string | null;
+    year_norm?: string | null;
+  };
+  sources: {
+    omdb: ConsolidatedSourceState;
+    wiki: ConsolidatedSourceState;
+  };
+  merged?: Record<string, unknown> | null;
+  omdb?: Record<string, unknown> | null;
+  wiki?: Record<string, unknown> | null;
+  wikidata?: Record<string, unknown> | null;
+  wiki_from_omdb_cache?: Record<string, unknown> | null;
 }
 
 export interface RunLogsResponse {

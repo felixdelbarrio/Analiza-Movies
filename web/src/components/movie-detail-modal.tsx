@@ -1,19 +1,53 @@
+import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 
 import { useI18n } from "../i18n/provider";
+import { ApiError, fetchConsolidatedRecord } from "../lib/api";
 import type { ReportRow } from "../lib/types";
 import { MovieDetailPanel } from "./movie-detail-panel";
 
 interface MovieDetailModalProps {
   open: boolean;
   row?: ReportRow | null;
+  profileId?: string | null;
   onClose: () => void;
 }
 
-export function MovieDetailModal({ open, row, onClose }: MovieDetailModalProps) {
+export function MovieDetailModal({
+  open,
+  row,
+  profileId,
+  onClose
+}: MovieDetailModalProps) {
   const { t } = useI18n();
+  const detailsQuery = useQuery({
+    queryKey: [
+      "movie-detail",
+      profileId ?? "__default__",
+      row?.imdb_id ?? "",
+      row?.title ?? "",
+      row?.year ?? ""
+    ],
+    queryFn: async () => {
+      if (!row) {
+        return null;
+      }
+      try {
+        return await fetchConsolidatedRecord(row, profileId);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    enabled: open && Boolean(row),
+    staleTime: 300_000,
+    retry: (failureCount, error) =>
+      !(error instanceof ApiError && error.status === 404) && failureCount < 1
+  });
 
   useEffect(() => {
     if (!open) {
@@ -57,7 +91,12 @@ export function MovieDetailModal({ open, row, onClose }: MovieDetailModalProps) 
         >
           <X size={18} />
         </button>
-        <MovieDetailPanel row={row} variant="modal" />
+        <MovieDetailPanel
+          details={detailsQuery.data ?? null}
+          detailsLoading={detailsQuery.isLoading}
+          row={row}
+          variant="modal"
+        />
       </div>
     </div>,
     document.body
