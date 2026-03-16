@@ -34,7 +34,7 @@ import {
   updateConfigState
 } from "../lib/api";
 import { getDashboardViews, normalizeDashboardViews } from "../lib/data";
-import { isDesktopShell, openInAppContainer } from "../lib/desktop";
+import { openExternalUrl, openInAppContainer } from "../lib/desktop";
 import { useStoredState } from "../lib/preferences";
 import type { DashboardViewKey, Profile, ServerDiscovery } from "../lib/types";
 
@@ -86,7 +86,6 @@ export function SettingsPage() {
     "am.settings.support.has_contributed",
     false
   );
-  const desktopShell = isDesktopShell();
   const isRunActive = run?.status === "running" || run?.status === "stopping";
   const runLogsQuery = useRunLogs(Boolean(run), 120);
   const dashboardViews = useMemo(() => getDashboardViews(t), [t]);
@@ -165,7 +164,7 @@ export function SettingsPage() {
   });
 
   const startPlexMutation = useMutation({
-    mutationFn: async () => startPlexAuth(!desktopShell),
+    mutationFn: async () => startPlexAuth(true),
     onMutate: () => {
       setPlexLinkState("pending");
       setPlexSessionId("");
@@ -176,9 +175,6 @@ export function SettingsPage() {
       setPlexSessionId(payload.session_id);
       setPlexAuthUrl(payload.auth_url);
       setPlexLinkState("pending");
-      if (desktopShell && payload.auth_url) {
-        await openInAppContainer(payload.auth_url, t("settings.plex.login_title"));
-      }
     },
     onError: () => {
       setPlexLinkState("error");
@@ -253,6 +249,10 @@ export function SettingsPage() {
       await refreshRun();
     }
   });
+  const runActionError = errorMessage(
+    runMutation.error ?? stopRunMutation.error,
+    t("run.message.failed")
+  );
 
   function toggleDashboardView(viewKey: DashboardViewKey) {
     if (selectedDashboardViews.includes(viewKey)) {
@@ -555,9 +555,7 @@ export function SettingsPage() {
                   {plexAuthUrl ? (
                     <button
                       className="secondary-button"
-                      onClick={() =>
-                        void openInAppContainer(plexAuthUrl, t("settings.plex.login_title"))
-                      }
+                      onClick={() => void openExternalUrl(plexAuthUrl)}
                       type="button"
                     >
                       <Link2 size={14} /> {t("settings.action.open_plex_web")}
@@ -718,8 +716,16 @@ export function SettingsPage() {
               ) : null}
             </div>
 
-            <p className="run-console__message">
-              {translateRunMessage(run?.progress, t) || t("settings.run.default_message")}
+            <p
+              className={`run-console__message${
+                runMutation.isError || stopRunMutation.isError
+                  ? " run-console__message--error"
+                  : ""
+              }`}
+            >
+              {runMutation.isError || stopRunMutation.isError
+                ? runActionError
+                : translateRunMessage(run?.progress, t) || t("settings.run.default_message")}
             </p>
 
             {runPercent !== null ? (

@@ -13,11 +13,13 @@ from shared.runtime_profiles import SourceProfile
 SERVICE_NAME: Final = "analiza-movies"
 OMDB_ENTRY: Final = "omdb_api_keys"
 PROFILE_TOKEN_PREFIX: Final = "profile_token:"
+PLEX_USER_TOKEN_ENTRY: Final = "plex_user_token"
 
 _UNSET = object()
 _LOCK = Lock()
 _PROFILE_TOKENS: dict[str, str | None] = {}
 _OMDB_API_KEYS: str | None | object = _UNSET
+_PLEX_USER_TOKEN: str | None | object = _UNSET
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +53,11 @@ def _write_secret(entry: str, value: str | None) -> None:
 
 
 def reset_runtime_secrets_cache() -> None:
-    global _OMDB_API_KEYS
+    global _OMDB_API_KEYS, _PLEX_USER_TOKEN
     with _LOCK:
         _PROFILE_TOKENS.clear()
         _OMDB_API_KEYS = _UNSET
+        _PLEX_USER_TOKEN = _UNSET
 
 
 def remember_profile_token(profile_id: str | None, token: str | None) -> None:
@@ -67,6 +70,30 @@ def remember_profile_token(profile_id: str | None, token: str | None) -> None:
     _write_secret(_profile_entry(clean_profile_id), clean_token)
 
 
+def remember_plex_user_token(token: str | None) -> None:
+    global _PLEX_USER_TOKEN
+    clean_token = str(token or "").strip() or None
+    with _LOCK:
+        _PLEX_USER_TOKEN = clean_token
+    _write_secret(PLEX_USER_TOKEN_ENTRY, clean_token)
+
+
+def resolve_plex_user_token() -> str | None:
+    global _PLEX_USER_TOKEN
+    with _LOCK:
+        runtime_token = _PLEX_USER_TOKEN
+
+    if runtime_token is _UNSET:
+        stored_token = _read_secret(PLEX_USER_TOKEN_ENTRY)
+        with _LOCK:
+            _PLEX_USER_TOKEN = stored_token
+            runtime_token = _PLEX_USER_TOKEN
+
+    if isinstance(runtime_token, str) and runtime_token:
+        return runtime_token
+    return None
+
+
 def resolve_profile_token(profile: SourceProfile) -> str | None:
     direct_token = str(profile.plex_token or "").strip()
     if direct_token:
@@ -74,16 +101,19 @@ def resolve_profile_token(profile: SourceProfile) -> str | None:
 
     clean_profile_id = str(profile.id or "").strip()
     if not clean_profile_id:
-        return None
+        return resolve_plex_user_token()
 
     with _LOCK:
-        if clean_profile_id in _PROFILE_TOKENS:
-            return _PROFILE_TOKENS[clean_profile_id]
+        runtime_token = _PROFILE_TOKENS.get(clean_profile_id, _UNSET)
+    if isinstance(runtime_token, str) and runtime_token:
+        return runtime_token
 
     stored_token = _read_secret(_profile_entry(clean_profile_id))
     with _LOCK:
         _PROFILE_TOKENS[clean_profile_id] = stored_token
-    return stored_token
+    if stored_token:
+        return stored_token
+    return resolve_plex_user_token()
 
 
 def remember_omdb_api_keys(value: str | None) -> None:

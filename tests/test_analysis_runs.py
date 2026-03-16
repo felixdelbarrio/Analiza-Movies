@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import sys
+
 from server.api.services.analysis_runs import _plex_cmd_and_env
-from server.api.services.runtime_secrets import remember_profile_token
+from server.api.services.runtime_secrets import (
+    remember_plex_user_token,
+    remember_profile_token,
+    reset_runtime_secrets_cache,
+)
 from shared.runtime_profiles import RuntimeConfig, build_profile_from_discovery
 
 
 def test_plex_cmd_uses_runtime_token_registry() -> None:
+    reset_runtime_secrets_cache()
     profile = build_profile_from_discovery(
         source_type="plex",
         name="Plex Sala",
@@ -22,3 +29,25 @@ def test_plex_cmd_uses_runtime_token_registry() -> None:
     assert env["PLEX_TOKEN"] == "session-token"
     assert "ANALIZA_AUTO_DASHBOARD" not in env
     assert "--no-dashboard" not in cmd
+
+
+def test_plex_cmd_falls_back_to_linked_plex_account_token(monkeypatch) -> None:
+    reset_runtime_secrets_cache()
+    profile = build_profile_from_discovery(
+        source_type="plex",
+        name="Plex Sala",
+        host="192.168.1.20",
+        port=32400,
+        base_url="http://192.168.1.20",
+        machine_identifier="machine-analysis-runs-fallback",
+        plex_token=None,
+    )
+    remember_plex_user_token("account-token")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/tmp/AnalizaMovies", raising=False)
+
+    cmd, env = _plex_cmd_and_env(RuntimeConfig(), profile)
+
+    assert cmd == ["/tmp/AnalizaMovies", "--plex"]
+    assert env["PLEX_TOKEN"] == "account-token"

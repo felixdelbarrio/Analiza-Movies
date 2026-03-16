@@ -9,9 +9,8 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import warnings
 from pathlib import Path
-
-from PyInstaller.__main__ import run as pyinstaller_run
 
 APP_NAME = "AnalizaMovies"
 APP_DISPLAY_NAME = "Analiza Movies"
@@ -116,7 +115,8 @@ def _pyinstaller_args(dist_dir: Path, work_dir: Path) -> list[str]:
         "--collect-submodules=webview",
         "--collect-data=webview",
         f"--add-data={WEB_DIST_DIR}{_data_sep()}web/dist",
-        str(ROOT_DIR / "src" / "desktop" / "app.py"),
+        # Bundle the package entrypoint so the frozen app always executes main().
+        str(ROOT_DIR / "src" / "desktop" / "__main__.py"),
     ]
 
     if platform.system() == "Darwin":
@@ -430,7 +430,34 @@ def build_desktop(
     if quiet:
         pyinstaller_args.extend(["--log-level", "ERROR"])
 
-    pyinstaller_run(pyinstaller_args)
+    warning_filter = (
+        "ignore:Core Pydantic V1 functionality isn't compatible with Python 3.14 "
+        "or greater.:UserWarning"
+    )
+    previous_pythonwarnings = os.environ.get("PYTHONWARNINGS")
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                "Core Pydantic V1 functionality isn't compatible with Python 3.14 "
+                "or greater."
+            ),
+            category=UserWarning,
+        )
+        os.environ["PYTHONWARNINGS"] = (
+            warning_filter
+            if not previous_pythonwarnings
+            else f"{previous_pythonwarnings},{warning_filter}"
+        )
+        try:
+            from PyInstaller.__main__ import run as pyinstaller_run
+
+            pyinstaller_run(pyinstaller_args)
+        finally:
+            if previous_pythonwarnings is None:
+                os.environ.pop("PYTHONWARNINGS", None)
+            else:
+                os.environ["PYTHONWARNINGS"] = previous_pythonwarnings
 
     if platform.system() == "Linux":
         _install_linux_branding_assets(dist_dir)

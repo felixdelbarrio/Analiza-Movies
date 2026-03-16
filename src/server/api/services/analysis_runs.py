@@ -69,6 +69,12 @@ _CURRENT_RUN: _RunState | None = None
 _LAST_RUN: _RunState | None = None
 
 
+def _runtime_cmd_prefix() -> list[str]:
+    if getattr(sys, "frozen", False) or getattr(sys, "_MEIPASS", None):
+        return [sys.executable]
+    return [sys.executable, "-m", "backend.main"]
+
+
 def _base_env(config: RuntimeConfig, profile: SourceProfile) -> dict[str, str]:
     paths = ensure_profile_dirs(profile.id)
     env = os.environ.copy()
@@ -103,12 +109,7 @@ def _plex_cmd_and_env(
     env["PLEX_PORT"] = str(port)
     env["PLEX_TOKEN"] = token
 
-    return [
-        sys.executable,
-        "-m",
-        "backend.main",
-        "--plex",
-    ], env
+    return [*_runtime_cmd_prefix(), "--plex"], env
 
 
 def _dlna_cmd_and_env(
@@ -122,9 +123,7 @@ def _dlna_cmd_and_env(
         raise ValueError("El perfil DLNA necesita host, port y location.")
 
     cmd = [
-        sys.executable,
-        "-m",
-        "backend.main",
+        *_runtime_cmd_prefix(),
         "--dlna",
         "--dlna-auto-select-all",
         "--dlna-host",

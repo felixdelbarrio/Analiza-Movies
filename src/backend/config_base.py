@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Final
 
 from dotenv import load_dotenv
+from shared.runtime_profiles import PROJECT_DIR as RUNTIME_PROJECT_DIR
 
 # En producción suele ser deseable NO sobre-escribir env vars ya definidas.
 load_dotenv(override=False)
@@ -37,18 +37,8 @@ from backend import logger as _logger  # noqa: E402
 BASE_DIR: Final[Path] = Path(__file__).resolve().parent
 
 
-def _project_root() -> Path:
-    frozen_root = getattr(sys, "_MEIPASS", None)
-    if frozen_root:
-        return Path(frozen_root)
-    for candidate in BASE_DIR.parents:
-        if (candidate / "setup.py").exists() and (candidate / "web").exists():
-            return candidate
-    return BASE_DIR.parents[2]
-
-
-# Raíz real del proyecto
-PROJECT_DIR: Final[Path] = _project_root()
+# Raíz persistente usada por runtime, coherente entre backend y shell desktop.
+PROJECT_DIR: Final[Path] = RUNTIME_PROJECT_DIR
 
 # data/ en la raíz del proyecto
 _DATA_DIR_RAW: Final[str] = (os.getenv("DATA_DIR") or "data").strip() or "data"

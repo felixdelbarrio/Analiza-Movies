@@ -4,6 +4,7 @@ import os
 import socket
 import threading
 import time
+import webbrowser
 from dataclasses import dataclass
 from urllib.request import urlopen
 
@@ -86,6 +87,12 @@ class DesktopApi:
     def is_desktop(self) -> bool:
         return True
 
+    def open_external_url(self, url: str) -> bool:
+        clean_url = str(url or "").strip()
+        if not clean_url:
+            return False
+        return bool(webbrowser.open(clean_url))
+
     def open_url(self, url: str, title: str | None = None) -> bool:
         clean_url = str(url or "").strip()
         if not clean_url:
@@ -139,3 +146,7 @@ def main() -> None:
         webview.start(debug=False)
     finally:
         server.stop()
+
+
+if __name__ == "__main__":
+    main()
