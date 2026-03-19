@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import {
   ArrowDown,
   ArrowUp,
@@ -28,6 +29,7 @@ import {
 import { useReportAll } from "../hooks/use-dashboard-data";
 import { translateDecision } from "../i18n/helpers";
 import { useI18n } from "../i18n/provider";
+import { ApiError, fetchConsolidatedRecord } from "../lib/api";
 import {
   REPORT_DECISION_OPTIONS,
   buildReportRowKey,
@@ -331,6 +333,9 @@ export function LibraryPage() {
     searchScope === "title" &&
     deferredSearch.trim().length > 0 &&
     fullSearchRows.length > filteredRows.length;
+  const searchPlaceholder = t(
+    searchScope === "title" ? "library.search.placeholder.title" : "library.search.placeholder.all"
+  );
 
   const exportAllColumns = useMemo(
     () => [
@@ -388,6 +393,32 @@ export function LibraryPage() {
     [selectedRowKey, sortedRows]
   );
   const selectedRow = sortedRows[selectedIndex] ?? sortedRows[0] ?? null;
+  const selectedRowDetailsQuery = useQuery({
+    queryKey: [
+      "movie-detail",
+      activeProfileId ?? "__default__",
+      selectedRow?.imdb_id ?? "",
+      selectedRow?.title ?? "",
+      selectedRow?.year ?? ""
+    ],
+    queryFn: async () => {
+      if (!selectedRow) {
+        return null;
+      }
+      try {
+        return await fetchConsolidatedRecord(selectedRow, activeProfileId);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    enabled: Boolean(selectedRow),
+    staleTime: 300_000,
+    retry: (failureCount, error) =>
+      !(error instanceof ApiError && error.status === 404) && failureCount < 1
+  });
   const hasActiveFilters = Boolean(
     search.trim() || libraryFilter || decisionFilter || searchScope !== "title"
   );
@@ -470,7 +501,7 @@ export function LibraryPage() {
                         setSearch(event.target.value);
                       })
                     }
-                    placeholder={t("library.search.placeholder")}
+                    placeholder={searchPlaceholder}
                     value={search}
                   />
                 </label>
@@ -541,11 +572,11 @@ export function LibraryPage() {
 
               <div className="library-toolbar__metrics">
                 <article className="library-glance">
-                  <span>{t("library.filter.results")}</span>
+                  <span>{t("library.filter.results")}:</span>
                   <strong>{sortedRows.length.toLocaleString(locale)}</strong>
                 </article>
                 <article className="library-glance">
-                  <span>{t("library.filter.visible_space")}</span>
+                  <span>{t("library.filter.visible_space")}:</span>
                   <strong>
                     {visibleSizeGb.toLocaleString(locale, {
                       minimumFractionDigits: 1,
@@ -555,11 +586,11 @@ export function LibraryPage() {
                   </strong>
                 </article>
                 <article className="library-glance">
-                  <span>{t("library.filter.sorting")}</span>
+                  <span>{t("library.filter.sorting")}:</span>
                   <strong>{activeSortLabel}</strong>
                 </article>
                 <button
-                  className="secondary-button"
+                  className="secondary-button secondary-button--compact"
                   disabled={!hasActiveFilters}
                   onClick={() => {
                     setSearch("");
@@ -576,8 +607,6 @@ export function LibraryPage() {
           </SectionCard>
 
           <SectionCard
-            title={t("library.catalog.title", { count: sortedRows.length })}
-            eyebrow={t("library.catalog.eyebrow")}
             className="library-catalog-card"
             actions={
               <div className="inline-actions">
@@ -716,12 +745,6 @@ export function LibraryPage() {
                                 maximumFractionDigits: 1
                               })
                             : t("app.empty_dash")
-                      },
-                      {
-                        key: "director",
-                        label: t("detail.director"),
-                        width: "16%",
-                        render: (current) => String(current.director || t("app.empty_dash"))
                       }
                     ]}
                     maxHeight={780}
@@ -736,7 +759,12 @@ export function LibraryPage() {
                 </div>
 
                 <div className="split-layout__aside library-detail-panel">
-                  <MovieDetailPanel row={selectedRow} />
+                  <MovieDetailPanel
+                    details={selectedRowDetailsQuery.data ?? null}
+                    detailsLoading={selectedRowDetailsQuery.isLoading}
+                    onOpenDetail={selectedRow ? () => openDetail(selectedRow) : null}
+                    row={selectedRow}
+                  />
                 </div>
               </div>
             ) : null}

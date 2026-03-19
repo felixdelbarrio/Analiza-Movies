@@ -79,6 +79,9 @@ export function AnalyticsPage() {
   const hasActiveFilters = Boolean(
     search.trim() || libraryFilter || decisionFilter || searchScope !== "title"
   );
+  const searchPlaceholder = t(
+    searchScope === "title" ? "library.search.placeholder.title" : "library.search.placeholder.all"
+  );
 
   useEffect(() => {
     if (!DASHBOARD_VIEWS.includes(selectedView)) {
@@ -163,7 +166,7 @@ export function AnalyticsPage() {
                           setSearch(event.target.value);
                         })
                       }
-                      placeholder={t("library.search.placeholder")}
+                      placeholder={searchPlaceholder}
                       value={search}
                     />
                   </label>
