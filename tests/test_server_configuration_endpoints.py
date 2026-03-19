@@ -92,6 +92,25 @@ def test_config_profile_roundtrip_and_run(monkeypatch, tmp_path):
     assert run_res.json()["run"]["status"] == "running"
 
 
+def test_config_state_does_not_read_keyring_on_startup(monkeypatch, tmp_path):
+    _patch_runtime_config(tmp_path, monkeypatch)
+    read_calls: list[str] = []
+
+    def _unexpected_read(entry: str) -> str | None:
+        read_calls.append(entry)
+        return "secret"
+
+    monkeypatch.setattr(runtime_secrets, "_read_secret", _unexpected_read)
+    runtime_secrets.reset_runtime_secrets_cache()
+
+    client = TestClient(create_app())
+    response = client.get("/config/state")
+
+    assert response.status_code == 200
+    assert response.json()["has_omdb_api_keys"] is False
+    assert read_calls == []
+
+
 def test_config_discovery_endpoints(monkeypatch, tmp_path):
     config_path = _patch_runtime_config(tmp_path, monkeypatch)
     monkeypatch.setattr(

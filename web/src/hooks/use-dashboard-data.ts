@@ -72,7 +72,7 @@ export function useReportAll(profileId?: string | null, enabled = true) {
   return useQuery({
     queryKey: queryKeys.reportAll(profileId),
     queryFn: async () => enrichRows(await fetchReportAll(profileId)),
-    enabled,
+    enabled: enabled && Boolean(profileId),
     staleTime: REPORT_STALE_TIME_MS,
     gcTime: REPORT_GC_TIME_MS,
     retry: shouldRetry,
@@ -84,7 +84,7 @@ export function useReportFiltered(profileId?: string | null, enabled = true) {
   return useQuery({
     queryKey: queryKeys.reportFiltered(profileId),
     queryFn: async () => enrichRows(await fetchReportFiltered(profileId)),
-    enabled,
+    enabled: enabled && Boolean(profileId),
     staleTime: REPORT_STALE_TIME_MS,
     gcTime: REPORT_GC_TIME_MS,
     retry: shouldRetry,
@@ -96,7 +96,7 @@ export function useMetadata(profileId?: string | null, enabled = true) {
   return useQuery({
     queryKey: queryKeys.metadata(profileId),
     queryFn: () => fetchMetadata(profileId),
-    enabled,
+    enabled: enabled && Boolean(profileId),
     staleTime: REPORT_STALE_TIME_MS,
     gcTime: REPORT_GC_TIME_MS,
     retry: shouldRetry,

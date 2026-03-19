@@ -13,16 +13,6 @@ from shared.runtime_profiles import (
 BASE_DIR = PROJECT_DIR
 
 
-def _first_existing(candidates: list[Path]) -> Path | None:
-    for p in candidates:
-        try:
-            if p.exists() and p.is_file():
-                return p
-        except Exception:
-            continue
-    return None
-
-
 def resolve_path(env_name: str, candidates: list[Path]) -> Path:
     raw = (os.getenv(env_name) or "").strip().strip('"').strip("'")
     if raw:
@@ -31,11 +21,9 @@ def resolve_path(env_name: str, candidates: list[Path]) -> Path:
             p = (BASE_DIR / p).resolve()
         return p
 
-    found = _first_existing(candidates)
-    if found is None:
-        # devolvemos el primer candidato (aunque no exista) para que el error sea explícito
-        return candidates[0]
-    return found
+    # Avoid probing the filesystem during app startup. The path is resolved
+    # lazily and existence is checked only when an operation actually needs it.
+    return candidates[0]
 
 
 DEFAULT_OMDB_CACHE_PATH = resolve_path(

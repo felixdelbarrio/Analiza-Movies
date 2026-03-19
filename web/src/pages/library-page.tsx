@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import {
   ArrowDown,
   ArrowUp,
@@ -28,6 +29,7 @@ import {
 import { useReportAll } from "../hooks/use-dashboard-data";
 import { translateDecision } from "../i18n/helpers";
 import { useI18n } from "../i18n/provider";
+import { ApiError, fetchConsolidatedRecord } from "../lib/api";
 import {
   REPORT_DECISION_OPTIONS,
   buildReportRowKey,
@@ -231,6 +233,7 @@ export function LibraryPage() {
   const [searchScope, setSearchScope] = useState<ReportSearchScope>("title");
   const [libraryFilter, setLibraryFilter] = useState("");
   const [decisionFilter, setDecisionFilter] = useState("");
+  const [genreFilter, setGenreFilter] = useState("");
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [viewMode, setViewMode] = useStoredState<LibraryViewMode>("am.library.view", "table");
@@ -245,27 +248,51 @@ export function LibraryPage() {
     () => uniqueValues(reportAll, "library", locale),
     [locale, reportAll]
   );
+  const genreOptions = useMemo(() => {
+    const values = new Set<string>();
+    reportAll.forEach((row) => {
+      String(row.genre || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .forEach((item) => values.add(item));
+    });
+    return [...values].sort((left, right) => left.localeCompare(right, locale));
+  }, [locale, reportAll]);
+  const applyGenreFilter = (rows: ReportRow[]) =>
+    !genreFilter
+      ? rows
+      : rows.filter((row) =>
+          String(row.genre || "")
+            .split(",")
+            .map((item) => item.trim())
+            .includes(genreFilter)
+        );
   const filteredRows = useMemo(
     () =>
-      filterReportRows(reportAll, {
-        decision: decisionFilter,
-        library: libraryFilter,
-        search: deferredSearch,
-        searchScope
-      }),
-    [decisionFilter, deferredSearch, libraryFilter, reportAll, searchScope]
+      applyGenreFilter(
+        filterReportRows(reportAll, {
+          decision: decisionFilter,
+          library: libraryFilter,
+          search: deferredSearch,
+          searchScope
+        })
+      ),
+    [applyGenreFilter, decisionFilter, deferredSearch, libraryFilter, reportAll, searchScope]
   );
   const fullSearchRows = useMemo(
     () =>
       deferredSearch.trim()
-        ? filterReportRows(reportAll, {
-            decision: decisionFilter,
-            library: libraryFilter,
-            search: deferredSearch,
-            searchScope: "all"
-          })
+        ? applyGenreFilter(
+            filterReportRows(reportAll, {
+              decision: decisionFilter,
+              library: libraryFilter,
+              search: deferredSearch,
+              searchScope: "all"
+            })
+          )
         : filteredRows,
-    [decisionFilter, deferredSearch, filteredRows, libraryFilter, reportAll]
+    [applyGenreFilter, decisionFilter, deferredSearch, filteredRows, libraryFilter, reportAll]
   );
   const sortedRows = useMemo(() => {
     const multiplier = sortState.direction === "asc" ? 1 : -1;
@@ -321,16 +348,13 @@ export function LibraryPage() {
     ],
     [t]
   );
-  const activeSortLabel = useMemo(
-    () =>
-      cardSortOptions.find((option) => option.key === sortState.key)?.label ??
-      t("column.title"),
-    [cardSortOptions, sortState.key, t]
-  );
   const searchAssistVisible =
     searchScope === "title" &&
     deferredSearch.trim().length > 0 &&
     fullSearchRows.length > filteredRows.length;
+  const searchPlaceholder = t(
+    searchScope === "title" ? "library.search.placeholder.title" : "library.search.placeholder.all"
+  );
 
   const exportAllColumns = useMemo(
     () => [
@@ -388,10 +412,32 @@ export function LibraryPage() {
     [selectedRowKey, sortedRows]
   );
   const selectedRow = sortedRows[selectedIndex] ?? sortedRows[0] ?? null;
-  const hasActiveFilters = Boolean(
-    search.trim() || libraryFilter || decisionFilter || searchScope !== "title"
-  );
-
+  const selectedRowDetailsQuery = useQuery({
+    queryKey: [
+      "movie-detail",
+      activeProfileId ?? "__default__",
+      selectedRow?.imdb_id ?? "",
+      selectedRow?.title ?? "",
+      selectedRow?.year ?? ""
+    ],
+    queryFn: async () => {
+      if (!selectedRow) {
+        return null;
+      }
+      try {
+        return await fetchConsolidatedRecord(selectedRow, activeProfileId);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    enabled: Boolean(selectedRow),
+    staleTime: 300_000,
+    retry: (failureCount, error) =>
+      !(error instanceof ApiError && error.status === 404) && failureCount < 1
+  });
   function selectRow(current: ReportRow) {
     setSelectedRowKey(buildReportRowKey(current));
   }
@@ -459,175 +505,197 @@ export function LibraryPage() {
 
       {!reportAllQuery.isLoading && !reportAllQuery.error && reportAll.length ? (
         <>
-          <SectionCard title={t("library.filters.title")} eyebrow={t("library.filters.eyebrow")}>
-            <div className="library-toolbar">
-              <div className="library-toolbar__search">
-                <label className="search-field search-field--toolbar">
-                  <Search size={16} />
-                  <input
-                    onChange={(event) =>
-                      startTransition(() => {
-                        setSearch(event.target.value);
-                      })
-                    }
-                    placeholder={t("library.search.placeholder")}
-                    value={search}
-                  />
-                </label>
-
-                <div className="scope-switch" role="tablist" aria-label={t("library.search.scope")}>
-                  {(["title", "all"] as const).map((scope) => (
-                    <button
-                      key={scope}
-                      className={searchScope === scope ? "is-active" : ""}
-                      onClick={() => setSearchScope(scope)}
-                      type="button"
-                    >
-                      {scope === "all"
-                        ? t("library.search.scope.all")
-                        : t("library.search.scope.title")}
-                    </button>
-                  ))}
-                </div>
-
-                {searchAssistVisible ? (
-                  <div className="library-search-assist">
-                    <p>
-                      {t("library.search.assist", {
-                        visible: filteredRows.length,
-                        total: fullSearchRows.length
-                      })}
-                    </p>
-                    <button
-                      className="inline-link"
-                      onClick={() => setSearchScope("all")}
-                      type="button"
-                    >
-                      {t("library.search.try_all")}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-
-              <label className="form-field form-field--compact">
-                <span>{t("library.filter.library")}</span>
-                <select
-                  onChange={(event) => setLibraryFilter(event.target.value)}
-                  value={libraryFilter}
-                >
-                  <option value="">{t("library.filter.all_libraries")}</option>
-                  {libraryOptions.map((library) => (
-                    <option key={library} value={library}>
-                      {library}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="form-field form-field--compact">
-                <span>{t("library.filter.decision")}</span>
-                <select
-                  onChange={(event) => setDecisionFilter(event.target.value)}
-                  value={decisionFilter}
-                >
-                  <option value="">{t("library.filter.all_decisions")}</option>
-                  {REPORT_DECISION_OPTIONS.map((decision) => (
-                    <option key={decision} value={decision}>
-                      {translateDecision(decision, t)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="library-toolbar__metrics">
-                <article className="library-glance">
-                  <span>{t("library.filter.results")}</span>
-                  <strong>{sortedRows.length.toLocaleString(locale)}</strong>
-                </article>
-                <article className="library-glance">
-                  <span>{t("library.filter.visible_space")}</span>
-                  <strong>
-                    {visibleSizeGb.toLocaleString(locale, {
-                      minimumFractionDigits: 1,
-                      maximumFractionDigits: 1
-                    })}{" "}
-                    {t("unit.gb")}
-                  </strong>
-                </article>
-                <article className="library-glance">
-                  <span>{t("library.filter.sorting")}</span>
-                  <strong>{activeSortLabel}</strong>
-                </article>
-                <button
-                  className="secondary-button"
-                  disabled={!hasActiveFilters}
-                  onClick={() => {
-                    setSearch("");
-                    setLibraryFilter("");
-                    setDecisionFilter("");
-                    setSearchScope("title");
-                  }}
-                  type="button"
-                >
-                  {t("library.filter.clear")}
-                </button>
-              </div>
-            </div>
-          </SectionCard>
-
           <SectionCard
-            title={t("library.catalog.title", { count: sortedRows.length })}
-            eyebrow={t("library.catalog.eyebrow")}
-            className="library-catalog-card"
+            eyebrow={t("library.filters.title")}
             actions={
-              <div className="inline-actions">
-                <div
-                  className="scope-switch scope-switch--compact"
-                  role="tablist"
-                  aria-label={t("library.view.label")}
-                >
-                  <button
-                    className={normalizedViewMode === "table" ? "is-active" : ""}
-                    onClick={() => setViewMode("table")}
-                    type="button"
-                  >
-                    <Rows3 size={16} />
-                    {t("library.view.table")}
-                  </button>
-                  <button
-                    className={normalizedViewMode === "cards" ? "is-active" : ""}
-                    onClick={() => setViewMode("cards")}
-                    type="button"
-                  >
-                    <LayoutGrid size={16} />
-                    {t("library.view.cards")}
-                  </button>
-                </div>
-
-                {hasActiveFilters ? (
-                  <button
-                    className="secondary-button"
-                    onClick={() => exportRows(reportAll, "all")}
-                    type="button"
-                  >
-                    <Download size={16} />
-                    {t("app.action.export_all_csv")}
-                  </button>
-                ) : null}
-
+              <div
+                className="scope-switch scope-switch--compact"
+                role="tablist"
+                aria-label={t("library.view.label")}
+              >
                 <button
-                  className="secondary-button"
-                  onClick={() => exportRows(sortedRows, "visible")}
+                  className={normalizedViewMode === "table" ? "is-active" : ""}
+                  onClick={() => setViewMode("table")}
                   type="button"
                 >
-                  <Download size={16} />
-                  {hasActiveFilters
-                    ? t("app.action.export_visible_csv")
-                    : t("app.action.export_csv")}
+                  <Rows3 size={16} />
+                  {t("library.view.table")}
+                </button>
+                <button
+                  className={normalizedViewMode === "cards" ? "is-active" : ""}
+                  onClick={() => setViewMode("cards")}
+                  type="button"
+                >
+                  <LayoutGrid size={16} />
+                  {t("library.view.cards")}
                 </button>
               </div>
             }
           >
+            <div className="library-toolbar">
+              <div className="library-toolbar__filters">
+                <label className="form-field form-field--compact library-toolbar__select">
+                  <span>{t("library.filter.library")}</span>
+                  <select
+                    onChange={(event) => setLibraryFilter(event.target.value)}
+                    value={libraryFilter}
+                  >
+                    <option value="">{t("library.filter.all_libraries")}</option>
+                    {libraryOptions.map((library) => (
+                      <option key={library} value={library}>
+                        {library}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="form-field form-field--compact library-toolbar__select">
+                  <span>{t("library.filter.decision")}</span>
+                  <select
+                    onChange={(event) => setDecisionFilter(event.target.value)}
+                    value={decisionFilter}
+                  >
+                    <option value="">{t("library.filter.all_decisions")}</option>
+                    {REPORT_DECISION_OPTIONS.map((decision) => (
+                      <option key={decision} value={decision}>
+                        {translateDecision(decision, t)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="form-field form-field--compact library-toolbar__select">
+                  <span>{t("detail.genre")}</span>
+                  <select
+                    onChange={(event) => setGenreFilter(event.target.value)}
+                    value={genreFilter}
+                  >
+                    <option value="">{t("library.filter.all_genres")}</option>
+                    {genreOptions.map((genre) => (
+                      <option key={genre} value={genre}>
+                        {genre}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="library-toolbar__search-panel">
+                <div className="library-toolbar__scope">
+                  <span>{t("library.search.scope")}</span>
+                  <div
+                    className="scope-switch"
+                    role="tablist"
+                    aria-label={t("library.search.scope")}
+                  >
+                    {(["title", "all"] as const).map((scope) => (
+                      <button
+                        key={scope}
+                        className={searchScope === scope ? "is-active" : ""}
+                        onClick={() => setSearchScope(scope)}
+                        type="button"
+                      >
+                        {scope === "all"
+                          ? t("library.search.scope.all")
+                          : t("library.search.scope.title")}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="library-toolbar__search">
+                  <label className="search-field search-field--toolbar">
+                    <Search size={16} />
+                    <input
+                      onChange={(event) =>
+                        startTransition(() => {
+                          setSearch(event.target.value);
+                        })
+                      }
+                      placeholder={searchPlaceholder}
+                      value={search}
+                    />
+                  </label>
+
+                  {searchAssistVisible ? (
+                    <div className="library-search-assist">
+                      <p>
+                        {t("library.search.assist", {
+                          visible: filteredRows.length,
+                          total: fullSearchRows.length
+                        })}
+                      </p>
+                      <button
+                        className="inline-link"
+                        onClick={() => setSearchScope("all")}
+                        type="button"
+                      >
+                        {t("library.search.try_all")}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="library-toolbar__summary">
+                <div className="library-toolbar__metrics">
+                  <article className="library-glance">
+                    <span>{t("library.filter.results")}:</span>
+                    <strong>{sortedRows.length.toLocaleString(locale)}</strong>
+                  </article>
+                  <article className="library-glance">
+                    <span>{t("library.filter.visible_space")}:</span>
+                    <strong>
+                      {visibleSizeGb.toLocaleString(locale, {
+                        minimumFractionDigits: 1,
+                        maximumFractionDigits: 1
+                      })}{" "}
+                      {t("unit.gb")}
+                    </strong>
+                  </article>
+                </div>
+
+                <div className="library-toolbar__actions">
+                  <label className="form-field form-field--compact library-toolbar__sort">
+                    <span>{t("library.filter.sorting")}</span>
+                    <select
+                      onChange={(event) =>
+                        setSortState((current) => ({
+                          ...current,
+                          key: event.target.value
+                        }))
+                      }
+                      value={sortState.key}
+                    >
+                      {cardSortOptions.map((option) => (
+                        <option key={option.key} value={option.key}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <button className="secondary-button secondary-button--compact" onClick={toggleSortDirection} type="button">
+                    {sortState.direction === "asc" ? <ArrowUp size={16} /> : <ArrowDown size={16} />}
+                    {sortState.direction === "asc"
+                      ? t("library.sort.direction.asc")
+                      : t("library.sort.direction.desc")}
+                  </button>
+
+                  <button
+                    className="secondary-button secondary-button--compact"
+                    onClick={() => exportRows(sortedRows, "visible")}
+                    type="button"
+                  >
+                    <Download size={16} />
+                    {t("app.action.export_csv")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+
+          <SectionCard className="library-catalog-card">
             {normalizedViewMode === "table" ? (
               <div className="split-layout split-layout--library library-catalog-stage">
                 <div className="split-layout__main">
@@ -716,12 +784,6 @@ export function LibraryPage() {
                                 maximumFractionDigits: 1
                               })
                             : t("app.empty_dash")
-                      },
-                      {
-                        key: "director",
-                        label: t("detail.director"),
-                        width: "16%",
-                        render: (current) => String(current.director || t("app.empty_dash"))
                       }
                     ]}
                     maxHeight={780}
@@ -736,52 +798,18 @@ export function LibraryPage() {
                 </div>
 
                 <div className="split-layout__aside library-detail-panel">
-                  <MovieDetailPanel row={selectedRow} />
+                  <MovieDetailPanel
+                    details={selectedRowDetailsQuery.data ?? null}
+                    detailsLoading={selectedRowDetailsQuery.isLoading}
+                    onOpenDetail={selectedRow ? () => openDetail(selectedRow) : null}
+                    row={selectedRow}
+                  />
                 </div>
               </div>
             ) : null}
 
             {normalizedViewMode === "cards" ? (
               <div className="library-card-stage">
-                <div className="library-card-sorter">
-                  <div className="library-card-sorter__copy">
-                    <span>{t("library.filter.sorting")}</span>
-                    <strong>{activeSortLabel}</strong>
-                  </div>
-
-                  <div className="library-card-sorter__controls">
-                    <label className="form-field form-field--compact library-card-sorter__field">
-                      <span>{t("library.filter.sorting")}</span>
-                      <select
-                        onChange={(event) =>
-                          setSortState((current) => ({
-                            ...current,
-                            key: event.target.value
-                          }))
-                        }
-                        value={sortState.key}
-                      >
-                        {cardSortOptions.map((option) => (
-                          <option key={option.key} value={option.key}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <button
-                      className="secondary-button"
-                      onClick={toggleSortDirection}
-                      type="button"
-                    >
-                      {sortState.direction === "asc" ? <ArrowUp size={16} /> : <ArrowDown size={16} />}
-                      {sortState.direction === "asc"
-                        ? t("library.sort.direction.asc")
-                        : t("library.sort.direction.desc")}
-                    </button>
-                  </div>
-                </div>
-
                 <LibraryCardGrid
                   locale={locale}
                   onOpenDetail={openDetail}
