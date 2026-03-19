@@ -506,21 +506,6 @@ export function LibraryPage() {
                   />
                 </label>
 
-                <div className="scope-switch" role="tablist" aria-label={t("library.search.scope")}>
-                  {(["title", "all"] as const).map((scope) => (
-                    <button
-                      key={scope}
-                      className={searchScope === scope ? "is-active" : ""}
-                      onClick={() => setSearchScope(scope)}
-                      type="button"
-                    >
-                      {scope === "all"
-                        ? t("library.search.scope.all")
-                        : t("library.search.scope.title")}
-                    </button>
-                  ))}
-                </div>
-
                 {searchAssistVisible ? (
                   <div className="library-search-assist">
                     <p>
@@ -540,35 +525,59 @@ export function LibraryPage() {
                 ) : null}
               </div>
 
-              <label className="form-field form-field--compact">
-                <span>{t("library.filter.library")}</span>
-                <select
-                  onChange={(event) => setLibraryFilter(event.target.value)}
-                  value={libraryFilter}
-                >
-                  <option value="">{t("library.filter.all_libraries")}</option>
-                  {libraryOptions.map((library) => (
-                    <option key={library} value={library}>
-                      {library}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="library-toolbar__controls">
+                <div className="library-toolbar__scope">
+                  <span>{t("library.search.scope")}</span>
+                  <div
+                    className="scope-switch"
+                    role="tablist"
+                    aria-label={t("library.search.scope")}
+                  >
+                    {(["title", "all"] as const).map((scope) => (
+                      <button
+                        key={scope}
+                        className={searchScope === scope ? "is-active" : ""}
+                        onClick={() => setSearchScope(scope)}
+                        type="button"
+                      >
+                        {scope === "all"
+                          ? t("library.search.scope.all")
+                          : t("library.search.scope.title")}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-              <label className="form-field form-field--compact">
-                <span>{t("library.filter.decision")}</span>
-                <select
-                  onChange={(event) => setDecisionFilter(event.target.value)}
-                  value={decisionFilter}
-                >
-                  <option value="">{t("library.filter.all_decisions")}</option>
-                  {REPORT_DECISION_OPTIONS.map((decision) => (
-                    <option key={decision} value={decision}>
-                      {translateDecision(decision, t)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                <label className="form-field form-field--compact library-toolbar__select">
+                  <span>{t("library.filter.library")}</span>
+                  <select
+                    onChange={(event) => setLibraryFilter(event.target.value)}
+                    value={libraryFilter}
+                  >
+                    <option value="">{t("library.filter.all_libraries")}</option>
+                    {libraryOptions.map((library) => (
+                      <option key={library} value={library}>
+                        {library}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="form-field form-field--compact library-toolbar__select">
+                  <span>{t("library.filter.decision")}</span>
+                  <select
+                    onChange={(event) => setDecisionFilter(event.target.value)}
+                    value={decisionFilter}
+                  >
+                    <option value="">{t("library.filter.all_decisions")}</option>
+                    {REPORT_DECISION_OPTIONS.map((decision) => (
+                      <option key={decision} value={decision}>
+                        {translateDecision(decision, t)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
 
               <div className="library-toolbar__metrics">
                 <article className="library-glance">

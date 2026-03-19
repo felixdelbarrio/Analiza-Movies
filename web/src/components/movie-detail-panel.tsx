@@ -294,29 +294,38 @@ export function MovieDetailPanel({
             </div>
           </div>
 
-          <div className="detail-metrics-grid">
-            {metric(
-              t("detail.metric.imdb"),
-              row.imdb_rating as number | string | null,
-              t("app.na")
-            )}
-            {metric(t("detail.metric.rt"), row.rt_score ? `${row.rt_score}%` : null, t("app.na"))}
-            {metric(
-              t("detail.metric.metacritic"),
-              row.metacritic_score as number | string | null,
-              t("app.na")
-            )}
-            {metric(
-              t("detail.metric.size"),
-              row.file_size_gb
-                ? `${Number(row.file_size_gb).toLocaleString(locale, {
-                    minimumFractionDigits: 1,
-                    maximumFractionDigits: 1
-                  })} ${t("unit.gb")}`
-                : null,
-              t("app.na")
-            )}
-          </div>
+          {imdbUrl || plexUrl ? (
+            <div className="detail-panel__links">
+              {imdbUrl ? (
+                <button
+                  className="secondary-button"
+                  onClick={() =>
+                    void openInAppContainer(
+                      imdbUrl,
+                      `IMDb · ${String(title || t("detail.fallback.movie"))}`
+                    )
+                  }
+                  type="button"
+                >
+                  IMDb <ExternalLink size={14} />
+                </button>
+              ) : null}
+              {plexUrl ? (
+                <button
+                  className="secondary-button"
+                  onClick={() =>
+                    void openInAppContainer(
+                      plexUrl,
+                      `Plex · ${String(title || t("detail.fallback.movie"))}`
+                    )
+                  }
+                  type="button"
+                >
+                  Plex <ExternalLink size={14} />
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -335,38 +344,29 @@ export function MovieDetailPanel({
           </section>
         ) : null}
 
-        {imdbUrl || plexUrl ? (
-          <div className="detail-panel__links">
-            {imdbUrl ? (
-              <button
-                className="secondary-button"
-                onClick={() =>
-                  void openInAppContainer(
-                    imdbUrl,
-                    `IMDb · ${String(title || t("detail.fallback.movie"))}`
-                  )
-                }
-                type="button"
-              >
-                IMDb <ExternalLink size={14} />
-              </button>
-            ) : null}
-            {plexUrl ? (
-              <button
-                className="secondary-button"
-                onClick={() =>
-                  void openInAppContainer(
-                    plexUrl,
-                    `Plex · ${String(title || t("detail.fallback.movie"))}`
-                  )
-                }
-                type="button"
-              >
-                Plex <ExternalLink size={14} />
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+        <div className="detail-metrics-grid">
+          {metric(
+            t("detail.metric.imdb"),
+            row.imdb_rating as number | string | null,
+            t("app.na")
+          )}
+          {metric(t("detail.metric.rt"), row.rt_score ? `${row.rt_score}%` : null, t("app.na"))}
+          {metric(
+            t("detail.metric.metacritic"),
+            row.metacritic_score as number | string | null,
+            t("app.na")
+          )}
+          {metric(
+            t("detail.metric.size"),
+            row.file_size_gb
+              ? `${Number(row.file_size_gb).toLocaleString(locale, {
+                  minimumFractionDigits: 1,
+                  maximumFractionDigits: 1
+                })} ${t("unit.gb")}`
+              : null,
+            t("app.na")
+          )}
+        </div>
 
         {row.file ? (
           <section className="detail-copy detail-copy--path">
