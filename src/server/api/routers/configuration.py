@@ -20,7 +20,6 @@ from server.api.services.plex_sources import (
     start_plex_auth_session,
 )
 from server.api.services.runtime_secrets import (
-    has_omdb_api_keys,
     remember_omdb_api_keys,
     remember_plex_user_token,
     remember_profile_token,
@@ -40,9 +39,7 @@ logger = logging.getLogger(__name__)
 
 def _state_payload(config: RuntimeConfig | None = None) -> dict[str, Any]:
     cfg = config or load_runtime_config()
-    payload = cfg.to_public_dict()
-    payload["has_omdb_api_keys"] = has_omdb_api_keys()
-    return payload
+    return cfg.to_public_dict()
 
 
 def _merge_profile(
@@ -72,6 +69,7 @@ def update_config_state(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if "omdb_api_keys" in payload:
         omdb_api_keys = str(payload.get("omdb_api_keys") or "")
         remember_omdb_api_keys(omdb_api_keys)
+        config = config.with_omdb_api_keys(bool(omdb_api_keys.strip()))
     if "active_profile_id" in payload:
         config = config.with_active_profile(payload.get("active_profile_id"))
     config = save_runtime_config(config)
