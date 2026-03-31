@@ -80,11 +80,11 @@ from backend.decision_logic import sort_filtered_rows
 from backend.movie_input import MovieInput
 from backend.plex_client import (
     connect_plex,
-    get_best_search_title,
-    get_original_title,
     get_imdb_id_from_movie,
     get_libraries_to_analyze,
     get_movie_file_info,
+    get_movie_ratings,
+    get_original_title,
 )
 from backend.reporting import (
     open_all_csv_writer,
@@ -730,9 +730,9 @@ def analyze_all_libraries() -> None:
                         )
 
                         imdb_id_hint = get_imdb_id_from_movie(movie)
-                        search_title = get_best_search_title(movie) or title
-
                         plex_original_title = get_original_title(movie)
+                        search_title = plex_original_title or title
+                        plex_user_rating, plex_rating = get_movie_ratings(movie)
 
                         movie_input = MovieInput(
                             source="plex",
@@ -749,13 +749,13 @@ def analyze_all_libraries() -> None:
                                 "display_title": title,
                                 "display_year": year,
                                 "plex_original_title": plex_original_title,
+                                "plex_user_rating": plex_user_rating,
+                                "plex_rating": plex_rating,
                                 "library_language": library_language,
                             },
                         )
 
-                        fut = executor.submit(
-                            analyze_movie, movie_input, source_movie=movie
-                        )
+                        fut = executor.submit(analyze_movie, movie_input)
 
                         future_to_index[fut] = movie_index
                         inflight.add(fut)

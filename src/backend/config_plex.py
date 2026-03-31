@@ -3,6 +3,7 @@ from __future__ import annotations
 from backend.config_base import (
     _cap_int,
     _get_env_bool,
+    _get_env_float,
     _get_env_int,
     _get_env_str,
     _parse_env_kv_map,
@@ -25,6 +26,19 @@ EXCLUDE_PLEX_LIBRARIES: list[str] = [
 
 PLEX_ANALYZE_WORKERS: int = _cap_int(
     "PLEX_ANALYZE_WORKERS", _get_env_int("PLEX_ANALYZE_WORKERS", 8), min_v=1, max_v=64
+)
+PLEX_LAZY_ATTR_GUARD_THRESHOLD: int = _cap_int(
+    "PLEX_LAZY_ATTR_GUARD_THRESHOLD",
+    _get_env_int("PLEX_LAZY_ATTR_GUARD_THRESHOLD", 3),
+    min_v=1,
+    max_v=50,
+)
+PLEX_LAZY_ATTR_GUARD_COOLDOWN_SECONDS: float = min(
+    max(
+        _get_env_float("PLEX_LAZY_ATTR_GUARD_COOLDOWN_SECONDS", 20.0),
+        0.0,
+    ),
+    600.0,
 )
 PLEX_PROGRESS_EVERY_N_MOVIES: int = _cap_int(
     "PLEX_PROGRESS_EVERY_N_MOVIES",
