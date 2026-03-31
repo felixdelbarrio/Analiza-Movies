@@ -136,12 +136,33 @@ def load_progress(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _progress_tmp_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+
+
 def write_progress(path: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
-    path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(serialized + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    content = serialized + "\n"
+    tmp_path = _progress_tmp_path(path)
+
+    for attempt in range(2):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path.write_text(content, encoding="utf-8")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path.replace(path)
+            return dict(payload)
+        except FileNotFoundError:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            if attempt == 0:
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            return dict(payload)
+
     return dict(payload)
 
 

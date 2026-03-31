@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.title_utils import normalize_title_for_lookup
+from server.api.caching.file_cache import FileCache
 from server.api.services.omdb import load_payload as load_omdb_payload
 from server.api.services.wiki import load_payload as load_wiki_payload
-from server.api.caching.file_cache import FileCache
 
 
 def get_omdb_record(
@@ -83,8 +84,12 @@ def consolidate(
     title: str | None,
     year: str | None,
 ) -> dict[str, Any]:
-    norm_title = title.strip().lower() if isinstance(title, str) else None
-    norm_year = (year or "").strip() if isinstance(year, str) else None
+    norm_title = (
+        normalize_title_for_lookup(title)
+        if isinstance(title, str) and title.strip()
+        else None
+    )
+    norm_year = str(year).strip() if year is not None else None
     imdb_norm = imdb_id.strip().lower() if isinstance(imdb_id, str) else None
 
     omdb_rid, omdb_rec = get_omdb_record(
@@ -153,6 +158,9 @@ def consolidate(
         merged["source_language"] = wiki_payload.get(
             "source_language"
         ) or wiki_payload.get("language")
+        merged["wikipedia_summary"] = wiki_payload.get("summary") or wiki_payload.get(
+            "description"
+        )
 
     if isinstance(wikidata_payload, dict):
         merged["wikidata_id"] = wikidata_payload.get(
@@ -162,6 +170,11 @@ def consolidate(
     if not merged.get("wikipedia_title") and isinstance(wiki_from_omdb_cache, dict):
         merged["wikipedia_title"] = wiki_from_omdb_cache.get("wikipedia_title")
         merged["source_language"] = wiki_from_omdb_cache.get("source_language")
+        merged["wikipedia_summary"] = (
+            merged.get("wikipedia_summary")
+            or wiki_from_omdb_cache.get("summary")
+            or wiki_from_omdb_cache.get("description")
+        )
         merged["wikidata_id"] = merged.get("wikidata_id") or wiki_from_omdb_cache.get(
             "wikidata_id"
         )

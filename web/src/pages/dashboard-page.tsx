@@ -1,4 +1,5 @@
 import { Suspense, lazy, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { useAppContext } from "../app/use-app-context";
 import { KpiCard } from "../components/kpi-card";
@@ -23,6 +24,7 @@ const ChartCard = lazy(async () => {
 export function DashboardPage() {
   const { locale, t } = useI18n();
   const { activeProfileId, preferences } = useAppContext();
+  const navigate = useNavigate();
   const reportAllQuery = useReportAll(activeProfileId);
   const reportAll = reportAllQuery.data ?? [];
   const summary = useMemo(() => computeSummary(reportAll), [reportAll]);
@@ -52,7 +54,24 @@ export function DashboardPage() {
         description={t("dashboard.hero.description")}
       />
 
-      {reportAllQuery.isLoading ? (
+      {!activeProfileId ? (
+        <PageState
+          action={
+            <button
+              className="primary-button"
+              onClick={() => navigate("/settings")}
+              type="button"
+            >
+              {t("dashboard.setup.action")}
+            </button>
+          }
+          eyebrow={t("dashboard.setup.eyebrow")}
+          title={t("dashboard.setup.title")}
+          message={t("dashboard.setup.message")}
+        />
+      ) : null}
+
+      {activeProfileId && reportAllQuery.isLoading ? (
         <PageState
           eyebrow={t("stage.connecting")}
           title={t("dashboard.loading.title")}
@@ -60,7 +79,7 @@ export function DashboardPage() {
         />
       ) : null}
 
-      {reportAllQuery.error ? (
+      {activeProfileId && reportAllQuery.error ? (
         <PageState
           action={
             <button
@@ -77,7 +96,7 @@ export function DashboardPage() {
         />
       ) : null}
 
-      {!reportAllQuery.isLoading && !reportAllQuery.error && !reportAll.length ? (
+      {activeProfileId && !reportAllQuery.isLoading && !reportAllQuery.error && !reportAll.length ? (
         <PageState
           eyebrow={t("dashboard.empty.eyebrow")}
           title={t("dashboard.empty.title")}
@@ -85,7 +104,7 @@ export function DashboardPage() {
         />
       ) : null}
 
-      {!reportAllQuery.isLoading && !reportAllQuery.error && reportAll.length ? (
+      {activeProfileId && !reportAllQuery.isLoading && !reportAllQuery.error && reportAll.length ? (
         <>
           <section className="kpi-grid">
             <KpiCard

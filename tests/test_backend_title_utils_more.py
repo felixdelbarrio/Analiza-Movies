@@ -50,3 +50,14 @@ def test_normalize_title_for_compare():
     opts = tu.NormalizeOptions(max_len=4, strip_accents=True)
     out = tu.normalize_title_for_compare("\u00c1rbol!!!", options=opts)
     assert out == "arbo"
+
+
+def test_build_title_aliases_dedupes_and_uses_filename():
+    aliases = tu.build_title_aliases(
+        "La guerra de los mundos",
+        "War of the Worlds",
+        "la guerra de los mundos",
+        file_path="/tmp/La guerra de los mundos (2005).mkv",
+    )
+
+    assert aliases == ["La guerra de los mundos", "War of the Worlds"]

@@ -32,7 +32,34 @@ interface ReportFilterOptions {
   searchScope?: ReportSearchScope;
   library?: string | null;
   decision?: string | null;
+  yearMin?: string | number | null;
+  yearMax?: string | number | null;
+  imdbMin?: string | number | null;
+  rtMin?: string | number | null;
+  metacriticMin?: string | number | null;
+  sizeMin?: string | number | null;
+  sizeMax?: string | number | null;
 }
+
+export interface AdvancedNumericFilters {
+  yearMin: string;
+  yearMax: string;
+  imdbMin: string;
+  rtMin: string;
+  metacriticMin: string;
+  sizeMin: string;
+  sizeMax: string;
+}
+
+export const EMPTY_ADVANCED_NUMERIC_FILTERS: AdvancedNumericFilters = {
+  yearMin: "",
+  yearMax: "",
+  imdbMin: "",
+  rtMin: "",
+  metacriticMin: "",
+  sizeMin: "",
+  sizeMax: ""
+};
 
 const DEFAULT_DASHBOARD_VIEW_KEYS: DashboardViewKey[] = [
   "imdb-metacritic",
@@ -110,6 +137,21 @@ function parseStructuredSearchValue(value: string) {
   }
 }
 
+function titleStemFromPath(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const filename = trimmed.split(/[/\\]/).pop() ?? "";
+  if (!filename) {
+    return null;
+  }
+  return filename.replace(/\.[^.]+$/, "");
+}
+
 function collectSearchTerms(
   value: unknown,
   searchParts: string[],
@@ -166,13 +208,18 @@ function buildSearchText(
 }
 
 function buildTitleSearchText(row: ReportRow, omdb: Record<string, unknown> | null) {
-  const searchParts = [
+  const searchParts: string[] = [];
+  const seenObjects = new WeakSet<object>();
+
+  [
     row.title,
+    row.original_title,
+    row.lookup_title,
+    row.title_aliases,
     typeof omdb?.Title === "string" ? omdb.Title : null,
-    row.wikipedia_title
-    ]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .map((value) => value.trim());
+    row.wikipedia_title,
+    titleStemFromPath(row.file)
+  ].forEach((value) => collectSearchTerms(value, searchParts, seenObjects));
 
   return normalizeSearchValue(Array.from(new Set(searchParts)).join(" "));
 }
@@ -316,6 +363,30 @@ export function filterReportRows(rows: ReportRow[], filters: ReportFilterOptions
   const searchScope = filters.searchScope ?? "title";
   const libraryFilter = String(filters.library || "").trim();
   const decisionFilter = String(filters.decision || "").trim().toUpperCase();
+  const yearMin = parseMaybeNumber(filters.yearMin);
+  const yearMax = parseMaybeNumber(filters.yearMax);
+  const imdbMin = parseMaybeNumber(filters.imdbMin);
+  const rtMin = parseMaybeNumber(filters.rtMin);
+  const metacriticMin = parseMaybeNumber(filters.metacriticMin);
+  const sizeMin = parseMaybeNumber(filters.sizeMin);
+  const sizeMax = parseMaybeNumber(filters.sizeMax);
+
+  const matchesRange = (value: unknown, min: number | null, max: number | null) => {
+    if (min === null && max === null) {
+      return true;
+    }
+    const numericValue = parseMaybeNumber(value);
+    if (numericValue === null) {
+      return false;
+    }
+    if (min !== null && numericValue < min) {
+      return false;
+    }
+    if (max !== null && numericValue > max) {
+      return false;
+    }
+    return true;
+  };
 
   return rows.filter((row) => {
     const matchesLibrary =
@@ -328,7 +399,13 @@ export function filterReportRows(rows: ReportRow[], filters: ReportFilterOptions
         : String(row.search_all ?? "");
     const matchesSearch =
       searchTokens.length === 0 || searchTokens.every((token) => haystack.includes(token));
-    return matchesLibrary && matchesDecision && matchesSearch;
+    const matchesNumericFilters =
+      matchesRange(row.year, yearMin, yearMax) &&
+      matchesRange(row.imdb_rating, imdbMin, null) &&
+      matchesRange(row.rt_score, rtMin, null) &&
+      matchesRange(row.metacritic_score, metacriticMin, null) &&
+      matchesRange(row.file_size_gb, sizeMin, sizeMax);
+    return matchesLibrary && matchesDecision && matchesSearch && matchesNumericFilters;
   });
 }
 

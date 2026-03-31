@@ -124,6 +124,60 @@ def remember_omdb_api_keys(value: str | None) -> None:
     _write_secret(OMDB_ENTRY, clean_value)
 
 
+def _resolve_omdb_from_env() -> str:
+    env_value = str(os.getenv("OMDB_API_KEYS") or "").strip()
+    if env_value:
+        return env_value
+
+    fallback_value = str(os.getenv("OMDB_API_KEY") or "").strip()
+    if fallback_value:
+        return fallback_value
+
+    return ""
+
+
+def _secret_preview_fragment(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= 4:
+        return text
+    if len(text) <= 8:
+        return f"{text[:2]}…{text[-2:]}"
+    return f"{text[:4]}…{text[-4:]}"
+
+
+def preview_omdb_api_keys(value: str | None) -> str:
+    parts = [chunk.strip() for chunk in str(value or "").split(",") if chunk.strip()]
+    if not parts:
+        return ""
+    return ", ".join(_secret_preview_fragment(part) for part in parts)
+
+
+def inspect_omdb_api_keys() -> tuple[str, str]:
+    global _OMDB_API_KEYS
+    with _LOCK:
+        runtime_keys = _OMDB_API_KEYS
+    runtime_value = (
+        runtime_keys if isinstance(runtime_keys, str) and runtime_keys else ""
+    )
+
+    stored_keys = _read_secret(OMDB_ENTRY)
+    if stored_keys:
+        with _LOCK:
+            _OMDB_API_KEYS = stored_keys
+        return stored_keys, "keyring"
+
+    if runtime_value:
+        return runtime_value, "session"
+
+    env_value = _resolve_omdb_from_env()
+    if env_value:
+        return env_value, "environment"
+
+    return "", "missing"
+
+
 def resolve_omdb_api_keys() -> str:
     global _OMDB_API_KEYS
     with _LOCK:
@@ -138,15 +192,7 @@ def resolve_omdb_api_keys() -> str:
     if isinstance(runtime_keys, str) and runtime_keys:
         return runtime_keys
 
-    env_value = str(os.getenv("OMDB_API_KEYS") or "").strip()
-    if env_value:
-        return env_value
-
-    fallback_value = str(os.getenv("OMDB_API_KEY") or "").strip()
-    if fallback_value:
-        return fallback_value
-
-    return ""
+    return _resolve_omdb_from_env()
 
 
 def has_omdb_api_keys() -> bool:

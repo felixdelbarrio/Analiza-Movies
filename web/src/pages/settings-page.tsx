@@ -3,6 +3,8 @@ import { useMutation } from "@tanstack/react-query";
 import {
   ArrowUpRight,
   Check,
+  Eye,
+  EyeOff,
   Heart,
   Link2,
   Radar,
@@ -26,6 +28,7 @@ import { useI18n } from "../i18n/provider";
 import {
   discoverDlna,
   discoverPlex,
+  fetchOmdbSecret,
   pollPlexAuth,
   saveProfile,
   startAnalysis,
@@ -36,7 +39,12 @@ import {
 import { getDashboardViews, normalizeDashboardViews } from "../lib/data";
 import { openExternalUrl, openInAppContainer } from "../lib/desktop";
 import { useStoredState } from "../lib/preferences";
-import type { DashboardViewKey, Profile, ServerDiscovery } from "../lib/types";
+import type {
+  DashboardViewKey,
+  Profile,
+  SecretInspection,
+  ServerDiscovery
+} from "../lib/types";
 
 type SourceKind = "plex" | "dlna";
 type PlexLinkState = "idle" | "pending" | "complete" | "error";
@@ -69,6 +77,26 @@ function matchesServer(profile: Profile, server: ServerDiscovery) {
   );
 }
 
+function needsServerRefresh(profile: Profile, server: ServerDiscovery) {
+  if (!matchesServer(profile, server)) {
+    return false;
+  }
+
+  return (
+    String(profile.host || "").trim() !== String(server.host || "").trim() ||
+    Number(profile.port || 0) !== Number(server.port || 0) ||
+    String(profile.base_url || "").trim() !== String(server.base_url || "").trim()
+  );
+}
+
+function refreshedProfilePayload(profile: Profile, server: ServerDiscovery): Profile {
+  return {
+    ...profile,
+    ...server,
+    id: profile.id
+  };
+}
+
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message.trim() ? error.message : fallback;
 }
@@ -78,6 +106,9 @@ export function SettingsPage() {
   const { config, preferences, refreshConfig, refreshRun, activeProfileId, run } = useAppContext();
   const [sourceKind, setSourceKind] = useState<SourceKind>("plex");
   const [omdbValue, setOmdbValue] = useState("");
+  const [omdbDirty, setOmdbDirty] = useState(false);
+  const [omdbInspection, setOmdbInspection] = useState<SecretInspection | null>(null);
+  const [omdbSecretVisible, setOmdbSecretVisible] = useState(false);
   const [plexSessionId, setPlexSessionId] = useState("");
   const [plexAuthUrl, setPlexAuthUrl] = useState("");
   const [plexLinkState, setPlexLinkState] = useState<PlexLinkState>("idle");
@@ -103,7 +134,16 @@ export function SettingsPage() {
       : null;
   const profiles = config?.profiles ?? [];
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? null;
+  const plexProfiles = useMemo(
+    () => profiles.filter((profile) => profile.source_type === "plex"),
+    [profiles]
+  );
   const profileCount = profiles.length;
+  const plexProfileCount = plexProfiles.length;
+  const hasSavedPlexProfiles = plexProfileCount > 0;
+  const activePlexProfile = activeProfile?.source_type === "plex" ? activeProfile : null;
+  const hasPlexAccountLink = Boolean(config?.has_plex_account_link);
+  const hasLinkedPlexAccess = plexLinkState === "complete" || hasPlexAccountLink;
   const omdbReady = Boolean(config?.has_omdb_api_keys);
   const savedProfiles = useMemo(
     () =>
@@ -155,12 +195,32 @@ export function SettingsPage() {
   useEffect(() => {
     if (!omdbReady) {
       setOmdbValue("");
+      setOmdbDirty(false);
+      setOmdbInspection(null);
+      setOmdbSecretVisible(false);
     }
   }, [omdbReady]);
 
   const omdbMutation = useMutation({
-    mutationFn: async () => updateConfigState({ omdb_api_keys: omdbValue }),
-    onSuccess: refreshConfig
+    mutationFn: async () =>
+      updateConfigState({
+        omdb_api_keys: omdbDirty ? omdbValue : omdbInspection?.value ?? omdbValue
+      }),
+    onSuccess: async () => {
+      await refreshConfig();
+      setOmdbValue("");
+      setOmdbDirty(false);
+      setOmdbInspection(null);
+      setOmdbSecretVisible(false);
+    }
+  });
+
+  const inspectOmdbMutation = useMutation({
+    mutationFn: fetchOmdbSecret,
+    onSuccess: (payload) => {
+      setOmdbInspection(payload);
+      setOmdbSecretVisible(Boolean(payload.configured));
+    }
   });
 
   const startPlexMutation = useMutation({
@@ -231,7 +291,7 @@ export function SettingsPage() {
   });
 
   const saveProfileMutation = useMutation({
-    mutationFn: async (server: ServerDiscovery) =>
+    mutationFn: async (server: ServerDiscovery | Profile) =>
       saveProfile({ profile: server, set_active: true }),
     onSuccess: refreshConfig
   });
@@ -270,11 +330,31 @@ export function SettingsPage() {
     preferences.setDashboardViews([...selectedDashboardViews, viewKey]);
   }
 
+  function registeredProfileForServer(server: ServerDiscovery) {
+    return profiles.find((profile) => matchesServer(profile, server)) ?? null;
+  }
+
   function renderDiscoveryAction(server: ServerDiscovery) {
-    const registeredProfile =
-      profiles.find((profile) => matchesServer(profile, server)) ?? null;
-    const canSave = server.source_type === "dlna" || plexLinkState === "complete";
+    const registeredProfile = registeredProfileForServer(server);
+    const hasEndpointDrift = registeredProfile
+      ? needsServerRefresh(registeredProfile, server)
+      : false;
     const isActive = registeredProfile?.id === activeProfileId;
+
+    if (registeredProfile && hasEndpointDrift) {
+      return (
+        <button
+          className="primary-button"
+          disabled={saveProfileMutation.isPending}
+          onClick={() =>
+            saveProfileMutation.mutate(refreshedProfilePayload(registeredProfile, server))
+          }
+          type="button"
+        >
+          <RefreshCcw size={14} /> {t("settings.profile.refresh")}
+        </button>
+      );
+    }
 
     if (registeredProfile && isActive) {
       return (
@@ -284,34 +364,142 @@ export function SettingsPage() {
       );
     }
 
+    if (registeredProfile) {
+      return (
+        <button
+          className="secondary-button"
+          disabled={saveProfileMutation.isPending}
+          onClick={() => saveProfileMutation.mutate(registeredProfile)}
+          type="button"
+        >
+          {t("settings.profile.show")}
+        </button>
+      );
+    }
+
+    const canSave = server.source_type === "dlna" || hasLinkedPlexAccess;
     return (
       <button
-        className={registeredProfile ? "secondary-button" : "primary-button"}
+        className="primary-button"
         disabled={!canSave || saveProfileMutation.isPending}
         onClick={() => saveProfileMutation.mutate(server)}
         type="button"
       >
-        {registeredProfile ? t("settings.profile.show") : t("settings.action.save_profile")}
+        {t("settings.action.save_profile")}
       </button>
     );
   }
 
+  const plexCardTone =
+    plexLinkState === "pending"
+      ? "pending"
+      : plexLinkState === "error"
+        ? "error"
+        : hasLinkedPlexAccess || hasSavedPlexProfiles
+          ? "complete"
+          : "idle";
+  const plexStatusEyebrow =
+    plexLinkState === "pending" || (!hasSavedPlexProfiles && !hasLinkedPlexAccess)
+      ? t("settings.plex.flow_eyebrow")
+      : t("settings.plex.state_eyebrow");
   const plexStatusLabel =
-    plexLinkState === "complete"
-      ? t("settings.plex.status.connected")
-      : plexLinkState === "pending"
-        ? t("settings.plex.status.pending")
-        : plexLinkState === "error"
-          ? t("settings.plex.status.error")
-          : t("settings.plex.status.idle");
+    plexLinkState === "pending"
+      ? t("settings.plex.status.pending")
+      : plexLinkState === "error"
+        ? t("settings.plex.status.error")
+        : hasSavedPlexProfiles && hasLinkedPlexAccess
+          ? t("settings.plex.status.ready")
+          : hasSavedPlexProfiles
+            ? t("settings.plex.status.configured")
+            : hasLinkedPlexAccess
+              ? t("settings.plex.status.connected")
+              : t("settings.plex.status.idle");
   const plexStatusCopy =
-    plexLinkState === "complete"
-      ? t("settings.plex.status.connected_copy")
-      : plexLinkState === "pending"
-        ? t("settings.plex.status.pending_copy")
-        : plexLinkState === "error"
-          ? errorMessage(startPlexMutation.error ?? pollPlexMutation.error, t("settings.plex.status.error_copy"))
-          : t("settings.plex.status.idle_copy");
+    plexLinkState === "pending"
+      ? t("settings.plex.status.pending_copy")
+      : plexLinkState === "error"
+        ? errorMessage(
+            startPlexMutation.error ?? pollPlexMutation.error,
+            t("settings.plex.status.error_copy")
+          )
+        : hasSavedPlexProfiles && hasLinkedPlexAccess
+          ? t("settings.plex.status.ready_copy", {
+              count: plexProfileCount.toLocaleString(locale)
+            })
+          : hasSavedPlexProfiles
+            ? t("settings.plex.status.configured_copy", {
+                count: plexProfileCount.toLocaleString(locale)
+              })
+            : hasLinkedPlexAccess
+              ? t("settings.plex.status.connected_copy")
+              : t("settings.plex.status.idle_copy");
+  const plexLinkActionLabel =
+    hasSavedPlexProfiles || hasLinkedPlexAccess
+      ? t("settings.action.refresh_plex_link")
+      : t("settings.action.link_plex");
+  const discoveryTitle =
+    sourceKind === "plex" && hasSavedPlexProfiles
+      ? t("settings.sources.discovery_more_title")
+      : t("settings.sources.discovery_title");
+  const discoveryCopy =
+    sourceKind === "plex"
+      ? hasSavedPlexProfiles
+        ? hasLinkedPlexAccess
+          ? t("settings.sources.discovery_more_copy", {
+              count: plexProfileCount.toLocaleString(locale)
+            })
+          : t("settings.sources.discovery_more_copy_optional", {
+              count: plexProfileCount.toLocaleString(locale)
+            })
+        : t("settings.sources.discovery_copy")
+      : t("settings.sources.discovery_dlna_copy");
+  const discoveryEmptyTitle =
+    sourceKind === "plex" && hasSavedPlexProfiles
+      ? t("settings.sources.discovery_empty_registered_title")
+      : sourceKind === "plex" && hasLinkedPlexAccess
+        ? t("settings.sources.discovery_empty_linked_title")
+        : t("settings.sources.discovery_empty_title");
+  const discoveryEmptyCopy =
+    sourceKind === "plex" && hasSavedPlexProfiles
+      ? hasLinkedPlexAccess
+        ? t("settings.sources.discovery_empty_registered_copy")
+        : t("settings.sources.discovery_empty_registered_copy_optional")
+      : sourceKind === "plex" && hasLinkedPlexAccess
+        ? t("settings.sources.discovery_empty_linked_copy")
+        : t("settings.sources.discovery_empty_copy");
+  const omdbInputValue =
+    omdbDirty ? omdbValue : omdbSecretVisible ? String(omdbInspection?.value || "") : omdbValue;
+  const omdbSourceLabel =
+    omdbInspection?.source === "keyring"
+      ? t("settings.omdb.source.keyring")
+      : omdbInspection?.source === "environment"
+        ? t("settings.omdb.source.environment")
+        : omdbInspection?.source === "session"
+          ? t("settings.omdb.source.session")
+          : t("settings.omdb.source.missing");
+  const omdbStatusMessage =
+    inspectOmdbMutation.isError
+      ? errorMessage(inspectOmdbMutation.error, t("settings.omdb.reveal_error"))
+      : omdbInspection?.configured
+        ? t("settings.omdb.current_value", {
+            preview: omdbInspection.preview,
+            source: omdbSourceLabel
+          })
+        : omdbReady
+          ? t("settings.omdb.verify_help")
+          : null;
+
+  function toggleOmdbSecretVisibility() {
+    if (omdbSecretVisible) {
+      setOmdbSecretVisible(false);
+      return;
+    }
+    if (omdbInspection?.configured) {
+      setOmdbSecretVisible(true);
+      return;
+    }
+    inspectOmdbMutation.mutate();
+  }
 
   return (
     <div className="page-stack">
@@ -538,11 +726,32 @@ export function SettingsPage() {
             </div>
 
             {sourceKind === "plex" ? (
-              <div className={`source-auth-card source-auth-card--${plexLinkState}`}>
+              <div className={`source-auth-card source-auth-card--${plexCardTone}`}>
                 <div className="source-auth-card__copy">
-                  <span>{t("settings.plex.flow_eyebrow")}</span>
+                  <span>{plexStatusEyebrow}</span>
                   <h3>{plexStatusLabel}</h3>
                   <p>{plexStatusCopy}</p>
+                  <div className="settings-status-facts">
+                    {hasSavedPlexProfiles ? (
+                      <span className="settings-mini-badge">
+                        {t("settings.plex.fact_registered", {
+                          count: plexProfileCount.toLocaleString(locale)
+                        })}
+                      </span>
+                    ) : null}
+                    {activePlexProfile ? (
+                      <span className="settings-mini-badge">
+                        {t("settings.plex.fact_active", {
+                          name: activePlexProfile.name
+                        })}
+                      </span>
+                    ) : null}
+                    <span className="settings-mini-badge">
+                      {hasLinkedPlexAccess
+                        ? t("settings.plex.fact_account_linked")
+                        : t("settings.plex.fact_account_optional")}
+                    </span>
+                  </div>
                 </div>
                 <div className="inline-actions">
                   <button
@@ -550,7 +759,12 @@ export function SettingsPage() {
                     onClick={() => startPlexMutation.mutate()}
                     type="button"
                   >
-                    <Rocket size={14} /> {t("settings.action.link_plex")}
+                    {hasSavedPlexProfiles || hasLinkedPlexAccess ? (
+                      <RefreshCcw size={14} />
+                    ) : (
+                      <Rocket size={14} />
+                    )}{" "}
+                    {plexLinkActionLabel}
                   </button>
                   {plexAuthUrl ? (
                     <button
@@ -599,18 +813,17 @@ export function SettingsPage() {
             ) : null}
 
             <div className="settings-section-copy">
-              <span>{t("settings.sources.discovery_title")}</span>
-              <p>
-                {sourceKind === "plex"
-                  ? t("settings.sources.discovery_copy")
-                  : t("settings.sources.discovery_dlna_copy")}
-              </p>
+              <span>{discoveryTitle}</span>
+              <p>{discoveryCopy}</p>
             </div>
 
             <div className="profile-grid">
               {discoveredServers.length ? (
                 discoveredServers.map((server) => {
-                  const registered = profiles.find((profile) => matchesServer(profile, server));
+                  const registered = registeredProfileForServer(server);
+                  const hasEndpointDrift = registered
+                    ? needsServerRefresh(registered, server)
+                    : false;
                   return (
                     <article
                       key={`${server.source_type}-${server.host}-${server.port}-${server.name}`}
@@ -636,9 +849,19 @@ export function SettingsPage() {
                       <div className="inline-actions">
                         {renderDiscoveryAction(server)}
                       </div>
-                      {server.source_type === "plex" && plexLinkState !== "complete" ? (
+                      {server.source_type === "plex" &&
+                      !registered &&
+                      !hasLinkedPlexAccess ? (
                         <p className="settings-helper">
                           {t("settings.plex.link_required")}
+                        </p>
+                      ) : null}
+                      {registered && hasEndpointDrift ? (
+                        <p className="settings-helper">
+                          {t("settings.profile.endpoint_changed", {
+                            saved: describeEndpoint(registered.host, registered.port),
+                            live: describeEndpoint(server.host, server.port)
+                          })}
                         </p>
                       ) : null}
                     </article>
@@ -646,8 +869,8 @@ export function SettingsPage() {
                 })
               ) : (
                 <article className="profile-card settings-empty-card">
-                  <strong>{t("settings.sources.discovery_empty_title")}</strong>
-                  <p>{t("settings.sources.discovery_empty_copy")}</p>
+                  <strong>{discoveryEmptyTitle}</strong>
+                  <p>{discoveryEmptyCopy}</p>
                 </article>
               )}
             </div>
@@ -672,13 +895,47 @@ export function SettingsPage() {
           <div className="settings-connector-card__form">
             <label className="form-field">
               <span>{t("settings.omdb.placeholder")}</span>
-              <input
-                onChange={(event) => setOmdbValue(event.target.value)}
-                placeholder={omdbReady ? "••••••••" : t("settings.omdb.placeholder")}
-                type="password"
-                value={omdbValue}
-              />
+              <div className="settings-secret-field">
+                <input
+                  onChange={(event) => {
+                    setOmdbValue(event.target.value);
+                    setOmdbDirty(true);
+                  }}
+                  placeholder={omdbReady ? "••••••••" : t("settings.omdb.placeholder")}
+                  type={omdbSecretVisible ? "text" : "password"}
+                  value={omdbInputValue}
+                />
+                {omdbReady ? (
+                  <button
+                    aria-label={
+                      omdbSecretVisible
+                        ? t("settings.action.hide_secret")
+                        : t("settings.action.reveal_secret")
+                    }
+                    className="secondary-button secondary-button--compact settings-secret-field__toggle"
+                    disabled={inspectOmdbMutation.isPending}
+                    onClick={toggleOmdbSecretVisibility}
+                    title={
+                      omdbSecretVisible
+                        ? t("settings.action.hide_secret")
+                        : t("settings.action.reveal_secret")
+                    }
+                    type="button"
+                  >
+                    {omdbSecretVisible ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                ) : null}
+              </div>
             </label>
+            {omdbStatusMessage ? (
+              <p
+                className={`settings-helper${
+                  inspectOmdbMutation.isError ? " settings-helper--error" : ""
+                }`}
+              >
+                {omdbStatusMessage}
+              </p>
+            ) : null}
             <div className="inline-actions">
               <button
                 className="primary-button"

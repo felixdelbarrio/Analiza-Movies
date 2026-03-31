@@ -96,7 +96,8 @@ from backend.config_collection import (
 from backend.metadata_fix import generate_metadata_suggestions_row
 from backend.movie_input import MovieInput, coalesce_movie_identity
 from backend.omdb_client import omdb_query_with_cache
-from backend.title_utils import normalize_title_for_lookup
+from backend.plex_client import get_movie_ratings
+from backend.title_utils import build_title_aliases, normalize_title_for_lookup
 from backend.wiki_client import get_wiki, get_wiki_for_input
 
 # -----------------------------------------------------------------------------
@@ -418,6 +419,8 @@ def _build_minimal_wiki_block(
     wikipedia_title: str | None,
     wiki_lookup: Mapping[str, object],
     source_language: str | None = None,
+    summary: str | None = None,
+    description: str | None = None,
     fetched_at: int | None = None,
     ttl_s: int | None = None,
 ) -> dict[str, object]:
@@ -430,6 +433,10 @@ def _build_minimal_wiki_block(
         out["wikipedia_title"] = wikipedia_title
     if source_language:
         out["source_language"] = source_language
+    if summary:
+        out["summary"] = summary
+    if description:
+        out["description"] = description
     if (
         isinstance(fetched_at, int)
         and fetched_at > 0
@@ -470,12 +477,20 @@ def _build_minimal_wiki_from_item(
 
     wikipedia_title_from_wiki = None
     source_language_from_wiki = None
+    summary_from_wiki = None
+    description_from_wiki = None
     wt = wiki_block.get("wikipedia_title")
     if isinstance(wt, str) and wt.strip():
         wikipedia_title_from_wiki = wt.strip()
     sl = wiki_block.get("source_language")
     if isinstance(sl, str) and sl.strip():
         source_language_from_wiki = sl.strip()
+    summary_raw = wiki_block.get("summary")
+    if isinstance(summary_raw, str) and summary_raw.strip():
+        summary_from_wiki = summary_raw.strip()
+    description_raw = wiki_block.get("description")
+    if isinstance(description_raw, str) and description_raw.strip():
+        description_from_wiki = description_raw.strip()
 
     imdb_for_meta = imdb_id_from_wiki or imdb_used_for_wiki
     wiki_lookup = _build_wiki_lookup_info(
@@ -493,6 +508,8 @@ def _build_minimal_wiki_from_item(
         wikipedia_title=wikipedia_title_from_wiki,
         wiki_lookup=wiki_lookup,
         source_language=source_language_from_wiki,
+        summary=summary_from_wiki,
+        description=description_from_wiki,
         fetched_at=fetched_at if isinstance(fetched_at, int) else None,
         ttl_s=ttl_s if isinstance(ttl_s, int) else None,
     )
@@ -894,9 +911,15 @@ def analyze_movie(
 
     # 2) Plex rating (si aplica)
     plex_rating: float | None = None
-    if movie_input.source == "plex" and source_movie is not None:
-        plex_user_rating = getattr(source_movie, "userRating", None)
-        plex_rating_raw = getattr(source_movie, "rating", None)
+    if movie_input.source == "plex":
+        plex_user_rating = _safe_float(movie_input.extra.get("plex_user_rating"))
+        plex_rating_raw = _safe_float(movie_input.extra.get("plex_rating"))
+        if (
+            plex_user_rating is None
+            and plex_rating_raw is None
+            and source_movie is not None
+        ):
+            plex_user_rating, plex_rating_raw = get_movie_ratings(source_movie)
         plex_rating = _safe_float(plex_user_rating) or _safe_float(plex_rating_raw)
 
     # 3) Core
@@ -1082,7 +1105,7 @@ def analyze_movie(
     )
     meta_sugg: dict[str, object] | None = None
 
-    if movie_input.source == "plex" and source_movie is not None:
+    if movie_input.source == "plex":
         try:
             meta_candidate = generate_metadata_suggestions_row(
                 movie_input, omdb_dict or None
@@ -1133,6 +1156,13 @@ def analyze_movie(
             if isinstance(imdb_id_raw, str) and imdb_id_raw.strip()
             else None
         )
+
+    omdb_title_raw = omdb_dict.get("Title")
+    omdb_title: str | None = (
+        omdb_title_raw.strip()
+        if isinstance(omdb_title_raw, str) and omdb_title_raw.strip()
+        else None
+    )
 
     if imdb_id is None and imdb_hint is not None:
         imdb_id = imdb_hint
@@ -1205,8 +1235,46 @@ def analyze_movie(
         else None
     )
 
+    wikipedia_summary_raw = wiki_meta.get("summary")
+    wikipedia_summary: str | None = (
+        wikipedia_summary_raw.strip()
+        if isinstance(wikipedia_summary_raw, str) and wikipedia_summary_raw.strip()
+        else None
+    )
+    if wikipedia_summary is None:
+        wikipedia_description_raw = wiki_meta.get("description")
+        wikipedia_summary = (
+            wikipedia_description_raw.strip()
+            if isinstance(wikipedia_description_raw, str)
+            and wikipedia_description_raw.strip()
+            else None
+        )
+
+    lookup_title = (co_title or "").strip() or None
+    title_aliases = build_title_aliases(
+        display_title,
+        movie_input.title or "",
+        (plex_original_title_raw if isinstance(plex_original_title_raw, str) else ""),
+        omdb_title or "",
+        wikipedia_title or "",
+        lookup_title or "",
+        file_path=movie_input.file_path,
+    )
+    title_aliases_json: str | None = None
+    if title_aliases:
+        try:
+            title_aliases_json = json.dumps(title_aliases, ensure_ascii=False)
+        except Exception:
+            title_aliases_json = str(title_aliases)
+
+    original_title = title_aliases[1] if len(title_aliases) > 1 else None
+
     row["wikidata_id"] = wikidata_id
     row["wikipedia_title"] = wikipedia_title
     row["source_language"] = source_language
+    row["wikipedia_summary"] = wikipedia_summary
+    row["lookup_title"] = lookup_title
+    row["original_title"] = original_title
+    row["title_aliases"] = title_aliases_json
 
     return row, meta_sugg, logs

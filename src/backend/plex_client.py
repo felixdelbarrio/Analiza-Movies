@@ -44,6 +44,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from threading import Lock
+from time import monotonic
 from typing import Any
 
 import requests  # type: ignore[import-untyped]
@@ -56,6 +57,8 @@ from backend.config_plex import (
     EXCLUDE_PLEX_LIBRARIES,
     PLEX_PORT,
     PLEX_TOKEN,
+    PLEX_LAZY_ATTR_GUARD_COOLDOWN_SECONDS,
+    PLEX_LAZY_ATTR_GUARD_THRESHOLD,
     PLEX_METRICS_ENABLED,
     PLEX_METRICS_TOP_N,
     PLEX_METRICS_LOG_ON_SILENT_DEBUG,
@@ -191,6 +194,9 @@ class PlexMetrics:
 
 _METRICS = PlexMetrics()
 _METRICS_LOCK = Lock()
+_LAZY_ATTR_GUARD_LOCK = Lock()
+_LAZY_ATTR_GUARD_CONSECUTIVE_ERRORS = 0
+_LAZY_ATTR_GUARD_UNTIL_MONOTONIC = 0.0
 
 
 def _metrics_enabled() -> bool:
@@ -224,6 +230,48 @@ def _metrics_inc_connect_failure(exc: BaseException) -> None:
     with _METRICS_LOCK:
         _METRICS.connect_failures_total += 1
         _METRICS.connect_failures_by_exc[exc_name] += 1
+
+
+def _lazy_attr_guard_remaining_seconds() -> float:
+    now = monotonic()
+    with _LAZY_ATTR_GUARD_LOCK:
+        remaining = _LAZY_ATTR_GUARD_UNTIL_MONOTONIC - now
+    return remaining if remaining > 0 else 0.0
+
+
+def _lazy_attr_guard_record_success() -> None:
+    now = monotonic()
+    with _LAZY_ATTR_GUARD_LOCK:
+        if _LAZY_ATTR_GUARD_UNTIL_MONOTONIC > now:
+            return
+        if _LAZY_ATTR_GUARD_CONSECUTIVE_ERRORS > 0:
+            globals()["_LAZY_ATTR_GUARD_CONSECUTIVE_ERRORS"] = 0
+
+
+def _lazy_attr_guard_record_network_error(attr: str, exc: BaseException) -> None:
+    del attr, exc
+    threshold = int(PLEX_LAZY_ATTR_GUARD_THRESHOLD)
+    cooldown = float(PLEX_LAZY_ATTR_GUARD_COOLDOWN_SECONDS)
+    if threshold <= 0 or cooldown <= 0:
+        return
+
+    now = monotonic()
+    should_log = False
+    with _LAZY_ATTR_GUARD_LOCK:
+        if _LAZY_ATTR_GUARD_UNTIL_MONOTONIC > now:
+            return
+
+        globals()["_LAZY_ATTR_GUARD_CONSECUTIVE_ERRORS"] += 1
+        if _LAZY_ATTR_GUARD_CONSECUTIVE_ERRORS >= threshold:
+            globals()["_LAZY_ATTR_GUARD_CONSECUTIVE_ERRORS"] = 0
+            globals()["_LAZY_ATTR_GUARD_UNTIL_MONOTONIC"] = now + cooldown
+            should_log = True
+
+    if should_log:
+        _log_always(
+            "[PLEX] Plex se ha puesto inestable; se omitirán temporalmente los "
+            f"atributos lazy opcionales durante {cooldown:.0f}s para no perder filas."
+        )
 
 
 def get_plex_metrics_snapshot() -> dict[str, object]:
@@ -365,7 +413,13 @@ def _is_networkish_exception(exc: BaseException) -> bool:
     return False
 
 
-def _safe_getattr(obj: object, attr: str, default: Any = None) -> Any:
+def _safe_getattr(
+    obj: object,
+    attr: str,
+    default: Any = None,
+    *,
+    allow_network_guard: bool = True,
+) -> Any:
     """
     getattr() robusto:
     - Nunca lanza.
@@ -376,11 +430,20 @@ def _safe_getattr(obj: object, attr: str, default: Any = None) -> Any:
     - Error de red: warning always=True.
     - Otros errores: debug.
     """
+    if allow_network_guard:
+        remaining = _lazy_attr_guard_remaining_seconds()
+        if remaining > 0:
+            _log_debug(
+                f"Skipping optional lazy attr {attr!r} while Plex recovers ({remaining:.1f}s left)"
+            )
+            return default
+
     try:
-        return getattr(obj, attr, default)
+        value = getattr(obj, attr, default)
     except Exception as exc:
         if _is_networkish_exception(exc):
             _metrics_inc_network_attr_error(attr, exc)
+            _lazy_attr_guard_record_network_error(attr, exc)
             _log_always(
                 f"[PLEX] Network error reading attribute {attr!r} (lazy reload skipped): {exc!r}"
             )
@@ -390,10 +453,21 @@ def _safe_getattr(obj: object, attr: str, default: Any = None) -> Any:
         _log_debug(f"_safe_getattr({attr!r}) failed: {exc!r}")
         return default
 
+    if allow_network_guard:
+        _lazy_attr_guard_record_success()
+    return value
 
-def _safe_getattr_str(obj: object, attr: str) -> str | None:
+
+def _safe_getattr_str(
+    obj: object, attr: str, *, allow_network_guard: bool = True
+) -> str | None:
     """Lee un atributo string de forma segura (strip; vacío => None)."""
-    val = _safe_getattr(obj, attr, None)
+    val = _safe_getattr(
+        obj,
+        attr,
+        None,
+        allow_network_guard=allow_network_guard,
+    )
     if isinstance(val, str):
         s = val.strip()
         return s if s else None
@@ -482,7 +556,14 @@ def get_libraries_to_analyze(plex: PlexServer) -> list[object]:
     selected: list[object] = []
 
     for section in sections:
-        name = _safe_getattr_str(section, "title") or ""
+        name = (
+            _safe_getattr_str(
+                section,
+                "title",
+                allow_network_guard=False,
+            )
+            or ""
+        )
         if name and name in excluded:
             if not SILENT_MODE:
                 _log(f"[PLEX] Saltando biblioteca excluida: {name}")
@@ -600,11 +681,41 @@ def get_imdb_id_from_movie(movie: object) -> str | None:
         _metrics_inc_helper_failure("get_imdb_id_from_movie.guids", exc)
         _log_debug(f"get_imdb_id_from_movie.guids failed: {exc!r}")
 
-    guid_main = _safe_getattr(movie, "guid", None)
+    guid_main = _safe_getattr(movie, "guid", None, allow_network_guard=False)
     if isinstance(guid_main, str):
         return get_imdb_id_from_plex_guid(guid_main)
 
     return None
+
+
+def _safe_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except Exception:
+            return None
+    return None
+
+
+def get_movie_ratings(movie: object) -> tuple[float | None, float | None]:
+    """
+    Devuelve (user_rating, critic_rating) con acceso defensivo.
+
+    Se usa para extraer ratings UNA sola vez en el productor y evitar
+    que los workers toquen objetos Plex lazy en paralelo.
+    """
+    user_rating = _safe_float(_safe_getattr(movie, "userRating", None))
+    critic_rating = _safe_float(_safe_getattr(movie, "rating", None))
+    return user_rating, critic_rating
 
 
 # ============================================================
@@ -634,7 +745,7 @@ def get_best_search_title(movie: object) -> str | None:
     if t1:
         return t1
 
-    t2 = _safe_getattr_str(movie, "title")
+    t2 = _safe_getattr_str(movie, "title", allow_network_guard=False)
     if t2:
         return t2
 
@@ -645,6 +756,7 @@ __all__ = [
     "connect_plex",
     "get_libraries_to_analyze",
     "get_movie_file_info",
+    "get_movie_ratings",
     "get_original_title",
     "get_imdb_id_from_movie",
     "get_imdb_id_from_plex_guid",

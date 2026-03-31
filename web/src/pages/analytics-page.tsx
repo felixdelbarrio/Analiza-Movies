@@ -19,11 +19,13 @@ import { useI18n } from "../i18n/provider";
 import { buildChartOption } from "../lib/charts";
 import {
   DASHBOARD_VIEWS,
+  EMPTY_ADVANCED_NUMERIC_FILTERS,
   REPORT_DECISION_OPTIONS,
   filterReportRows,
   getDashboardViews,
   sumReportSizeGb,
   uniqueValues,
+  type AdvancedNumericFilters,
   type ReportSearchScope
 } from "../lib/data";
 import { useStoredState } from "../lib/preferences";
@@ -47,6 +49,9 @@ export function AnalyticsPage() {
   const [searchScope, setSearchScope] = useState<ReportSearchScope>("title");
   const [libraryFilter, setLibraryFilter] = useState("");
   const [decisionFilter, setDecisionFilter] = useState("");
+  const [numericFilters, setNumericFilters] = useState<AdvancedNumericFilters>({
+    ...EMPTY_ADVANCED_NUMERIC_FILTERS
+  });
   const deferredSearch = useDeferredValue(search);
 
   const viewOptions = useMemo(() => getDashboardViews(t), [t]);
@@ -59,10 +64,23 @@ export function AnalyticsPage() {
       filterReportRows(reportAll, {
         decision: decisionFilter,
         library: libraryFilter,
+        ...(
+          preferences.numericFilters
+            ? numericFilters
+            : EMPTY_ADVANCED_NUMERIC_FILTERS
+        ),
         search: deferredSearch,
         searchScope
       }),
-    [decisionFilter, deferredSearch, libraryFilter, reportAll, searchScope]
+    [
+      decisionFilter,
+      deferredSearch,
+      libraryFilter,
+      numericFilters,
+      preferences.numericFilters,
+      reportAll,
+      searchScope
+    ]
   );
   const visibleSizeGb = useMemo(() => sumReportSizeGb(filteredRows), [filteredRows]);
   const selectedViewLabel = useMemo(
@@ -77,8 +95,34 @@ export function AnalyticsPage() {
     [filteredRows, locale, preferences.theme, selectedView, t]
   );
   const hasActiveFilters = Boolean(
-    search.trim() || libraryFilter || decisionFilter || searchScope !== "title"
+    search.trim() ||
+      libraryFilter ||
+      decisionFilter ||
+      searchScope !== "title" ||
+      (preferences.numericFilters &&
+        Object.values(numericFilters).some((value) => String(value).trim().length > 0))
   );
+  const searchPlaceholder = t(
+    searchScope === "title" ? "library.search.placeholder.title" : "library.search.placeholder.all"
+  );
+
+  function updateNumericFilter(
+    key: keyof AdvancedNumericFilters,
+    value: string
+  ) {
+    setNumericFilters((current) => ({
+      ...current,
+      [key]: value
+    }));
+  }
+
+  function resetFilters() {
+    setSearch("");
+    setSearchScope("title");
+    setLibraryFilter("");
+    setDecisionFilter("");
+    setNumericFilters({ ...EMPTY_ADVANCED_NUMERIC_FILTERS });
+  }
 
   useEffect(() => {
     if (!DASHBOARD_VIEWS.includes(selectedView)) {
@@ -163,7 +207,7 @@ export function AnalyticsPage() {
                           setSearch(event.target.value);
                         })
                       }
-                      placeholder={t("library.search.placeholder")}
+                      placeholder={searchPlaceholder}
                       value={search}
                     />
                   </label>
@@ -218,6 +262,104 @@ export function AnalyticsPage() {
                 </label>
               </div>
 
+              {preferences.numericFilters ? (
+                <div className="library-toolbar__numeric">
+                  <div className="settings-section-copy">
+                    <span>{t("library.filter.numeric_title")}</span>
+                    <p>{t("library.filter.numeric_copy")}</p>
+                  </div>
+
+                  <div className="library-toolbar__numeric-grid">
+                    <label className="form-field form-field--compact library-toolbar__select">
+                      <span>{t("library.filter.year_from")}</span>
+                      <input
+                        inputMode="numeric"
+                        onChange={(event) => updateNumericFilter("yearMin", event.target.value)}
+                        step="1"
+                        type="number"
+                        value={numericFilters.yearMin}
+                      />
+                    </label>
+
+                    <label className="form-field form-field--compact library-toolbar__select">
+                      <span>{t("library.filter.year_to")}</span>
+                      <input
+                        inputMode="numeric"
+                        onChange={(event) => updateNumericFilter("yearMax", event.target.value)}
+                        step="1"
+                        type="number"
+                        value={numericFilters.yearMax}
+                      />
+                    </label>
+
+                    <label className="form-field form-field--compact library-toolbar__select">
+                      <span>{t("library.filter.imdb_min")}</span>
+                      <input
+                        inputMode="decimal"
+                        max="10"
+                        min="0"
+                        onChange={(event) => updateNumericFilter("imdbMin", event.target.value)}
+                        step="0.1"
+                        type="number"
+                        value={numericFilters.imdbMin}
+                      />
+                    </label>
+
+                    <label className="form-field form-field--compact library-toolbar__select">
+                      <span>{t("library.filter.rt_min")}</span>
+                      <input
+                        inputMode="numeric"
+                        max="100"
+                        min="0"
+                        onChange={(event) => updateNumericFilter("rtMin", event.target.value)}
+                        step="1"
+                        type="number"
+                        value={numericFilters.rtMin}
+                      />
+                    </label>
+
+                    <label className="form-field form-field--compact library-toolbar__select">
+                      <span>{t("library.filter.metacritic_min")}</span>
+                      <input
+                        inputMode="numeric"
+                        max="100"
+                        min="0"
+                        onChange={(event) =>
+                          updateNumericFilter("metacriticMin", event.target.value)
+                        }
+                        step="1"
+                        type="number"
+                        value={numericFilters.metacriticMin}
+                      />
+                    </label>
+
+                    <label className="form-field form-field--compact library-toolbar__select">
+                      <span>{t("library.filter.size_min")}</span>
+                      <input
+                        inputMode="decimal"
+                        min="0"
+                        onChange={(event) => updateNumericFilter("sizeMin", event.target.value)}
+                        step="0.1"
+                        type="number"
+                        value={numericFilters.sizeMin}
+                      />
+                    </label>
+
+                    <label className="form-field form-field--compact library-toolbar__select">
+                      <span>{t("library.filter.size_max")}</span>
+                      <input
+                        inputMode="decimal"
+                        min="0"
+                        onChange={(event) => updateNumericFilter("sizeMax", event.target.value)}
+                        step="0.1"
+                        type="number"
+                        value={numericFilters.sizeMax}
+                      />
+                    </label>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="library-toolbar__metrics">
                 <article className="library-glance">
                   <span>{t("analytics.view.label")}</span>
@@ -240,12 +382,7 @@ export function AnalyticsPage() {
                 <button
                   className="secondary-button"
                   disabled={!hasActiveFilters}
-                  onClick={() => {
-                    setSearch("");
-                    setSearchScope("title");
-                    setLibraryFilter("");
-                    setDecisionFilter("");
-                  }}
+                  onClick={resetFilters}
                   type="button"
                 >
                   {t("library.filter.clear")}

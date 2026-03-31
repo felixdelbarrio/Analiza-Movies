@@ -22,7 +22,9 @@ from shared.runtime_profiles import (
     RuntimeConfig,
     SourceProfile,
     ensure_profile_dirs,
+    save_runtime_config,
 )
+from server.api.services.plex_sources import discover_plex_servers
 from server.api.services.runtime_secrets import (
     resolve_omdb_api_keys,
     resolve_profile_token,
@@ -110,6 +112,93 @@ def _plex_cmd_and_env(
     env["PLEX_TOKEN"] = token
 
     return [*_runtime_cmd_prefix(), "--plex"], env
+
+
+def _matches_plex_server(profile: SourceProfile, server: dict[str, Any]) -> bool:
+    profile_machine = str(profile.machine_identifier or "").strip()
+    server_machine = str(server.get("machine_identifier") or "").strip()
+    if profile_machine and server_machine and profile_machine == server_machine:
+        return True
+
+    profile_device = str(profile.device_id or "").strip()
+    server_device = str(server.get("device_id") or "").strip()
+    if profile_device and server_device and profile_device == server_device:
+        return True
+
+    profile_host = str(profile.host or "").strip()
+    server_host = str(server.get("host") or "").strip()
+    profile_port = int(profile.port or 0)
+    server_port = int(server.get("port") or 0)
+    return bool(
+        profile_host
+        and server_host
+        and profile_host == server_host
+        and profile_port > 0
+        and profile_port == server_port
+    )
+
+
+def _refreshed_plex_profile(
+    config: RuntimeConfig, profile: SourceProfile
+) -> tuple[RuntimeConfig, SourceProfile]:
+    if profile.source_type != "plex":
+        return config, profile
+
+    token = str(resolve_profile_token(profile) or "").strip()
+    if not token:
+        return config, profile
+
+    try:
+        servers = discover_plex_servers(token)
+    except Exception:
+        return config, profile
+
+    match = next(
+        (
+            item
+            for item in servers
+            if isinstance(item, dict) and _matches_plex_server(profile, item)
+        ),
+        None,
+    )
+    if match is None:
+        return config, profile
+
+    updates: dict[str, Any] = {}
+    candidates: dict[str, Any] = {
+        "name": str(match.get("name") or "").strip() or None,
+        "host": str(match.get("host") or "").strip() or None,
+        "base_url": str(match.get("base_url") or "").strip() or None,
+        "location": str(match.get("location") or "").strip() or None,
+        "device_id": str(match.get("device_id") or "").strip() or None,
+        "machine_identifier": str(match.get("machine_identifier") or "").strip()
+        or None,
+    }
+    port_raw = match.get("port")
+    if isinstance(port_raw, (int, float)) and not isinstance(port_raw, bool):
+        candidates["port"] = int(port_raw)
+    elif isinstance(port_raw, str) and port_raw.strip():
+        try:
+            candidates["port"] = int(port_raw.strip())
+        except ValueError:
+            pass
+
+    for field_name, value in candidates.items():
+        if value in (None, ""):
+            continue
+        if getattr(profile, field_name) != value:
+            updates[field_name] = value
+
+    if not updates:
+        return config, profile
+
+    refreshed = profile.with_updates(**updates)
+    updated_config = save_runtime_config(
+        config.upsert_profile(
+            refreshed, set_active=config.active_profile_id == profile.id
+        )
+    )
+    return updated_config, refreshed
 
 
 def _dlna_cmd_and_env(
@@ -358,6 +447,7 @@ def start_profile_run(
             _LAST_RUN = _CURRENT_RUN
             _CURRENT_RUN = None
 
+    config, profile = _refreshed_plex_profile(config, profile)
     cmd, env = _build_cmd_and_env(config, profile)
     paths = ensure_profile_dirs(profile.id)
     log_path = paths.data_dir / "last_run.log"

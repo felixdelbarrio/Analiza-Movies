@@ -281,6 +281,8 @@ class RuntimeConfig:
     version: int = _CONFIG_VERSION
     active_profile_id: str | None = None
     profiles: list[SourceProfile] = field(default_factory=list)
+    has_omdb_api_keys: bool = False
+    has_plex_account_link: bool = False
     updated_at: str = field(default_factory=_now_iso)
 
     @staticmethod
@@ -306,6 +308,8 @@ class RuntimeConfig:
             version=int(payload.get("version") or _CONFIG_VERSION),
             active_profile_id=active_profile_id,
             profiles=profiles,
+            has_omdb_api_keys=bool(payload.get("has_omdb_api_keys")),
+            has_plex_account_link=bool(payload.get("has_plex_account_link")),
             updated_at=_clean_str(payload.get("updated_at")) or _now_iso(),
         )
 
@@ -313,6 +317,8 @@ class RuntimeConfig:
         return {
             "version": int(self.version),
             "omdb_api_keys": "",
+            "has_omdb_api_keys": self.has_omdb_api_keys,
+            "has_plex_account_link": self.has_plex_account_link,
             "active_profile_id": self.active_profile_id,
             "profiles": [p.to_public_dict() for p in self.profiles],
             "updated_at": self.updated_at,
@@ -335,6 +341,8 @@ class RuntimeConfig:
             version=self.version,
             active_profile_id=wanted,
             profiles=list(self.profiles),
+            has_omdb_api_keys=self.has_omdb_api_keys,
+            has_plex_account_link=self.has_plex_account_link,
             updated_at=_now_iso(),
         )
 
@@ -360,6 +368,28 @@ class RuntimeConfig:
             version=self.version,
             active_profile_id=active_profile_id,
             profiles=out,
+            has_omdb_api_keys=self.has_omdb_api_keys,
+            has_plex_account_link=self.has_plex_account_link,
+            updated_at=_now_iso(),
+        )
+
+    def with_omdb_api_keys(self, configured: bool) -> "RuntimeConfig":
+        return RuntimeConfig(
+            version=self.version,
+            active_profile_id=self.active_profile_id,
+            profiles=list(self.profiles),
+            has_omdb_api_keys=bool(configured),
+            has_plex_account_link=self.has_plex_account_link,
+            updated_at=_now_iso(),
+        )
+
+    def with_plex_account_link(self, linked: bool) -> "RuntimeConfig":
+        return RuntimeConfig(
+            version=self.version,
+            active_profile_id=self.active_profile_id,
+            profiles=list(self.profiles),
+            has_omdb_api_keys=self.has_omdb_api_keys,
+            has_plex_account_link=bool(linked),
             updated_at=_now_iso(),
         )
 

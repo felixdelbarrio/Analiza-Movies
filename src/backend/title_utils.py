@@ -561,6 +561,55 @@ def normalize_title_for_compare(
     return t
 
 
+def build_title_aliases(*titles: str, file_path: str | None = None) -> list[str]:
+    """
+    Construye una lista estable y deduplicada de aliases editoriales.
+
+    Uso típico:
+    - display title de Plex/DLNA
+    - original title / title usado para lookup
+    - título de OMDb
+    - título de Wikipedia
+    - basename limpio del fichero
+
+    Objetivo:
+    - preservar contexto editorial sin multiplicar columnas semánticamente ambiguas
+    - ofrecer mejores entradas para búsqueda y fallback de matching
+    """
+
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: object) -> None:
+        if not isinstance(value, str):
+            return
+        clean = unicodedata.normalize("NFKC", value).strip()
+        if not clean or clean == "N/A":
+            return
+        clean = _MULTI_SPACE_RE.sub(" ", clean)
+        identity = (
+            normalize_title_for_compare(
+                clean, options=NormalizeOptions(strip_accents=True)
+            )
+            or clean.casefold()
+        )
+        if identity in seen:
+            return
+        seen.add(identity)
+        out.append(clean)
+
+    for title in titles:
+        _add(title)
+
+    stem = filename_stem(file_path or "")
+    if stem:
+        title_from_stem, _year = split_title_and_year_from_text(stem)
+        _add(clean_title_candidate(title_from_stem or stem))
+        _add(clean_title_candidate(stem))
+
+    return out
+
+
 __all__ = [
     # separators/cleanup
     "strip_accents",
@@ -570,6 +619,7 @@ __all__ = [
     "remove_noise_tokens",
     "looks_like_noise_group",
     "clean_title_candidate",
+    "build_title_aliases",
     "filename_stem",
     # language / script
     "title_has_cjk_script",

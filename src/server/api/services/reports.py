@@ -5,12 +5,16 @@ from typing import Any, cast
 
 import pandas as pd
 
+from backend.title_utils import normalize_title_for_lookup
 from server.api.caching.file_cache import FileCache
 from server.api.services.omdb import load_payload as load_omdb_payload
 from server.api.services.wiki import load_payload as load_wiki_payload
 
 _SEARCH_COLUMNS = [
     "title",
+    "original_title",
+    "lookup_title",
+    "title_aliases",
     "name",
     "file",
     "path",
@@ -21,6 +25,8 @@ _SEARCH_COLUMNS = [
     "genre",
     "plot",
     "wikipedia_title",
+    "wikipedia_summary",
+    "source_language",
     "search_context",
 ]
 _INTERNAL_SEARCH_COL = "__search_blob"
@@ -35,10 +41,27 @@ _OMDB_CONTEXT_COLUMNS = {
 
 
 def _clean_text(value: Any) -> str | None:
-    text = str(value or "").strip()
-    if not text or text == "N/A":
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    text = str(value).strip()
+    if not text or text in {"N/A", "nan", "NaN", "None", "<NA>"}:
         return None
     return text
+
+
+def _normalize_lookup_title(value: Any) -> str | None:
+    clean = _clean_text(value)
+    if clean is None:
+        return None
+    normalized = normalize_title_for_lookup(clean)
+    return normalized or clean.lower()
 
 
 def _payload_lookup_record(
@@ -72,10 +95,10 @@ def _payload_lookup_record(
             or index_imdb.get(clean_imdb),
         )
 
-    clean_title = _clean_text(title)
+    clean_title = _normalize_lookup_title(title)
     clean_year = _clean_text(year)
     if record_id is None and clean_title:
-        title_key = clean_title.lower()
+        title_key = clean_title
         record_id = cast(
             str | None,
             index_ty.get(f"{title_key}|{clean_year or ''}")
@@ -157,6 +180,7 @@ def enrich_report_context(
         "genre": [],
         "plot": [],
         "wikipedia_title": [],
+        "wikipedia_summary": [],
         "wikidata_id": [],
         "source_language": [],
         "search_context": [],
@@ -167,13 +191,13 @@ def enrich_report_context(
         record_omdb = _payload_lookup_record(
             omdb_cache,
             imdb_id=_clean_text(row.get("imdb_id")),
-            title=_clean_text(row.get("title")),
+            title=_clean_text(row.get("lookup_title")) or _clean_text(row.get("title")),
             year=_clean_text(row.get("year")),
         )
         record_wiki = _payload_lookup_record(
             wiki_cache,
             imdb_id=_clean_text(row.get("imdb_id")),
-            title=_clean_text(row.get("title")),
+            title=_clean_text(row.get("lookup_title")) or _clean_text(row.get("title")),
             year=_clean_text(row.get("year")),
         )
 
@@ -222,6 +246,19 @@ def enrich_report_context(
                 else None
             )
         )
+        updates["wikipedia_summary"].append(
+            _clean_text(row.get("wikipedia_summary"))
+            or (
+                _clean_text(wiki_payload.get("summary"))
+                if isinstance(wiki_payload, Mapping)
+                else None
+            )
+            or (
+                _clean_text(wiki_payload.get("description"))
+                if isinstance(wiki_payload, Mapping)
+                else None
+            )
+        )
         updates["source_language"].append(
             _clean_text(row.get("source_language"))
             or (
@@ -240,10 +277,10 @@ def enrich_report_context(
             df[column] = series
             continue
 
-        current = df[column].astype("string")
-        missing = current.fillna("").str.strip() == ""
-        if bool(missing.any()):
-            df.loc[missing, column] = series.loc[missing]
+        raw = df[column]
+        current = raw.astype("string")
+        missing = raw.isna() | (current.fillna("").str.strip() == "")
+        df[column] = current.mask(missing, series)
 
     df[_CONTEXT_ENRICHED_COL] = pd.Series(
         ["1"] * len(df), index=df.index, dtype="string"
