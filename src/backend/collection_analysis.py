@@ -96,6 +96,7 @@ from backend.config_collection import (
 from backend.metadata_fix import generate_metadata_suggestions_row
 from backend.movie_input import MovieInput, coalesce_movie_identity
 from backend.omdb_client import omdb_query_with_cache
+from backend.plex_client import get_movie_ratings
 from backend.title_utils import build_title_aliases, normalize_title_for_lookup
 from backend.wiki_client import get_wiki, get_wiki_for_input
 
@@ -910,9 +911,15 @@ def analyze_movie(
 
     # 2) Plex rating (si aplica)
     plex_rating: float | None = None
-    if movie_input.source == "plex" and source_movie is not None:
-        plex_user_rating = getattr(source_movie, "userRating", None)
-        plex_rating_raw = getattr(source_movie, "rating", None)
+    if movie_input.source == "plex":
+        plex_user_rating = _safe_float(movie_input.extra.get("plex_user_rating"))
+        plex_rating_raw = _safe_float(movie_input.extra.get("plex_rating"))
+        if (
+            plex_user_rating is None
+            and plex_rating_raw is None
+            and source_movie is not None
+        ):
+            plex_user_rating, plex_rating_raw = get_movie_ratings(source_movie)
         plex_rating = _safe_float(plex_user_rating) or _safe_float(plex_rating_raw)
 
     # 3) Core
@@ -1098,7 +1105,7 @@ def analyze_movie(
     )
     meta_sugg: dict[str, object] | None = None
 
-    if movie_input.source == "plex" and source_movie is not None:
+    if movie_input.source == "plex":
         try:
             meta_candidate = generate_metadata_suggestions_row(
                 movie_input, omdb_dict or None
