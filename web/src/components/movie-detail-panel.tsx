@@ -150,6 +150,7 @@ export function MovieDetailPanel({
   const tone = getDecisionTone(row.decision);
   const title = firstDetailValue(row.title, merged?.title) ?? t("app.empty_dash");
   const year = firstDetailValue(row.year, merged?.year);
+  const originalTitle = firstDetailValue(row.original_title, row.lookup_title, omdb?.Title);
   const director = firstDetailValue(row.director, merged?.director, omdb?.Director);
   const genre = firstDetailValue(row.genre, merged?.genre, omdb?.Genre);
   const actors = firstDetailValue(row.actors, merged?.actors, omdb?.Actors);
@@ -170,8 +171,11 @@ export function MovieDetailPanel({
   );
   const wikipediaSummary = firstDetailValue(
     row.wikipedia_summary,
+    merged?.wikipedia_summary,
     wiki?.summary,
-    wiki?.description
+    wiki?.description,
+    wikiFromOmdbCache?.summary,
+    wikiFromOmdbCache?.description
   );
   const synopsis = wikipediaSummary ?? plot;
   const wikidataId = firstDetailValue(
@@ -198,6 +202,9 @@ export function MovieDetailPanel({
   pushField(editorialFields, t("detail.actors"), actors);
 
   const modalEditorialFields: DetailField[] = [];
+  if (originalTitle && originalTitle !== title) {
+    modalEditorialFields.push({ label: "Original title", value: originalTitle });
+  }
   pushField(modalEditorialFields, "Writer", writer);
   pushField(modalEditorialFields, "Runtime", runtime);
   pushField(modalEditorialFields, "Country", country);

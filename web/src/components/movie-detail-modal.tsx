@@ -27,7 +27,7 @@ export function MovieDetailModal({
       "movie-detail",
       profileId ?? "__default__",
       row?.imdb_id ?? "",
-      row?.title ?? "",
+      row?.lookup_title ?? row?.original_title ?? row?.title ?? "",
       row?.year ?? ""
     ],
     queryFn: async () => {

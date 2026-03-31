@@ -825,6 +825,22 @@ def analyze_all_libraries() -> None:
                 _rm_set(
                     "plex.library.movies.errors", lib_movies_errors, library=lib_key
                 )
+                movies_without_row = max(
+                    0, lib_movies_completed - lib_rows_written["v"] - lib_movies_errors
+                )
+                _rm_set(
+                    "plex.library.movies.without_row",
+                    movies_without_row,
+                    library=lib_key,
+                )
+                if movies_without_row:
+                    logger.warning(
+                        "[PLEX] Biblioteca con películas sin fila final: "
+                        f"{lib_name} | completed={lib_movies_completed} "
+                        f"rows={lib_rows_written['v']} errors={lib_movies_errors} "
+                        f"without_row={movies_without_row}",
+                        always=True,
+                    )
 
         # =========================================================================
         # filtered report (solo si hay DELETE/MAYBE)

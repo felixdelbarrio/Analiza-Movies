@@ -110,6 +110,21 @@ function parseStructuredSearchValue(value: string) {
   }
 }
 
+function titleStemFromPath(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const filename = trimmed.split(/[/\\]/).pop() ?? "";
+  if (!filename) {
+    return null;
+  }
+  return filename.replace(/\.[^.]+$/, "");
+}
+
 function collectSearchTerms(
   value: unknown,
   searchParts: string[],
@@ -166,13 +181,18 @@ function buildSearchText(
 }
 
 function buildTitleSearchText(row: ReportRow, omdb: Record<string, unknown> | null) {
-  const searchParts = [
+  const searchParts: string[] = [];
+  const seenObjects = new WeakSet<object>();
+
+  [
     row.title,
+    row.original_title,
+    row.lookup_title,
+    row.title_aliases,
     typeof omdb?.Title === "string" ? omdb.Title : null,
-    row.wikipedia_title
-    ]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .map((value) => value.trim());
+    row.wikipedia_title,
+    titleStemFromPath(row.file)
+  ].forEach((value) => collectSearchTerms(value, searchParts, seenObjects));
 
   return normalizeSearchValue(Array.from(new Set(searchParts)).join(" "));
 }
