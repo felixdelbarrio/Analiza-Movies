@@ -1247,11 +1247,7 @@ def analyze_movie(
     title_aliases = build_title_aliases(
         display_title,
         movie_input.title or "",
-        (
-            plex_original_title_raw
-            if isinstance(plex_original_title_raw, str)
-            else ""
-        ),
+        (plex_original_title_raw if isinstance(plex_original_title_raw, str) else ""),
         omdb_title or "",
         wikipedia_title or "",
         lookup_title or "",

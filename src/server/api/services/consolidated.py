@@ -170,10 +170,10 @@ def consolidate(
     if not merged.get("wikipedia_title") and isinstance(wiki_from_omdb_cache, dict):
         merged["wikipedia_title"] = wiki_from_omdb_cache.get("wikipedia_title")
         merged["source_language"] = wiki_from_omdb_cache.get("source_language")
-        merged["wikipedia_summary"] = merged.get(
-            "wikipedia_summary"
-        ) or wiki_from_omdb_cache.get("summary") or wiki_from_omdb_cache.get(
-            "description"
+        merged["wikipedia_summary"] = (
+            merged.get("wikipedia_summary")
+            or wiki_from_omdb_cache.get("summary")
+            or wiki_from_omdb_cache.get("description")
         )
         merged["wikidata_id"] = merged.get("wikidata_id") or wiki_from_omdb_cache.get(
             "wikidata_id"

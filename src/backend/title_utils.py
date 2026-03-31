@@ -587,9 +587,12 @@ def build_title_aliases(*titles: str, file_path: str | None = None) -> list[str]
         if not clean or clean == "N/A":
             return
         clean = _MULTI_SPACE_RE.sub(" ", clean)
-        identity = normalize_title_for_compare(
-            clean, options=NormalizeOptions(strip_accents=True)
-        ) or clean.casefold()
+        identity = (
+            normalize_title_for_compare(
+                clean, options=NormalizeOptions(strip_accents=True)
+            )
+            or clean.casefold()
+        )
         if identity in seen:
             return
         seen.add(identity)
