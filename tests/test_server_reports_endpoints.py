@@ -96,3 +96,30 @@ def test_reports_filtered_204_when_missing(monkeypatch, tmp_path):
     res_filtered = client.get("/reports/filtered?empty_as_204=true")
 
     assert res_filtered.status_code == 204
+
+
+def test_reports_all_204_when_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        reports_router,
+        "get_report_all_path",
+        lambda profile_id=None: tmp_path / "missing.csv",
+    )
+    monkeypatch.setattr(
+        reports_router,
+        "get_report_filtered_path",
+        lambda profile_id=None: tmp_path / "missing_filtered.csv",
+    )
+    monkeypatch.setattr(
+        reports_router,
+        "get_metadata_fix_path",
+        lambda profile_id=None: tmp_path / "missing_meta.csv",
+    )
+
+    app = create_app()
+    cache = FileCache(_settings())
+    app.dependency_overrides[deps.get_file_cache] = lambda: cache
+
+    client = TestClient(app)
+    res_all = client.get("/reports/all?empty_as_204=true")
+
+    assert res_all.status_code == 204

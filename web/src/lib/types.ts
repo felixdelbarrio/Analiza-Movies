@@ -176,6 +176,15 @@ export interface ConfigState {
   profiles: Profile[];
   updated_at?: string;
   has_omdb_api_keys?: boolean;
+  has_plex_account_link?: boolean;
+}
+
+export interface SecretInspection {
+  configured: boolean;
+  value: string;
+  preview: string;
+  count: number;
+  source: "keyring" | "session" | "environment" | "missing";
 }
 
 export interface ServerDiscovery {

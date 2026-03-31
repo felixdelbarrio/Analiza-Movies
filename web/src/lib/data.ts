@@ -32,7 +32,34 @@ interface ReportFilterOptions {
   searchScope?: ReportSearchScope;
   library?: string | null;
   decision?: string | null;
+  yearMin?: string | number | null;
+  yearMax?: string | number | null;
+  imdbMin?: string | number | null;
+  rtMin?: string | number | null;
+  metacriticMin?: string | number | null;
+  sizeMin?: string | number | null;
+  sizeMax?: string | number | null;
 }
+
+export interface AdvancedNumericFilters {
+  yearMin: string;
+  yearMax: string;
+  imdbMin: string;
+  rtMin: string;
+  metacriticMin: string;
+  sizeMin: string;
+  sizeMax: string;
+}
+
+export const EMPTY_ADVANCED_NUMERIC_FILTERS: AdvancedNumericFilters = {
+  yearMin: "",
+  yearMax: "",
+  imdbMin: "",
+  rtMin: "",
+  metacriticMin: "",
+  sizeMin: "",
+  sizeMax: ""
+};
 
 const DEFAULT_DASHBOARD_VIEW_KEYS: DashboardViewKey[] = [
   "imdb-metacritic",
@@ -336,6 +363,30 @@ export function filterReportRows(rows: ReportRow[], filters: ReportFilterOptions
   const searchScope = filters.searchScope ?? "title";
   const libraryFilter = String(filters.library || "").trim();
   const decisionFilter = String(filters.decision || "").trim().toUpperCase();
+  const yearMin = parseMaybeNumber(filters.yearMin);
+  const yearMax = parseMaybeNumber(filters.yearMax);
+  const imdbMin = parseMaybeNumber(filters.imdbMin);
+  const rtMin = parseMaybeNumber(filters.rtMin);
+  const metacriticMin = parseMaybeNumber(filters.metacriticMin);
+  const sizeMin = parseMaybeNumber(filters.sizeMin);
+  const sizeMax = parseMaybeNumber(filters.sizeMax);
+
+  const matchesRange = (value: unknown, min: number | null, max: number | null) => {
+    if (min === null && max === null) {
+      return true;
+    }
+    const numericValue = parseMaybeNumber(value);
+    if (numericValue === null) {
+      return false;
+    }
+    if (min !== null && numericValue < min) {
+      return false;
+    }
+    if (max !== null && numericValue > max) {
+      return false;
+    }
+    return true;
+  };
 
   return rows.filter((row) => {
     const matchesLibrary =
@@ -348,7 +399,13 @@ export function filterReportRows(rows: ReportRow[], filters: ReportFilterOptions
         : String(row.search_all ?? "");
     const matchesSearch =
       searchTokens.length === 0 || searchTokens.every((token) => haystack.includes(token));
-    return matchesLibrary && matchesDecision && matchesSearch;
+    const matchesNumericFilters =
+      matchesRange(row.year, yearMin, yearMax) &&
+      matchesRange(row.imdb_rating, imdbMin, null) &&
+      matchesRange(row.rt_score, rtMin, null) &&
+      matchesRange(row.metacritic_score, metacriticMin, null) &&
+      matchesRange(row.file_size_gb, sizeMin, sizeMax);
+    return matchesLibrary && matchesDecision && matchesSearch && matchesNumericFilters;
   });
 }
 

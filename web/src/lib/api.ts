@@ -8,6 +8,7 @@ import type {
   ReportRow,
   RunLogsResponse,
   RunStatusResponse,
+  SecretInspection,
   ServerDiscovery
 } from "./types";
 
@@ -247,6 +248,10 @@ export async function discoverDlna() {
     method: "POST",
     body: JSON.stringify({})
   });
+}
+
+export async function fetchOmdbSecret() {
+  return requestJson<SecretInspection>("/config/secrets/omdb");
 }
 
 export async function fetchReportAll(profileId?: string | null) {

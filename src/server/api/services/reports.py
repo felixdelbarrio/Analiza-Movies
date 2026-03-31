@@ -41,8 +41,17 @@ _OMDB_CONTEXT_COLUMNS = {
 
 
 def _clean_text(value: Any) -> str | None:
-    text = str(value or "").strip()
-    if not text or text == "N/A":
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    text = str(value).strip()
+    if not text or text in {"N/A", "nan", "NaN", "None", "<NA>"}:
         return None
     return text
 
@@ -268,10 +277,10 @@ def enrich_report_context(
             df[column] = series
             continue
 
-        current = df[column].astype("string")
-        missing = current.fillna("").str.strip() == ""
-        if bool(missing.any()):
-            df.loc[missing, column] = series.loc[missing]
+        raw = df[column]
+        current = raw.astype("string")
+        missing = raw.isna() | (current.fillna("").str.strip() == "")
+        df[column] = current.mask(missing, series)
 
     df[_CONTEXT_ENRICHED_COL] = pd.Series(
         ["1"] * len(df), index=df.index, dtype="string"
