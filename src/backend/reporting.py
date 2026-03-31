@@ -40,6 +40,9 @@ from backend import logger as _logger
 _STANDARD_REPORT_FIELDS: Final[list[str]] = [
     "library",
     "title",
+    "original_title",
+    "lookup_title",
+    "title_aliases",
     "year",
     "plex_rating",
     "imdb_rating",
@@ -60,6 +63,8 @@ _STANDARD_REPORT_FIELDS: Final[list[str]] = [
     "omdb_json",
     "wikidata_id",
     "wikipedia_title",
+    "source_language",
+    "wikipedia_summary",
 ]
 
 # ✅ Opción A: sugerencias alineadas con metadata_fix.py “nuevo”

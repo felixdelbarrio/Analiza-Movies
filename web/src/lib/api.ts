@@ -269,7 +269,7 @@ export async function fetchMetadata(profileId?: string | null) {
 }
 
 export async function fetchConsolidatedRecord(
-  row: Pick<ReportRow, "imdb_id" | "title" | "year">,
+  row: Pick<ReportRow, "imdb_id" | "title" | "original_title" | "lookup_title" | "year">,
   profileId?: string | null
 ) {
   const imdbId = String(row.imdb_id || "").trim();
@@ -281,7 +281,7 @@ export async function fetchConsolidatedRecord(
     );
   }
 
-  const title = String(row.title || "").trim();
+  const title = String(row.lookup_title || row.original_title || row.title || "").trim();
   if (!title) {
     return null;
   }

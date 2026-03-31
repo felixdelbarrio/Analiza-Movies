@@ -2,6 +2,9 @@ import type { TranslationKey, TranslationParams } from "../i18n/catalog";
 
 export interface ReportRow {
   title?: string | null;
+  original_title?: string | null;
+  lookup_title?: string | null;
+  title_aliases?: string | null;
   year?: number | string | null;
   library?: string | null;
   decision?: string | null;
