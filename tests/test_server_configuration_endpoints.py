@@ -54,6 +54,7 @@ def test_config_profile_roundtrip_and_run(monkeypatch, tmp_path):
     initial = client.get("/config/state")
     assert initial.status_code == 200
     assert initial.json()["profiles"] == []
+    assert initial.json()["has_plex_account_link"] is False
 
     save_res = client.post(
         "/config/profiles",
@@ -78,6 +79,14 @@ def test_config_profile_roundtrip_and_run(monkeypatch, tmp_path):
     omdb_res = client.put("/config/state", json={"omdb_api_keys": "key-a,key-b"})
     assert omdb_res.status_code == 200
     assert omdb_res.json()["has_omdb_api_keys"] is True
+
+    omdb_secret_res = client.get("/config/secrets/omdb")
+    assert omdb_secret_res.status_code == 200
+    assert omdb_secret_res.json()["configured"] is True
+    assert omdb_secret_res.json()["value"] == "key-a,key-b"
+    assert omdb_secret_res.json()["preview"] == "ke…-a, ke…-b"
+    assert omdb_secret_res.json()["count"] == 2
+    assert omdb_secret_res.json()["source"] == "keyring"
 
     runtime_secrets.reset_runtime_secrets_cache()
     reloaded_profile = runtime_profiles.load_runtime_config(config_path).get_profile(
@@ -108,6 +117,7 @@ def test_config_state_does_not_read_keyring_on_startup(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert response.json()["has_omdb_api_keys"] is False
+    assert response.json()["has_plex_account_link"] is False
     assert read_calls == []
 
 
@@ -194,6 +204,10 @@ def test_config_discovery_endpoints(monkeypatch, tmp_path):
     assert poll_res.status_code == 200
     assert poll_res.json()["status"] == "complete"
     assert poll_res.json()["servers"][0]["plex_token"] is None
+
+    state_res = client.get("/config/state")
+    assert state_res.status_code == 200
+    assert state_res.json()["has_plex_account_link"] is True
 
     plex_res = client.post("/config/discover/plex", json={"session_id": "auth-1"})
     assert plex_res.status_code == 200

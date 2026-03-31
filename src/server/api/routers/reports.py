@@ -67,6 +67,7 @@ def reports_all(
     limit: int = Query(100, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     query: str | None = Query(None, description="Búsqueda simple (title/file/imdb)"),
+    empty_as_204: bool = Query(True, description="Si no existe, devuelve 204"),
     profile_id: str | None = Query(None, description="Perfil de origen"),
     cache: FileCache = Depends(get_file_cache),
 ) -> Any:
@@ -79,6 +80,8 @@ def reports_all(
         profile_id=profile_id,
         cache=cache,
         path_getter=get_report_all_path,
+        missing_as_204=empty_as_204,
+        read_error_detail="Error leyendo report_all",
     )
 
 
